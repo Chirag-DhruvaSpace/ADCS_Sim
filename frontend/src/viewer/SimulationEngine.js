@@ -55,34 +55,39 @@ export async function startSimulationEngine(configuration) {
      ===================================================================== */
   const SETTINGS = {
     preset: 'ultra',
-    fps: false,
+    fps: true,
     simFeed: true,
     attLock: false,
     chaseSens: 1.0,
-    exposure: 1.0,
-    night: 1.0,
+    exposure: 1.8,
+    night: 2.5,
     city: 1.0,
-    atmo: 1.0,
+    atmo: 1.6,
     cloudsOn: true,
-    clouds: 0.3,
-    stars: 1.0,
-    sunSize: 1.0,
-    moonSize: 1.0,
-    modelSun: 1.0,
-    modelEnv: 1.0,
+    clouds: 0.15,
+    stars: 0.75,
+    sunSize: 3.0,
+    moonSize: 3.0,
+    modelSun: 2.0,
+    modelEnv: 0.65,
     sharp: 170,
     smoothAttitude: true,
+    showSun: true,
+    showGyro: true,
+    showMag: true,
+    sensorGlow: true,
     streamOn: false,
-    streamQ: 0.9,
-    streamW: 800,
-    streamH: 600
+    streamQ: 0.4,
+    streamW: 640,
+    streamH: 480
   };
   try {
     const s = JSON.parse(localStorage.getItem('sat3d-settings-v2'));
     if (s) Object.assign(SETTINGS, s);
   } catch (e) {}
   if (!SETTINGS.defaultsRevision3) {
-    Object.assign(SETTINGS, {preset: 'ultra', sharp: 170, clouds: .3, streamOn: false, showSun: true, showGyro: true, showMag: true, sensorGlow: true, defaultsRevision3: 1});
+    // Superseded by defaultsRevision4 below; mark done without overwriting.
+    SETTINGS.defaultsRevision3 = 1;
   }
   if (!SETTINGS.smoothingRevision) {
     SETTINGS.smoothAttitude = true;
@@ -90,12 +95,44 @@ export async function startSimulationEngine(configuration) {
   }
   // The former default cloud density hid the high-resolution surface imagery.
   if (!SETTINGS.cloudClarityRevision) {
-    if (SETTINGS.clouds === 0.85) SETTINGS.clouds = 0.38;
     SETTINGS.cloudClarityRevision = 1;
   }
   if (!SETTINGS.cloudClarityRevision2) {
-    if (SETTINGS.clouds === 0.38) SETTINGS.clouds = 0.22;
     SETTINGS.cloudClarityRevision2 = 1;
+  }
+  if (!SETTINGS.defaultsRevision4) {
+    // Screenshot-approved first-run defaults (fresh installs + one-time
+    // migration for existing users; later user tweaks persist via saveSettings).
+    Object.assign(SETTINGS, {
+      preset: 'ultra',
+      fps: true,
+      simFeed: true,
+      attLock: false,
+      chaseSens: 1.0,
+      exposure: 1.8,
+      night: 2.5,
+      city: 1.0,
+      atmo: 1.6,
+      cloudsOn: true,
+      clouds: 0.15,
+      stars: 0.75,
+      sunSize: 3.0,
+      moonSize: 3.0,
+      modelSun: 2.0,
+      modelEnv: 0.65,
+      sharp: 170,
+      smoothAttitude: true,
+      showSun: true,
+      showGyro: true,
+      showMag: true,
+      sensorGlow: true,
+      streamOn: false,
+      streamQ: 0.4,
+      streamW: 640,
+      streamH: 480,
+      defaultsRevision4: 1
+    });
+    saveSettings();
   }
   for (const key of ['showSun', 'showGyro', 'showMag', 'sensorGlow', 'smoothAttitude']) {
     if (SETTINGS[key] === undefined) SETTINGS[key] = true;

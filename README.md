@@ -1,4 +1,4 @@
-# ADCS Sim -- P-30XL Attitude Determination & Control System Simulator
+﻿# ADCS Sim -- P-30XL Attitude Determination & Control System Simulator
 
 > High-fidelity Model-Based Design simulator for the **Dhruva Space P-30XL** ADCS -- Orekit orbital physics, sensor emulation, pointing laws, RW + MTQ actuation, firmware SITL, and a React + Three.js mission viewer.
 
@@ -48,11 +48,12 @@ Default: `500.003 km` circular SSO, epoch `2026-10-01T15:00:00Z`, DOP853, 10 Hz 
 
 ## Screenshots
 
-![Mission dashboard](validation/results/dashboard-1920.png)
+![Mission dashboard](frontend/assets/reference-analysis/reference-video-5fps/frames/00333.jpg)
 *Live mission dashboard -- 3D spacecraft, Earth, orbit track and telemetry charts.*
 
-![Orbit viewer](validation/results/orbit_viewer.png)
-![Sensor viewer](validation/results/sensor_viewer.png)
+![Orbit viewer](frontend/assets/reference-analysis/earth-balanced.png)
+![Sensor viewer](frontend/assets/reference-analysis/cad-stowed.png)
+
 
 ---
 

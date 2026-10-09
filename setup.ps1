@@ -1,19 +1,17 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup + self-diagnosis (v3)
-#  Windows PowerShell 5.1+ (the one that ships with Windows 10/11)
-#
-#  v3 vs v2:
-#   * If npm is missing, Step 5 now FIXES IT ITSELF instead of giving up:
-#       1. portable Node zip -> tools\node  (NO admin, NO system install,
-#          nothing in registry/Program Files - corporate-laptop friendly)
-#       2. if download blocked -> winget auto-install as fallback
-#       3. -DistUrl <zip>      -> fetch a PREBUILT frontend/dist, no Node at all
-#     Portable Node is cached: re-runs build offline.
-#   * New flags: -NodeVersion <ver> (default 22.14.0 LTS), -DistUrl <url>,
-#     -InstallNode (force system-wide winget install FIRST).
-#  v2 fixes kept: curl.exe --noproxy probe (000 vs 503 vs 200), sim boot output
-#  captured to sim-boot.*.log + auto-diagnosis, -BootTimeoutSec, JSONC-tolerant
-#  .vscode/settings.json with backup, npm clean-retry, port cleanup.
+#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v6)
+#  Flow: git clone repo -> double-click Setup.bat -> sim starts itself.
+#  Only prerequisite on the machine: Python 3.12 (py launcher).
+#  v6 vs v5:
+#   * AUTO-PATCHES run_simulator.py if the clone still has the fragile
+#     version: the program then sets JAVA_HOME itself (jdk4py, inside the
+#     venv - works in ANY terminal, no manual paths, no VS Code reload),
+#     ignores console interrupts while booting, prints a startup heartbeat.
+#   * Boot proof runs python -u (streamed logs).
+#   * Setup ENDS by launching Run-Sim.bat in its own window + auto-browser
+#     (-NoAutoRun to disable). Setup now literally finishes with the sim up.
+#  v5 kept: orekit-data auto-download, portable-Node auto-fetch, proxy-immune
+#  000/503/200 probe, boot-log capture + auto-diagnosis, auto-restart launcher.
 # ============================================================================
 param(
   [switch]$ReuseVenv,
@@ -21,14 +19,16 @@ param(
   [switch]$ViewerOnly,
   [switch]$SkipFrontend,
   [switch]$NoSmoke,
-  [switch]$InstallNode,            # prefer system-wide winget install of Node LTS
-  [int]$BootTimeoutSec = 240,
-  [string]$NodeVersion = '22.14.0', # Node LTS used for the portable copy
-  [string]$DistUrl = ''            # optional: URL of a prebuilt frontend-dist .zip
+  [switch]$InstallNode,
+  [switch]$NoAutoRun,
+  [switch]$NoPatchRunSim,
+  [int]$BootTimeoutSec = 300,
+  [string]$NodeVersion = '22.14.0',
+  [string]$DistUrl = ''
 )
 
  $ErrorActionPreference = 'Stop'
- $ProgressPreference = 'SilentlyContinue'   # 30MB downloads would crawl otherwise
+ $ProgressPreference = 'SilentlyContinue'
  $Root       = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
  $LogFile    = Join-Path $Root 'setup.log'
@@ -60,9 +60,8 @@ function Run([string]$exe, [string[]]$argList) {
   return $LASTEXITCODE
 }
 function Get-HttpCode([int]$Port = 5000) {
-  $url = "http://127.0.0.1:$Port/"
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    $code = & curl.exe -s -o NUL -w '%{http_code}' --noproxy '*' --max-time 5 $url 2>$null
+    $code = (& curl.exe -s -o NUL -w '%{http_code}' --noproxy '*' --max-time 5 "http://127.0.0.1:$Port/" 2>$null)
     $code = ("$code").Trim()
     if ($code -match '^\d{3}$') { return $code }
     return '000'
@@ -121,14 +120,9 @@ function Install-NodeViaWinget {
   $null = Run winget @('install','-e','--id','OpenJS.NodeJS.LTS','--accept-source-agreements','--accept-package-agreements','--silent')
   Refresh-PathFromMachine
   if (Test-Npm) { Ok 'Node.js installed via winget and visible now'; return $true }
-  # winget ran but PATH not refreshed in this session -> probe the default location directly
   $std = 'C:\Program Files\nodejs'
-  if (Test-Path (Join-Path $std 'npm.cmd')) {
-    $env:Path = "$std;$env:Path"
-    Ok "winget installed Node; using it directly from $std"
-    return $true
-  }
-  Warn 'winget reported success but npm is still not usable - will try portable Node next.'
+  if (Test-Path (Join-Path $std 'npm.cmd')) { $env:Path = "$std;$env:Path"; Ok "winget installed Node; using it directly from $std"; return $true }
+  Warn 'winget reported success but npm is still not usable - trying portable Node next.'
   return $false
 }
 function Install-PortableNode([string]$Version) {
@@ -151,39 +145,283 @@ function Install-PortableNode([string]$Version) {
   Remove-Item -Recurse -Force $tmp
   Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
   if (-not (Test-PortableNode)) { Warn 'portable Node extraction incomplete.'; return $false }
+  Get-ChildItem $PortableNodeDir -Recurse -File | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
   $nv = (& (Join-Path $PortableNodeDir 'node.exe') --version) 2>&1 | Out-String
-  Ok "portable Node ready: $PortableNodeDir ($($nv.Trim())) - nothing was installed system-wide"
+  Ok "portable Node ready: $PortableNodeDir ($($nv.Trim())) - nothing installed system-wide"
   return $true
+}
+function Install-OrekitData {
+  $url = 'https://gitlab.orekit.org/orekit/orekit-data/-/archive/main/orekit-data-main.zip'
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+  $zip = Join-Path $ToolsDir 'orekit-data.zip'
+  Say '  downloading orekit-data from Orekit GitLab (one-time, ~100 MB) ...' DarkCyan
+  Log "  url: $url"
+  try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing }
+  catch { Warn "download failed: $($_.Exception.Message)"; return $false }
+  $tmp = Join-Path $ToolsDir 'orekit-extract'
+  if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+  Expand-Archive -Path $zip -DestinationPath $tmp -Force
+  $inner = Join-Path $tmp 'orekit-data-main'
+  if (-not (Test-Path $inner)) { Warn 'unexpected orekit-data zip layout.'; return $false }
+  $dest = Join-Path $Root 'orekit-data'
+  if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+  Move-Item $inner $dest
+  Remove-Item -Recurse -Force $tmp
+  Remove-Item $zip -Force -ErrorAction SilentlyContinue
+  Get-ChildItem $dest -Recurse -File | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
+  return $true
+}
+
+# --- patches run_simulator.py if the clone has the fragile version ---------
+# (safety net: once you COMMIT the shielded file, this becomes a no-op check)
+function Ensure-RunSimShield {
+  $rs = Join-Path $Root 'run_simulator.py'
+  if (-not (Test-Path $rs)) { Warn 'run_simulator.py not found - skipping patch step.'; return }
+  $raw = Get-Content $rs -Raw
+  if ($raw -match 'LEAP2_BOOT_SHIELD') { Ok 'run_simulator.py is self-sufficient already (boot shield present)'; return }
+  if (($raw -notmatch 'Run physics and the viewer with shared command state') -or
+      ($raw -notmatch 'from satellite_flight_visualisation import run_simulation, _telemetry_publisher') -or
+      ($raw -notmatch 'run_simulation\(\)')) {
+    Warn 'run_simulator.py not recognized as the known original - NOT patching. Commit the shielded run_simulator.py so clones get: self-set JAVA_HOME, boot interrupt-immunity, startup heartbeat.'
+    return
+  }
+  if ($NoPatchRunSim) { Warn 'run_simulator.py lacks the boot shield (-NoPatchRunSim given). Without it the sim depends on terminal env vars and any console event during its silent startup kills it. Commit the fixed file.'; return }
+  Copy-Item $rs "$rs.orig" -Force
+  $new = @'
+"""Run physics and the viewer with shared command state; no Flask reloader."""
+# LEAP2_BOOT_SHIELD v1 -- marker checked by setup.ps1; do not remove.
+import os
+import signal
+import threading
+from threading import Thread
+
+
+def _ensure_java():
+    """Make the venv self-sufficient: no JAVA_HOME needed in any terminal."""
+    if os.environ.get('JAVA_HOME'):
+        return
+    try:
+        import jdk4py
+        home = str(jdk4py.JAVA_HOME)
+        if os.path.isdir(home):
+            os.environ['JAVA_HOME'] = home
+            os.environ['PATH'] = (
+                os.path.join(home, 'bin') + os.pathsep
+                + os.environ.get('PATH', ''))
+    except Exception:
+        pass
+
+
+_stop_heartbeat = threading.Event()
+
+
+def _heartbeat():
+    n = 0
+    while not _stop_heartbeat.wait(10):
+        n += 10
+        print(f'  ... still starting up ({n}s) - normal, do not close this window',
+              flush=True)
+
+
+def main():
+    print('LEAP-2 sim booting: importing the physics stack (heartbeat below; '
+          'can take 1-3 min on corporate laptops). Ctrl+C is ignored until '
+          'the sim is up.', flush=True)
+    _ensure_java()
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+    threading.Thread(target=_heartbeat, name='boot-heartbeat',
+                     daemon=True).start()
+    try:
+        # Keep JVM/physics initialization and propagation on the main thread.
+        from satellite_flight_visualisation import run_simulation, _telemetry_publisher
+        from app import app, accept_telemetry_snapshot
+    finally:
+        _stop_heartbeat.set()
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    except Exception:
+        pass
+    _telemetry_publisher.set_sink(accept_telemetry_snapshot)
+    try:
+        from waitress import serve
+        server = lambda: serve(app, host='127.0.0.1', port=5000, threads=4)
+    except ImportError:
+        server = lambda: app.run(host='127.0.0.1', port=5000, threaded=True,
+                                 debug=False, use_reloader=False)
+    Thread(target=server, name='viewer-http', daemon=True).start()
+    print('Viewer: http://127.0.0.1:5000', flush=True)
+    run_simulation()
+
+
+if __name__ == '__main__':
+    main()
+'@
+  $new | Out-File -FilePath $rs -Encoding utf8
+  Ok 'run_simulator.py PATCHED (backup: run_simulator.py.orig): sets JAVA_HOME itself, immune to interrupts while booting, prints startup heartbeat. COMMIT the shielded file once - after that this step is a no-op for every clone.'
+}
+
+# ---- writes the everyday launcher (Run-Sim.bat + run-sim.ps1 + opener) ----
+function Write-Launchers {
+  New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+  $runSimBat = @'
+@echo off
+REM ============================================================
+REM  LEAP-2 MBD Simulation : DOUBLE-CLICK ME TO RUN THE SIM
+REM  (auto-created by Setup.bat - run Setup.bat once first)
+REM
+REM  Run-Sim.bat               full sim (physics + viewer)
+REM  Run-Sim.bat -ViewerOnly   viewer only (no physics / no Java)
+REM
+REM  Needs NO environment setup: JAVA_HOME is resolved from the
+REM  venv itself. Auto-restarts if the sim dies while booting.
+REM  Browser opens automatically.
+REM ============================================================
+cd /d "%~dp0"
+if not exist ".venv\Scripts\python.exe" (
+  echo [!] Virtual environment not found. Run Setup.bat first.
+  pause
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-sim.ps1" %*
+echo.
+pause
+'@
+  $runSimPs1 = @'
+# run-sim.ps1 - LEAP-2 everyday launcher (auto-created by setup.ps1)
+# Self-contained: no JAVA_HOME needed, auto-restart on startup death,
+# heartbeat visible, browser auto-opens, all output tee'd to sim-run.log.
+param([switch]$ViewerOnly)
+ $ErrorActionPreference = 'Continue'
+ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $Root
+ $VenvPy = Join-Path $Root '.venv\Scripts\python.exe'
+if (-not (Test-Path $VenvPy)) { Write-Host '[!] .venv missing - run Setup.bat first.' -ForegroundColor Red; exit 1 }
+
+ $ToolsDir = Join-Path $Root 'tools'
+ $flag = Join-Path $ToolsDir 'sim-was-up.flag'
+
+# already running? -> just open the browser
+ $busy = $false
+try { Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction Stop | Out-Null; $busy = $true } catch {}
+if ($busy) {
+  Write-Host '[!] Port 5000 already serving - the sim looks ALREADY RUNNING.' -ForegroundColor Yellow
+  Write-Host '    Opening http://127.0.0.1:5000 . Close the other sim window to restart it.' -ForegroundColor Yellow
+  Start-Process 'http://127.0.0.1:5000'
+  exit 0
+}
+
+# belt-and-suspenders env (run_simulator.py also does this itself now)
+ $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+ $jdk = (& $VenvPy -c "import jdk4py; print(jdk4py.JAVA_HOME)" 2>$null | Out-String).Trim()
+ $ErrorActionPreference = $prev
+ $jdk = ($jdk -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+if ($jdk) { $jdk = $jdk.Trim() }
+if ($jdk -and (Test-Path $jdk)) { $env:JAVA_HOME = $jdk; $env:Path = "$jdk\bin;$env:Path" }
+ $env:OREKIT_DATA = Join-Path $Root 'orekit-data'
+
+ $sim = if ($ViewerOnly) { Join-Path $Root 'app.py' } else { Join-Path $Root 'run_simulator.py' }
+Remove-Item $flag -Force -ErrorAction SilentlyContinue
+ $opener = Join-Path $ToolsDir 'open-when-ready.ps1'
+if (Test-Path $opener) {
+  Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$opener`"") -WindowStyle Hidden
+}
+
+Write-Host ''
+Write-Host '============================================================' -ForegroundColor Cyan
+if ($ViewerOnly) { Write-Host ' LEAP-2 sim : VIEWER-ONLY (no physics, no Java)' -ForegroundColor Cyan }
+else             { Write-Host ' LEAP-2 sim : FULL SIM (physics + viewer)' -ForegroundColor Cyan }
+Write-Host '============================================================' -ForegroundColor Cyan
+Write-Host ' Startup prints a heartbeat every 10 s. Browser opens by itself' -ForegroundColor Gray
+Write-Host ' at http://127.0.0.1:5000 . If the sim dies while booting it' -ForegroundColor Gray
+Write-Host ' AUTO-RESTARTS (up to 3 tries). To stop it later: Ctrl+C once.' -ForegroundColor Gray
+Write-Host '============================================================' -ForegroundColor Cyan
+
+for ($a = 1; $a -le 3; $a++) {
+  & $VenvPy -u $sim 2>&1 | Tee-Object -FilePath (Join-Path $Root 'sim-run.log')
+  $ec = $LASTEXITCODE
+  if ($ec -eq 0)       { Write-Host 'sim stopped.' -ForegroundColor Gray; exit 0 }
+  if (Test-Path $flag) { Write-Host 'sim stopped (it had been running).' -ForegroundColor Gray; exit 0 }
+  if ($a -lt 3) {
+    Write-Host "[!] sim died during startup (exit code $ec) - restarting automatically (attempt $a/3)..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+  } else {
+    Write-Host "[!] sim died during startup 3 times in a row (last exit code $ec)." -ForegroundColor Red
+    Write-Host '    Scroll up / open sim-run.log for the traceback.' -ForegroundColor Red
+  }
+}
+'@
+  $openerPs1 = @'
+# waits for the sim on 127.0.0.1:5000, then opens the browser once and
+# drops a marker so run-sim.ps1 knows the sim DID come up.
+ $deadline = (Get-Date).AddMinutes(8)
+ $flag = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'sim-was-up.flag'
+while ((Get-Date) -lt $deadline) {
+  Start-Sleep -Seconds 2
+  $c = '000'
+  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+    $c = (& curl.exe -s -o NUL -w '%{http_code}' --noproxy '*' --max-time 3 'http://127.0.0.1:5000/' 2>$null)
+    $c = ("$c").Trim()
+    if ($c -notmatch '^\d{3}$') { $c = '000' }
+  } else {
+    try { $t = New-Object System.Net.Sockets.TcpClient; $t.Connect('127.0.0.1', 5000); $c = 'LISTENING'; $t.Close() } catch { $c = '000' }
+  }
+  if ($c -eq '200' -or $c -eq '503' -or $c -eq 'LISTENING') {
+    Set-Content -Path $flag -Value (Get-Date -Format 'HH:mm:ss')
+    Start-Process 'http://127.0.0.1:5000'
+    break
+  }
+}
+'@
+  $runSimBat | Out-File -FilePath (Join-Path $Root 'Run-Sim.bat') -Encoding ascii
+  $runSimPs1 | Out-File -FilePath (Join-Path $Root 'run-sim.ps1') -Encoding ascii
+  $openerPs1 | Out-File -FilePath (Join-Path $ToolsDir 'open-when-ready.ps1') -Encoding ascii
+  Ok 'everyday launcher written: Run-Sim.bat (no env needed, auto-restart, auto-browser)'
 }
 
 # ============================== banner =====================================
 '' | Out-File -FilePath $LogFile -Encoding utf8
 Write-Host '============================================================' -ForegroundColor Cyan
-Write-Host ' LEAP-2 MBD Simulation : one-click setup (v3, self-provisioning)' -ForegroundColor Cyan
+Write-Host ' LEAP-2 MBD Simulation : one-click setup (v6)' -ForegroundColor Cyan
 Write-Host " Root : $Root" -ForegroundColor Gray
 Write-Host " Log  : $LogFile" -ForegroundColor Gray
 Write-Host ' Flags: -ReuseVenv -KeepRunning -ViewerOnly -SkipFrontend -NoSmoke' -ForegroundColor Gray
-Write-Host '        -InstallNode -BootTimeoutSec <sec> -NodeVersion <ver> -DistUrl <url>' -ForegroundColor Gray
+Write-Host '        -InstallNode -NoAutoRun -NoPatchRunSim -BootTimeoutSec <sec>' -ForegroundColor Gray
+Write-Host '        -NodeVersion <ver> -DistUrl <url>' -ForegroundColor Gray
 Write-Host '============================================================' -ForegroundColor Cyan
 
-# ====================== Step 1 : pre-flight ================================
-Step 'Pre-flight checks (python / node / frontend / orekit-data / port 5000)'
+# ====================== Step 1 : pre-flight + shield =======================
+Step 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'
  $py312 = Get-Py312
-if (-not $py312) { Fail "Python 3.12 not found. Install python.org 3.12 64-bit WITH 'py launcher' checked, then re-run: https://www.python.org/downloads/release/python-3127/" }
+if (-not $py312) { Fail "Python 3.12 not found - the ONLY prerequisite. Install python.org 3.12 64-bit WITH 'py launcher' checked, then re-run: https://www.python.org/downloads/release/python-3127/" }
 Ok "Python 3.12 via: $($py312.Exe) $($py312.Args -join ' ')"
 
  $npmOk = Test-Npm
 if ($npmOk) { Ok 'node/npm present on PATH' }
 elseif (Test-PortableNode) { Ok 'portable Node already cached (tools\node) - frontend can be built offline' }
-elseif (Test-Path $DistIndex) { Say '  [..] frontend/dist shipped - Node will not be needed at all' DarkCyan }
 else { Say '  [..] Node not found - Step 5 will fetch a portable copy automatically (needs internet)' DarkCyan }
+if (Test-Path $DistIndex) { Ok "frontend/dist already present ($DistIndex)" }
 
-if (Test-Path $DistIndex) { Ok "frontend/dist shipped in this copy - no Node needed ($DistIndex)" }
  $od = Join-Path $Root 'orekit-data'
-if (Test-Path (Join-Path $od 'Potential')) { Ok "orekit-data shipped OK ($od)" }
-else { Fail "orekit-data/ folder missing or incomplete. Re-extract the zip, or download https://gitlab.orekit.org/orekit/orekit-data/-/archive/main/orekit-data-main.zip and rename the folder to orekit-data at repo root." }
-if (Test-PortFree 5000) { Ok 'port 5000 free' } else { Warn 'port 5000 is BUSY (an old sim is running?). Setup continues, but the boot check may attach to the OLD server. Close it first if results look odd.' }
+if (Test-Path (Join-Path $od 'Potential')) { Ok "orekit-data present ($od)" }
+else {
+  Say '  orekit-data not in this clone - downloading it ...' DarkCyan
+  if (-not (Install-OrekitData)) {
+    Fail "orekit-data missing AND download failed. Manual fix: download https://gitlab.orekit.org/orekit/orekit-data/-/archive/main/orekit-data-main.zip , unzip, rename orekit-data-main -> orekit-data at repo root, re-run Setup.bat -ReuseVenv"
+  }
+  if (-not (Test-Path (Join-Path $od 'Potential'))) { Fail 'orekit-data downloaded but looks incomplete (no Potential/ inside).' }
+  Ok 'orekit-data downloaded and installed'
+}
+
+if ($Root -match '(?i)(Downloads|OneDrive|Dropbox)') {
+  Warn "project sits in a Downloads/OneDrive-synced location ($Root) - synced+scanned folders stall imports. Recommended: move to C:\Projects\ADCS_Sim and re-run Setup.bat."
+}
+if (Test-PortFree 5000) { Ok 'port 5000 free' } else { Warn 'port 5000 is BUSY (an old sim still running?). Close it first if the boot check behaves oddly.' }
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force } catch {}
+Ensure-RunSimShield
 
 # ====================== Step 2 : fresh venv ================================
 Step 'Fresh virtual environment (.venv)'
@@ -213,7 +451,7 @@ Step 'Python dependencies (pip install -r requirements.txt)'
 if ($ec -ne 0) {
   Warn 'first pip pass failed - retrying once with --no-cache-dir ...'
   $ec = Run $VenvPy @('-m','pip','install','--no-cache-dir','-r',$req)
-  if ($ec -ne 0) { Fail "pip install failed twice. Open setup.log and search for 'ERROR:'. Usual fix: re-run Setup.bat (fresh venv)." }
+  if ($ec -ne 0) { Fail "pip install failed twice. Open setup.log and search for 'ERROR:'." }
 }
  $ec = Run $VenvPy @('-c',"import flask,numpy,scipy,yaml,requests,waitress,orekit_jpype,jdk4py; print('py-deps-ok')")
 if ($ec -ne 0) { Fail 'dependency import check failed (flask/numpy/scipy/yaml/requests/waitress/orekit_jpype/jdk4py). See setup.log.' }
@@ -235,16 +473,15 @@ Ok "jvm.dll present: $jdkHome\bin\server\jvm.dll"
 
  $actSim = Join-Path $VenvDir 'Scripts\Activate-sim.ps1'
 @"
-# auto-generated by setup.ps1 - use this instead of plain Activate.ps1
+# auto-generated by setup.ps1 - optional; run_simulator.py now sets JAVA_HOME itself
 & "$VenvDir\Scripts\Activate.ps1"
 `$env:JAVA_HOME = "$jdkHome"
 `$env:Path = "`$env:JAVA_HOME\bin;`$env:Path"
 `$env:OREKIT_DATA = "$od"
 Write-Host "sim env ready | JAVA_HOME=`$env:JAVA_HOME" -ForegroundColor Green
 Write-Host 'run:  python run_simulator.py   (full physics + viewer http://127.0.0.1:5000)' -ForegroundColor Cyan
-Write-Host 'alt :  python app.py             (viewer only, no physics/Java)' -ForegroundColor Gray
 "@ | Out-File -FilePath $actSim -Encoding utf8
-Ok "VS Code helper written: $actSim"
+Ok "VS Code helper written: $actSim (not strictly needed anymore - the sim is env-independent now)"
 
  $vsDir = Join-Path $Root '.vscode'; New-Item -ItemType Directory -Force -Path $vsDir | Out-Null
  $settingsPath = Join-Path $vsDir 'settings.json'
@@ -260,24 +497,24 @@ if (Test-Path $settingsPath) {
     try { $parsed = $stripped | ConvertFrom-Json } catch {}
   }
   if ($parsed) { $parsed.PSObject.Properties | ForEach-Object { $settings[$_.Name] = $_.Value } }
-  else {
-    Copy-Item $settingsPath "$settingsPath.bak" -Force
-    Warn 'existing .vscode/settings.json unreadable (JSONC or invalid) - backed up to settings.json.bak, writing ours'
-  }
+  else { Copy-Item $settingsPath "$settingsPath.bak" -Force; Warn 'existing .vscode/settings.json unreadable (JSONC?) - backed up, writing ours' }
 }
  $settings['python.defaultInterpreterPath'] = $VenvPy
  $settings['python.terminal.activateEnvironment'] = $true
- $settings['terminal.integrated.env.windows'] = @{ JAVA_HOME = $jdkHome; OREKIT_DATA = $od; PATH = "$jdkHome\bin;`${env:PATH}" }
 ($settings | ConvertTo-Json -Depth 6) | Out-File -FilePath $settingsPath -Encoding utf8
-"JAVA_HOME=$jdkHome`nOREKIT_DATA=$od" | Out-File -FilePath (Join-Path $Root '.env') -Encoding utf8
-Ok 'VS Code pinned to .venv + JAVA_HOME persisted (.vscode/settings.json, .env)'
+Ok 'VS Code pinned to .venv (python.defaultInterpreterPath)'
 
-# ============ Step 5 : frontend (now self-provisioning Node) ================
+ $gi = Join-Path $Root '.gitignore'
+ $want = @('tools/','Run-Sim.bat','run-sim.ps1','setup.log','sim-boot.*.log','sim-run.log','.env','run_simulator.py.orig')
+ $cur = if (Test-Path $gi) { Get-Content $gi } else { @() }
+ $add = $want | Where-Object { $cur -notcontains $_ }
+if ($add) { Add-Content -Path $gi -Value ''; Add-Content -Path $gi -Value '# auto-added by setup.ps1'; $add | ForEach-Object { Add-Content -Path $gi -Value $_ }; Ok ".gitignore updated (added: $($add -join ', '))" }
+
+# ============ Step 5 : frontend (self-provisioning Node) ===================
 Step 'Frontend build (auto-gets Node if missing -> frontend/dist/index.html)'
 if ($SkipFrontend) { Warn 'skipped via -SkipFrontend (viewer will 503 until you build).' }
 elseif (Test-Path $DistIndex) { Ok "dist already present: $DistIndex" }
 else {
-  # ---- acquire a Node toolset: system npm > cached portable > winget > download portable ----
   $npmCmd = $null
   if (Test-Npm) { $npmCmd = 'npm.cmd'; Ok 'using system npm' }
   elseif (Test-PortableNode) {
@@ -310,13 +547,9 @@ else {
       $ec = Run $npmCmd @('run','build')
     } finally { Pop-Location }
     if (Test-Path $DistIndex) { Ok "frontend built: $DistIndex" }
-    else {
-      $FrontendMissing = $true
-      Warn "npm build did not produce frontend/dist/index.html. Open setup.log, search 'npm ERR!'. If it is a network/proxy error, re-run once more; else build on the dev machine and copy frontend\dist."
-    }
+    else { $FrontendMissing = $true; Warn "npm build did not produce frontend/dist/index.html. Open setup.log, search 'npm ERR!'." }
   }
   elseif ($DistUrl) {
-    # ---- no Node at all: fetch a prebuilt dist bundle ----
     Warn "no Node available - fetching prebuilt frontend from -DistUrl ..."
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
@@ -336,51 +569,61 @@ else {
         New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
         Move-Item $src $dest
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-        Remove-Item $dz -Force -ErrorAction SilentlyContinue
         Ok "prebuilt frontend installed: $DistIndex"
-      } else { $FrontendMissing = $true; Warn 'the -DistUrl zip did not contain dist/index.html or index.html at its root.' }
+      } else { $FrontendMissing = $true; Warn 'the -DistUrl zip did not contain dist/index.html at its root.' }
     }
   }
   else {
     $FrontendMissing = $true
-    Warn 'NO Node and NO internet path succeeded - frontend cannot be built here.'
-    Warn 'Fix (pick one): 1) re-run with internet, 2) re-run with -DistUrl <url-to-prebuilt-dist.zip>, 3) copy frontend\dist from the dev machine. Backend setup continues and is fully usable otherwise.'
+    Warn 'NO Node and NO download path succeeded - frontend cannot be built here (needs internet once, or -DistUrl, or copy frontend\dist).'
   }
 }
 
-# ====================== Step 6 : smoke test =================================
-Step 'Smoke test (Orekit JVM + orekit-data + viewer import)'
-if ($NoSmoke) { Warn 'skipped via -NoSmoke.' }
+# ====================== Step 6 : smoke test + warm-up =======================
+Step 'Smoke test + timed warm-up (JVM / orekit-data / full physics import)'
+if ($NoSmoke) { Warn 'skipped via -NoSmoke (including the warm-up import).' }
 else {
+  $ec = Run $VenvPy @('-m','py_compile',(Join-Path $Root 'run_simulator.py'))
+  if ($ec -ne 0) { Fail 'run_simulator.py failed to compile - if setup patched it, restore run_simulator.py.orig and commit the shielded version by hand. See setup.log.' }
+  Ok 'run_simulator.py compiles'
+
   $env:OREKIT_DATA = $od
   $ec = Run $VenvPy @('-c',"from engine.orekit_runtime import ensure_initialized; print('orekit-smoke-ok')")
   if ($ec -ne 0) {
     $tail = Tail-File $LogFile 25
     if ($tail -match 'jvm\.dll|JVMNotFound|JAVA_HOME') { Fail "JVM still not found (jdk4py path was $jdkHome). Fixes: 1) new terminal 2) $VenvPy -m pip install --force-reinstall jdk4py orekit-jpype 3) re-run Setup.bat. Log tail:`n$tail" }
-    elseif ($tail -match 'orekit-data|EGM2008|egm2008') { Fail "orekit-data invalid (EGM2008 check failed). Re-extract orekit-data/ from the zip. Log tail:`n$tail" }
+    elseif ($tail -match 'orekit-data|EGM2008|egm2008') { Fail "orekit-data invalid (EGM2008 check failed). Log tail:`n$tail" }
     else { Fail "Orekit smoke import failed. Tail of setup.log:`n$tail" }
   }
   Ok 'JVM + orekit-data load cleanly'
+
   $ec = Run $VenvPy @('-c',"import app; print('viewer-import-ok')")
   if ($ec -ne 0) { Fail 'import app failed (viewer-only, no Java needed) - a python dep is broken. See setup.log.' }
   Ok 'viewer imports cleanly (no JVM needed)'
-  $ec = Run $VenvPy @('-c',"from astropy.time import Time; print('astropy-ok')")
+
+  Say '  warm-up: importing the FULL physics chain once, with timing (silent 1-3 min is NORMAL) ...' DarkCyan
+  $t0 = Get-Date
+  $ec = Run $VenvPy @('-c',"import time; t=time.time(); import satellite_flight_visualisation; print('physics-import-ok %.1fs' % (time.time()-t))")
   if ($ec -ne 0) {
-    Warn 'astropy import failed - attempting repair (force-reinstall astropy+numpy) ...'
-    $null = Run $VenvPy @('-m','pip','install','--force-reinstall','--no-cache-dir','astropy','numpy')
-    $ec = Run $VenvPy @('-c',"from astropy.time import Time; print('astropy-ok-after-reinstall')")
-    if ($ec -ne 0) { Warn 'astropy STILL failing after reinstall. On corporate machines the usual cause is IT policy (AppLocker/WDAC) blocking compiled modules - not a code bug. FULL SIM will fail here; VIEWER-ONLY still works. The boot step will auto-fallback.' }
-    else { Ok 'astropy repaired by reinstall' }
-  } else { Ok 'astropy imports cleanly (physics chain unblocked)' }
+    $tail = Tail-File $LogFile 20
+    Warn "full physics-chain import did not complete:`n$tail"
+    Warn 'the live-boot step below will surface the real error and auto-fallback if needed.'
+  } else {
+    $secs = [int][Math]::Ceiling(((Get-Date) - $t0).TotalSeconds)
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    "$secs" | Out-File -FilePath (Join-Path $ToolsDir 'import-time.txt') -Encoding ascii
+    Ok "full physics chain imports cleanly (~$secs s; later boots are faster)"
+  }
 }
 
 # ============ Step 7 : live boot proof (status-code aware) ==================
 Step "Live boot proof (start sim, wait up to ${BootTimeoutSec}s, then stop)"
+Write-Launchers
  $targetPath = if ($ViewerOnly) { Join-Path $Root 'app.py' } else { Join-Path $Root 'run_simulator.py' }
  $mode = if ($ViewerOnly) { 'VIEWER-ONLY (app.py, no physics/Java)' } else { 'FULL SIM (run_simulator.py, physics + viewer)' }
 Log "  mode: $mode"
 Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
- $simProc = Start-Process -FilePath $VenvPy -ArgumentList "`"$targetPath`"" -WorkingDirectory $Root `
+ $simProc = Start-Process -FilePath $VenvPy -ArgumentList @('-u', "`"$targetPath`"") -WorkingDirectory $Root `
                -PassThru -WindowStyle Hidden -RedirectStandardOutput $BootOut -RedirectStandardError $BootErr
 Ok "sim process started (pid $($simProc.Id)); output -> sim-boot.out.log / sim-boot.err.log"
  $up = $false; $partial = $false; $sawCode = ''; $bootStart = Get-Date
@@ -399,7 +642,7 @@ while ((Get-Date) -lt $deadline) {
     Warn 'auto-fallback: retrying in VIEWER-ONLY mode to at least prove the frontend/server ...'
     $targetPath = Join-Path $Root 'app.py'; $mode = 'VIEWER-ONLY fallback'
     Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
-    $simProc = Start-Process -FilePath $VenvPy -ArgumentList "`"$targetPath`"" -WorkingDirectory $Root `
+    $simProc = Start-Process -FilePath $VenvPy -ArgumentList @('-u', "`"$targetPath`"") -WorkingDirectory $Root `
                    -PassThru -WindowStyle Hidden -RedirectStandardOutput $BootOut -RedirectStandardError $BootErr
     $bootStart = Get-Date; $deadline = $bootStart.AddSeconds($BootTimeoutSec)
     continue
@@ -420,11 +663,10 @@ if ($up) {
   Ok "LIVE - viewer answered HTTP 200 ($mode)"
   $api = Get-ApiCode '/api/latest'
   if ($api -match '^2\d\d$') { Ok "telemetry endpoint /api/latest answers $api" }
-  else { Warn "/api/latest not 2xx yet (physics warming up - normal in the first seconds): $api" }
+  else { Warn "/api/latest not 2xx yet (physics warming up - normal): $api" }
 }
 elseif ($partial) {
   Warn 'SERVER IS UP but returns 503 - frontend/dist is missing on this machine.'
-  Warn 'This is NOT a python/java failure - the backend stack is proven.'
   $api = Get-ApiCode '/api/latest'
   if ($api -match '^2\d\d$') { Ok "backend + telemetry PROVEN (/api/latest answers $api) - only the web UI files are missing" }
 }
@@ -434,10 +676,10 @@ else {
   Fail "no HTTP 200 within ${BootTimeoutSec}s (last probe: $sawCode). Boot log tail:`n$tail`nIf physics needs longer on this machine, re-run with:  Setup.bat -BootTimeoutSec 600"
 }
 
-# ====================== Step 8 : stop + handover ============================
-Step 'Stop proof-process + handover'
+# ====================== Step 8 : stop + LAUNCH for the user ================
+Step 'Stop proof-process + launch the sim for you'
 if ($KeepRunning) {
-  Warn "keeping sim alive per -KeepRunning (pid $($simProc.Id)) - open http://127.0.0.1:5000 now. Close its window when done."
+  Warn "keeping proof sim alive per -KeepRunning (pid $($simProc.Id)) - open http://127.0.0.1:5000 now."
 } else {
   try { Stop-Process -Id $simProc.Id -Force -ErrorAction Stop; Ok "proof-process stopped (pid $($simProc.Id))" }
   catch { Warn "could not kill pid $($simProc.Id) - close it via Task Manager." }
@@ -446,24 +688,38 @@ if ($KeepRunning) {
   if (Test-PortFree 5000) { Ok 'port 5000 free again' } else { Warn 'port 5000 still busy - kill leftover python.exe via Task Manager.' }
 }
 
+ $autoStarted = $false
+if ($up -and -not $KeepRunning -and -not $NoAutoRun) {
+  $runBat = Join-Path $Root 'Run-Sim.bat'
+  if (Test-Path $runBat) {
+    Start-Sleep -Seconds 2
+    Say 'launching the sim for you in its own window - browser opens automatically. You can close THIS Setup window.' Cyan
+    if ($ViewerOnly) { Start-Process -FilePath $runBat -ArgumentList '-ViewerOnly' -WorkingDirectory $Root }
+    else             { Start-Process -FilePath $runBat -WorkingDirectory $Root }
+    $autoStarted = $true
+  }
+}
+
 Write-Host ''
 if ($up) {
   Write-Host '============================================================' -ForegroundColor Green
   Write-Host ' SETUP COMPLETE - everything proven working end-to-end.' -ForegroundColor Green
   Write-Host '============================================================' -ForegroundColor Green
+  if ($autoStarted) {
+    Write-Host ' THE SIM IS ALREADY STARTING in its own window.' -ForegroundColor Cyan
+    Write-Host ' Browser opens by itself at http://127.0.0.1:5000 .' -ForegroundColor White
+  }
 } else {
   Write-Host '============================================================' -ForegroundColor Yellow
-  Write-Host ' SETUP 90% COMPLETE - backend fully proven, UI files missing' -ForegroundColor Yellow
+  Write-Host ' SETUP ~90% COMPLETE - backend proven, UI files missing' -ForegroundColor Yellow
   Write-Host '============================================================' -ForegroundColor Yellow
-  Write-Host ' To get the web UI, pick ONE:' -ForegroundColor Cyan
-  Write-Host '   A) With internet:  Setup.bat -ReuseVenv   (auto-downloads portable Node and builds)' -ForegroundColor White
-  Write-Host '   B) Prebuilt UI:    Setup.bat -ReuseVenv -DistUrl <url-to-dist.zip>' -ForegroundColor White
-  Write-Host '   C) Manual copy:    copy frontend\dist from the dev machine into this folder' -ForegroundColor White
-  Write-Host ' Until then run_simulator.py serves 503 "Build the frontend first".' -ForegroundColor Gray
+  Write-Host ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
 }
 Write-Host ''
-Write-Host ' Every day after this (VS Code, nothing to configure):' -ForegroundColor Cyan
-Write-Host '   1. .\.venv\Scripts\Activate-sim.ps1' -ForegroundColor White
-Write-Host '   2. python run_simulator.py   ->  http://127.0.0.1:5000' -ForegroundColor White
-Write-Host ' Viewer-only (no Java):  python app.py' -ForegroundColor Gray
+Write-Host ' FROM NOW ON, to run the sim:  double-click  Run-Sim.bat' -ForegroundColor Cyan
+Write-Host '   (needs NO environment setup - JAVA_HOME is resolved by the sim itself;' -ForegroundColor Gray
+Write-Host '    immune to interrupts while booting; auto-restarts; auto-browser)' -ForegroundColor Gray
+Write-Host ' VS Code also works now with ZERO setup: just run  python run_simulator.py' -ForegroundColor Gray
+Write-Host '   in any terminal of the repo (plain Activate.ps1 is enough).' -ForegroundColor Gray
+Write-Host ' Viewer-only:  Run-Sim.bat -ViewerOnly   (or python app.py)' -ForegroundColor Gray
 Write-Host " Full log: $LogFile   Boot log: $BootOut / $BootErr" -ForegroundColor Gray
