@@ -1,21 +1,23 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v10)
+#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v11)
 #  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
 #
-#  v10 fixes the v9 crash "The operation '[System.Char] * [System.Int32]'
-#  is not defined": Windows PowerShell 5.1 cannot multiply a char by a
-#  number. All box/block glyphs are now stored as STRINGS, so every
-#  ($S.d * $w) is legal string repetition.
-#  v10 also adds the presentation layer done right:
-#   - true-color (24-bit) VT output when the console supports it,
-#     with automatic 16-color fallback and -Plain monochrome mode
-#   - big shaded "LEAP-2" block-art banner with 3D drop shadow,
-#     per-character gradient + horizontal light shading
-#   - starfield, comet sweep animation, gradient progress bars
-#  All non-ASCII glyphs are built from code points -> the file itself
-#  stays pure ASCII and survives any encoding.
-#  Logic is identical to v8: install + verify + stop; no launcher files,
-#  no auto-launch; running the sim = VS Code terminal as usual.
+#  v11 vs v10:
+#   * FIX "JVM still not found" false alarm: smoke tests now run from temp
+#     .py files (no Start-Process argument quoting to break) and errors are
+#     classified from the process's REAL stderr, not the setup.log tail
+#     (which always contained a stale JAVA_HOME line from Step 4).
+#     $env:OREKIT_DATA restored before smoke tests.
+#   * FIX box misalignment: all boxes auto-size to their title (min width 66)
+#     and every row is emitted with one exact PadRight -> borders always line up.
+#   * FIX "pip freezes at Installing collected packages": pip + npm now run
+#     through the animated runner (spinner + elapsed + rotating phase
+#     messages + live last output line) instead of silent streaming.
+#   * Banner: procedurally generated SATURN (shaded sphere, real band colors,
+#     rings with Cassini gap, starfield) drawn with the 70-char letter ramp,
+#     true-color where the console supports it, 16-color and -Plain fallbacks.
+#  All glyphs are strings built from code points (PS 5.1 char*int is illegal)
+#  -> file stays pure ASCII, survives any encoding, no [char]*int anywhere.
 # ============================================================================
 param(
   [switch]$ReuseVenv,
@@ -45,30 +47,19 @@ Set-Location $Root
  $StepTotal  = 8; $StepNo = 0; $StepT0 = Get-Date; $T_Start = Get-Date
  $FrontendMissing = $false; $WarmOk = $true
  $script:Report = New-Object System.Collections.ArrayList
- $script:ArtCache = $null
  $script:t_stepName = ''
 
-# ---------- glyph kit: STRINGS, never [char] (PS 5.1 char*int is illegal) --
+# ---------- glyph kit: STRINGS only (PS 5.1 cannot multiply [char]) --------
  $S = @{
-  h    = "$([char]0x2500)"   # -
-  d    = "$([char]0x2550)"   # =
-  v    = "$([char]0x2502)"   # |
-  dv   = "$([char]0x2551)"   # ||
-  tl   = "$([char]0x2554)"   # top-left corner
-  tr   = "$([char]0x2557)"   # top-right corner
-  bl   = "$([char]0x255A)"   # bottom-left corner
-  br   = "$([char]0x255D)"   # bottom-right corner
-  blk  = "$([char]0x2588)"   # full block
-  s1   = "$([char]0x2591)"   # light shade
-  s2   = "$([char]0x2592)"   # medium shade
-  arr  = "$([char]0x25BA)"   # right pointer
-  chk  = "$([char]0x221A)"   # check mark
-  crs  = "$([char]0x00D7)"   # multiplication sign
+  h    = "$([char]0x2500)"; d  = "$([char]0x2550)"; v  = "$([char]0x2502)"; dv = "$([char]0x2551)"
+  tl   = "$([char]0x2554)"; tr = "$([char]0x2557)"; bl = "$([char]0x255A)"; br = "$([char]0x255D)"
+  blk  = "$([char]0x2588)"; s1 = "$([char]0x2591)"; s2 = "$([char]0x2592)"
+  arr  = "$([char]0x25BA)"; chk = "$([char]0x221A)"; crs = "$([char]0x00D7)"
 }
  $Spin = @('|','/','-','\')
  $E = [char]27
 
-# ---------- enable VT (true color) when the console supports it -----------
+# ---------- enable VT (true color) when supported --------------------------
  $script:VT = $false
 if (-not $Plain) {
   try {
@@ -76,7 +67,7 @@ if (-not $Plain) {
 [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int h);
 [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out int m);
 [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, int m);
-'@ -Name 'K32VT' -Namespace 'LEAP' -PassThru -ErrorAction Stop
+'@ -Name 'K32VT11' -Namespace 'LEAP' -PassThru -ErrorAction Stop
     $hnd = $k32::GetStdHandle(-11)
     $m = 0; $null = $k32::GetConsoleMode($hnd, [ref]$m)
     $script:VT = $k32::SetConsoleMode($hnd, ($m -bor 4))
@@ -90,13 +81,13 @@ function Info([string]$m) { P ("    {0} {1}" -f $S.arr, $m) DarkCyan; Log ("  >>
 function Ok([string]$m)   { P ("    {0} {1}" -f $S.chk, $m) Green;    Log ("  OK: " + $m) }
 function Warn([string]$m) { P ("    ! {0}" -f $m) Yellow;             Log ("  WARN: " + $m) }
 function Fail([string]$m) { P ("    {0} {1}" -f $S.crs, $m) Red;      Log ("  FAIL: " + $m); throw $m }
-function Clear-Line() { Write-Host ("`r" + (' ' * 90) + "`r") -NoNewline }
-function Wrap54([string]$m) {
+function Clear-Line() { Write-Host ("`r" + (' ' * 100) + "`r") -NoNewline }
+function Wrap58([string]$m) {
   $out = @()
   foreach ($ln in ($m -split "`r?`n")) {
     $cur = ''
     foreach ($word in ($ln -split ' ')) {
-      if (($cur + ' ' + $word).Trim().Length -gt 54) { if ($cur) { $out += $cur }; $cur = $word }
+      if (($cur + ' ' + $word).Trim().Length -gt 58) { if ($cur) { $out += $cur }; $cur = $word }
       else { if ($cur) { $cur += ' ' + $word } else { $cur = $word } }
     }
     if ($cur) { $out += $cur }
@@ -104,48 +95,114 @@ function Wrap54([string]$m) {
   return $out
 }
 
-# ---------------------------- banner kit -----------------------------------
-function Get-Art {
-  if ($script:ArtCache) { return $script:ArtCache }
-  $K = $S.blk; $C = $S.tr; $Q = $S.tl; $Lc = $S.bl; $Rc = $S.br; $D = $S.d; $V = $S.dv
-  $Lt = @{}
-  $Lt['L'] = @( ($K+$K+$C+'     '), ($K+$K+$V+'     '), ($K+$K+$V+'     '), ($K+$K+$V+'     '), ($K*7+$C), ($Lc+$D*6+$Rc) )
-  $Lt['E'] = @( ($K*7+$C), ($K+$K+$Q+$D*4+$Rc), ($K*5+$C+'  '), ($K+$K+$Q+$D*2+$Rc+'  '), ($K*7+$C), ($Lc+$D*6+$Rc) )
-  $Lt['A'] = @( (' '+$K*6+$C+' '), ($K+$K+$Q+$D*3+$K+$K+$C), ($K*7+$V+' '), ($K+$K+$Q+$D*2+$K+$K+$V+' '), ($K+$K+$V+'  '+$K+$K+$V+' '), ($Lc+$D+$Rc+'  '+$Lc+$D+$Rc+' ') )
-  $Lt['P'] = @( ($K*6+$C+' '), ($K+$K+$Q+$D*2+$K+$K+$C), ($K*6+$Q+$Rc), ($K+$K+$Q+$D*3+$Rc+' '), ($K+$K+$V+'     '), ($Lc+$D+$Rc+'     ') )
-  $Lt['-'] = @( (' '*9), (' '*9), (' '+$K*7+$C), (' '+$Lc+$D*6+$Rc), (' '*9), (' '*9) )
-  $Lt['2'] = @( ($K*7+$C), ($Lc+$D*2+$K*3+$Q+$Rc), ('  '+$K*3+$Q+$Rc+' '), (' '+$K*3+$Q+$Rc+'  '), ($K*7+$C), ($Lc+$D*6+$Rc) )
-  $a = New-Object System.Collections.ArrayList
-  for ($r = 0; $r -lt 6; $r++) {
-    [void]$a.Add(($Lt['L'][$r] + $Lt['E'][$r] + $Lt['A'][$r] + $Lt['P'][$r] + $Lt['-'][$r] + $Lt['2'][$r]))
-  }
-  $script:ArtCache = $a.ToArray()
-  return $script:ArtCache
+# ---------- exact-width box kit (auto-sized, cannot misalign) ---------------
+function Box-Top([int]$w) { P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan }
+function Box-Bot([int]$w) { P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan }
+function Box-Row([string]$inner, [int]$w, [string]$c = 'Gray') {
+  if ($inner.Length -gt $w) { $inner = $inner.Substring(0, $w - 3) + '...' }
+  P ("  {0} {1} {2}" -f $S.dv, $inner.PadRight($w), $S.dv) $c
 }
-function Get-BannerCell([string[]]$art, [int]$i, [int]$j, [int]$rows, [int]$dy, [int]$dx) {
-  if ($i -lt $rows -and $j -lt $art[$i].Length -and $art[$i][$j] -ne ' ') { return @($art[$i][$j], 0) }
-  $si = $i - $dy; $sj = $j - $dx
-  if ($si -ge 0 -and $si -lt $rows -and $sj -ge 0 -and $sj -lt $art[$si].Length -and $art[$si][$sj] -ne ' ') { return @($art[$si][$sj], 1) }
-  return @(' ', 2)
+
+# ============================ SATURN BANNER =================================
+# Procedural Saturn: shaded sphere (upper-left light, limb darkening, real
+# band palette), tilted ring with Cassini gap (front half overlaps the lower
+# sphere, back half hides behind the upper sphere), starfield background.
+# Characters come from the classic 70-char density ramp (letters + symbols,
+# like the reference image); color from true-color VT or 16-color fallback.
+ $Ramp70 = ' .\' + "'" + '^":;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$'
+
+function Get-Band([double]$lat) {
+  $a = [Math]::Abs($lat)
+  if     ($a -le 0.22) { return @(232, 202, 148) }
+  elseif ($a -le 0.45) { return @(214, 180, 126) }
+  elseif ($a -le 0.68) { return @(196, 158, 108) }
+  elseif ($a -le 0.88) { return @(176, 140, 100) }
+  else                 { return @(150, 148, 142) }
 }
-function Show-Starfield([int]$width = 88) {
-  $chars = @('.', '.', '.', '*', '+', "$([char]0x00B7)")
-  for ($ln = 0; $ln -lt 2; $ln++) {
-    $line = ''
-    for ($j = 0; $j -lt $width; $j++) {
-      if ((Get-Random -Minimum 0 -Maximum 100) -lt 12) {
-        $ch = $chars[(Get-Random -Minimum 0 -Maximum $chars.Count)]
-        if ($script:VT) {
-          $b = Get-Random -Minimum 70 -Maximum 210
-          $line += "${E}[38;2;$b;$b;255m$ch"
-        } else { $line += $ch }
-      } else { $line += ' ' }
+function Show-Saturn {
+  $W = 78; $H = 24
+  $cx = 39;  $cy = 12
+  $Rxp = 10.0; $aspect = 2.15
+  $raC = 20.5; $rbC = 5.1; $eIn = 0.62; $eOut = 1.0
+  $Lx = -0.545; $Ly = -0.496; $Lz = 0.675
+  $starChars = @('.', '.', '*', '+', "$([char]0x00B7)")
+  $nRamp = $Ramp70.Length - 1
+  for ($y = 0; $y -lt $H; $y++) {
+    $dy = $y - $cy
+    $chars = @(); $cols = @()
+    for ($x = 0; $x -lt $W; $x++) {
+      $dx = $x - $cx
+      $e = [Math]::Sqrt((($dx / $raC) * ($dx / $raC)) + (($dy / $rbC) * ($dy / $rbC)))
+      $onRing = ($e -ge $eIn) -and ($e -le $eOut)
+      $Py = $dy * $aspect
+      $r2 = ($dx * $dx) + ($Py * $Py)
+      $onSphere = ($r2 -le ($Rxp * $Rxp))
+      $front = ($dy -gt 0)
+      if ($onSphere -and ($onRing -and $front)) {
+        # ring passing in FRONT of the lower hemisphere
+        $rf = ($e - $eIn) / ($eOut - $eIn)
+        $b = 0.55 + (0.40 * $rf) + 0.08
+        $chars += $Ramp70.Substring([int][Math]::Min($nRamp, [int](18 + 34 * $rf)), 1)
+        $cols  += @{ R = [int](208 * $b); G = [int](198 * $b); B = [int](178 * $b) }
+      }
+      elseif ($onSphere) {
+        $z = [Math]::Sqrt([Math]::Max(0, ($Rxp * $Rxp) - $r2))
+        $nx = $dx / $Rxp; $ny = $Py / $Rxp; $nz = $z / $Rxp
+        $L = [Math]::Max(0, ($nx * $Lx) + ($ny * $Ly) + ($nz * $Lz))
+        $lat = $ny + (0.05 * [Math]::Sin($dx * 0.8))
+        $band = Get-Band $lat
+        $limb = 0.70 + (0.30 * ($z / $Rxp))
+        $b = (0.18 + (0.82 * $L)) * $limb
+        $idx = [int][Math]::Max(3, [int]($L * $nRamp))
+        $chars += $Ramp70.Substring([int][Math]::Min($nRamp, $idx), 1)
+        $cols  += @{ R = [int]($band[0] * $b); G = [int]($band[1] * $b); B = [int]($band[2] * $b) }
+      }
+      elseif ($onRing) {
+        $rf = ($e - $eIn) / ($eOut - $eIn)
+        $b = 0.55 + (0.40 * $rf)
+        $chars += $Ramp70.Substring([int][Math]::Min($nRamp, [int](18 + 34 * $rf)), 1)
+        $cols  += @{ R = [int](208 * $b); G = [int](198 * $b); B = [int](178 * $b) }
+      }
+      elseif ((Get-Random -Minimum 0 -Maximum 100) -lt 8) {
+        $chars += $starChars[(Get-Random -Minimum 0 -Maximum $starChars.Count)]
+        $bb = Get-Random -Minimum 70 -Maximum 210
+        $cols += @{ R = $bb; G = $bb; B = 255 }
+      }
+      else { $chars += ' '; $cols += $null }
     }
-    if ($script:VT) { Write-Host ('    ' + $line + "${E}[0m") }
-    else { Write-Host ('    ' + $line) -ForegroundColor DarkGray }
+    if ($script:VT -and -not $Plain) {
+      $line = ''; $last = ''
+      for ($x = 0; $x -lt $W; $x++) {
+        if ($null -eq $cols[$x]) { $line += ' '; continue }
+        $c = ("{0}[38;2;{1};{2};{3}m" -f $E, [int]$cols[$x].R, [int]$cols[$x].G, [int]$cols[$x].B)
+        if ($c -ne $last) { $line += $c; $last = $c }
+        $line += $chars[$x]
+      }
+      Write-Host ('   ' + $line + "$E[0m")
+    }
+    else {
+      Write-Host '   ' -NoNewline
+      $last = ''
+      for ($x = 0; $x -lt $W; $x++) {
+        if ($null -eq $cols[$x]) { if ($last -ne '') { Write-Host ' ' -NoNewline; $last = '' } ; continue }
+        $colName = 'Gray'
+        if ($chars[$x] -in $starChars) { $colName = 'DarkGray' }
+        elseif ($cols[$x].R -gt $cols[$x].G) { $colName = 'Gray' }   # ring (gray-tan)
+        else {
+          $lum = ($cols[$x].R + $cols[$x].G + $cols[$x].B) / 3.0
+          if     ($lum -gt 130) { $colName = 'Yellow' }
+          elseif ($lum -gt 60)  { $colName = 'DarkYellow' }
+          else                  { $colName = 'DarkGray' }
+        }
+        if ($Plain) { $colName = 'DarkCyan' }
+        if ($colName -ne $last) { $last = $colName }
+        Write-Host $chars[$x] -NoNewline -ForegroundColor $colName
+      }
+      Write-Host ''
+    }
   }
 }
-function Show-Comet([int]$width = 56) {
+function Show-Comet([int]$width = 60) {
   if (-not $script:VT -or $Plain) { return }
   $tch = [string][char]0x00BB
   for ($p = 3; $p -lt ($width + 10); $p++) {
@@ -154,105 +211,61 @@ function Show-Comet([int]$width = 56) {
     for ($k = [Math]::Max(0, $p - 8); $k -lt $p; $k++) {
       $a = ($k - ($p - 8)) / 8.0; if ($a -lt 0) { $a = 0 }
       $r = [int](255 * $a); $g = [int](205 * $a); $b = [int](95 * $a)
-      $trail += "${E}[38;2;$r;$g;${b}m" + $tch
+      $trail += ("{0}[38;2;{1};{2};{3}m" -f $E, $r, $g, $b) + $tch
     }
-    $head = "${E}[38;2;255;255;255m" + $S.arr + "${E}[0m"
-    Write-Host ("`r    " + $pre + $trail + $head + "   ") -NoNewline
+    $head = "$E[38;2;255;255;255m" + $S.arr + "$E[0m"
+    Write-Host ("`r   " + $pre + $trail + $head + "   ") -NoNewline
     Start-Sleep -Milliseconds 26
   }
-  Write-Host ("`r" + (' ' * 80) + "`r") -NoNewline
+  Write-Host ("`r" + (' ' * 90) + "`r") -NoNewline
   Write-Host ''
 }
 function Show-Banner {
-  $art = Get-Art
-  $dy = 1; $dx = 2
-  $rows = $art.Count
-  $w = 0; foreach ($l in $art) { if ($l.Length -gt $w) { $w = $l.Length } }
-  $H = $rows + $dy; $W = $w + $dx
-  $row16 = @('DarkMagenta','Magenta','DarkCyan','DarkCyan','Cyan','Cyan','DarkGray')
-  if ($Plain) {
-    foreach ($l in $art) { Write-Host ('    ' + $l) -ForegroundColor DarkCyan }
-    Write-Host '      A D C S   S I M U L A T O R' -ForegroundColor DarkCyan
-    return
-  }
-  if (-not $Plain) { Show-Starfield }
-  for ($i = 0; $i -lt $H; $i++) {
-    if ($script:VT) {
-      $s = ''
-      for ($j = 0; $j -lt $W; $j++) {
-        $c = Get-BannerCell $art $i $j $rows $dy $dx
-        if ($c[1] -eq 2) { $s += ' ' }
-        elseif ($c[1] -eq 0) {
-          $f = $i / [Math]::Max(1, ($H - 1))
-          $r = [int](120 + (0 - 120) * $f); $g = [int](40 + (235 - 40) * $f); $b = [int](235 + (255 - 235) * $f)
-          $hf = 1.06 - 0.20 * ($j / [Math]::Max(1, $W - 1))
-          $r = [Math]::Min(255, [int]($r * $hf)); $g = [Math]::Min(255, [int]($g * $hf)); $b = [Math]::Min(255, [int]($b * $hf))
-          $s += "${E}[38;2;$r;$g;${b}m" + $c[0]
-        } else {
-          $r = 40 + 6 * $i; $g = 40 + 6 * $i; $b = 64 + 10 * $i
-          $s += "${E}[38;2;$r;$g;${b}m" + $c[0]
-        }
-      }
-      Write-Host ('    ' + $s + "${E}[0m")
-    } else {
-      Write-Host '    ' -NoNewline
-      $runs = @(); $cur = ''; $curT = -1
-      for ($j = 0; $j -lt $W; $j++) {
-        $c = Get-BannerCell $art $i $j $rows $dy $dx
-        if ($c[1] -ne $curT) { if ($cur -ne '') { $runs += ,@($cur, $curT) }; $cur = ''; $curT = $c[1] }
-        $cur += $c[0]
-      }
-      if ($cur -ne '') { $runs += ,@($cur, $curT) }
-      foreach ($run in $runs) {
-        if ($run[1] -eq 0)      { $col = $row16[[Math]::Min($i, $row16.Count - 1)] }
-        elseif ($run[1] -eq 1)  { $col = 'DarkGray' }
-        else                     { $col = 'Black' }
-        Write-Host $run[0] -NoNewline -ForegroundColor $col
-      }
-      Write-Host ''
-    }
-  }
+  try { Clear-Host } catch {}
+  Show-Saturn
   $sub = 'A D C S   S I M U L A T O R'
-  if ($script:VT) {
+  if ($script:VT -and -not $Plain) {
     $line = ''
     for ($j = 0; $j -lt $sub.Length; $j++) {
       $f = $j / ($sub.Length - 1)
-      $r = [int](0 + 190 * $f); $g = [int](170 + 80 * $f); $b = 255
-      $line += "${E}[38;2;$r;$g;${b}m" + $sub[$j]
+      $r = [int](0 + (190 * $f)); $g = [int](170 + (80 * $f)); $b = 255
+      $line += ("{0}[38;2;{1};{2};{3}m" -f $E, $r, $g, $b) + $sub.Substring($j, 1)
     }
-    Write-Host ('      ' + $line + "${E}[0m")
-    Write-Host '    ' -NoNewline
-    for ($i2 = 0; $i2 -le 56; $i2++) {
-      $f = $i2 / 56
-      $r = [int](120 * (1 - $f)); $g = [int](120 + 115 * $f); $b = 255
-      Write-Host ("${E}[38;2;$r;$g;${b}m" + $S.blk) -NoNewline
+    Write-Host ('      ' + $line + "$E[0m")
+    Write-Host '   ' -NoNewline
+    for ($i2 = 0; $i2 -le 60; $i2++) {
+      $f = $i2 / 60
+      $r = [int](120 * (1 - $f)); $g = [int](120 + (115 * $f)); $b = 255
+      Write-Host ("$E[38;2;$r;$g;${b}m" + $S.blk) -NoNewline
       Start-Sleep -Milliseconds 6
     }
-    Write-Host "${E}[0m"
-  } else {
+    Write-Host "$E[0m"
+  }
+  else {
     Write-Host ('      ' + $sub) -ForegroundColor Cyan
-    Write-Host ('    ' + ($S.blk * 57)) -ForegroundColor Cyan
+    Write-Host ('   ' + ($S.blk * 61)) -ForegroundColor Cyan
   }
   Show-Comet
 }
 
 # ---------------------------- bar kit --------------------------------------
 function Bar-Str([int]$n, [int]$w) {
-  if ($script:VT) {
+  if ($script:VT -and -not $Plain) {
     $s = ''
     for ($x = 0; $x -lt $w; $x++) {
       if ($x -lt $n) {
         $f = $x / [Math]::Max(1, $w - 1)
-        $r = [int](30 + 200 * $f); $g = [int](90 + 140 * $f); $b = 255
-        $s += "${E}[38;2;$r;$g;${b}m" + $S.blk
-      } else { $s += "${E}[38;2;55;65;85m" + $S.s1 }
+        $r = [int](30 + (200 * $f)); $g = [int](90 + (140 * $f)); $b = 255
+        $s += ("{0}[38;2;{1};{2};{3}m" -f $E, $r, $g, $b) + $S.blk
+      }
+      else { $s += "$E[38;2;55;65;85m" + $S.s1 }
     }
-    return $s + "${E}[0m"
+    return $s + "$E[0m"
   }
   return ($S.blk * $n) + ($S.s1 * ($w - $n))
 }
 function Out-Bar([string]$s) {
-  if ($script:VT) { Write-Host $s -NoNewline }
+  if ($script:VT -and -not $Plain) { Write-Host $s -NoNewline }
   else { Write-Host $s -NoNewline -ForegroundColor Cyan }
 }
 
@@ -261,21 +274,22 @@ function Step2([string]$t) {
   $script:t_stepName = $t
   $script:StepNo++; $script:StepT0 = Get-Date
   try { $host.UI.RawUI.WindowTitle = ("LEAP-2 setup - step {0}/{1}" -f $StepNo, $StepTotal) } catch {}
-  $w = 58
-  if ($t.Length -gt 45) { $t = $t.Substring(0, 42) + '...' }
+  $w = [Math]::Max(66, $t.Length + 14)
+  if ($t.Length -gt ($w - 10)) { $t = $t.Substring(0, $w - 13) + '...' }
   Write-Host ''
-  P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan
+  Box-Top $w
   Write-Host ("  {0} " -f $S.dv) -NoNewline -ForegroundColor Cyan
-  Write-Host ("STEP {0}/{1}" -f $StepNo, $StepTotal).PadRight(10) -NoNewline -ForegroundColor Magenta
-  Write-Host $t.PadRight(45) -NoNewline -ForegroundColor White
+  Write-Host ('STEP {0}/{1}' -f $StepNo, $StepTotal) -NoNewline -ForegroundColor Magenta
+  Write-Host '  ' -NoNewline
+  Write-Host $t.PadRight($w - 10) -NoNewline -ForegroundColor White
   Write-Host (" {0}" -f $S.dv) -ForegroundColor Cyan
-  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan
+  Box-Bot $w
   Log ("STEP $StepNo/$StepTotal : $t")
 }
 function StepDone([string]$status = 'ok') {
   $el = ((Get-Date) - $script:StepT0).TotalSeconds
   $secs = if ($el -lt 10) { '{0:0.#}' -f $el } else { '{0:0}' -f $el }
-  $bw = 22
+  $bw = 24
   $n = [int][Math]::Round($bw * $script:StepNo / $StepTotal)
   $col = if ($status -eq 'ok') { 'Green' } elseif ($status -eq 'partial') { 'Yellow' } else { 'Red' }
   Write-Host ('   ' + ($S.h * 3) + (' done in {0}s  ' -f $secs)) -NoNewline -ForegroundColor $col
@@ -284,20 +298,18 @@ function StepDone([string]$status = 'ok') {
   [void]$script:Report.Add([pscustomobject]@{ N = $script:StepNo; T = $script:t_stepName; S = $status; Secs = $secs })
 }
 function Show-Report {
-  $w = 62
+  $w = 72
   Write-Host ''
-  P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan
-  $hd = ' RESULTS '
-  $inner = $hd + ($S.d * (60 - $hd.Length))
-  P ("  {0} {1} {2}" -f $S.dv, $inner, $S.dv) Cyan
+  Box-Top $w
+  Box-Row ('RESULTS' + ($S.d * ($w - 7))) $w 'Cyan'
   foreach ($r in $script:Report) {
     $mark = if ($r.S -eq 'ok') { $S.chk } elseif ($r.S -eq 'partial') { '!' } else { $S.crs }
     $col  = if ($r.S -eq 'ok') { 'Green' } elseif ($r.S -eq 'partial') { 'Yellow' } else { 'Red' }
-    $name = [string]$r.T; if ($name.Length -gt 36) { $name = $name.Substring(0, 33) + '...' }
-    $row = ('{0,2}  {1,-36} {2}  {3,7}' -f $r.N, $name, $mark, ($r.Secs + 's'))
-    P ("  {0} {1} {2}" -f $S.dv, $row.PadRight(60), $S.dv) $col
+    $name = [string]$r.T; if ($name.Length -gt 42) { $name = $name.Substring(0, 39) + '...' }
+    $row = ('{0,2}  {1}  {2}  {3,7}' -f $r.N, $name.PadRight(42), $mark, ($r.Secs + 's'))
+    Box-Row $row $w $col
   }
-  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan
+  Box-Bot $w
 }
 
 # --------------------------- core helpers ----------------------------------
@@ -410,9 +422,14 @@ function Get-File([string]$url, [string]$dest) {
   }
   try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; return $true } catch { return $false }
 }
-function Invoke-Animated([string]$exe, [string]$argStr, [string]$label, [int]$timeoutSec = 900) {
+# animated runner: array arguments (safe quoting incl. paths with spaces),
+# spinner + elapsed + ROTATING PHASE MESSAGES + live last output line.
+# Used for pip / npm / long imports so nothing ever looks frozen.
+function Invoke-Animated([string]$exe, [string[]]$argArr, [string]$label,
+                          [string[]]$phases = @('working'), [int]$timeoutSec = 900,
+                          [string]$workDir = $Root) {
   $outF = [IO.Path]::GetTempFileName(); $errF = [IO.Path]::GetTempFileName()
-  $p = Start-Process -FilePath $exe -ArgumentList $argStr -WorkingDirectory $Root -PassThru `
+  $p = Start-Process -FilePath $exe -ArgumentList $argArr -WorkingDirectory $workDir -PassThru `
         -WindowStyle Hidden -RedirectStandardOutput $outF -RedirectStandardError $errF
   $t0 = Get-Date; $f = 0
   while (-not $p.HasExited) {
@@ -422,13 +439,15 @@ function Invoke-Animated([string]$exe, [string]$argStr, [string]$label, [int]$ti
     }
     $el = [int]((Get-Date) - $t0).TotalSeconds
     $ch = $Spin[$f % 4]; $f++
+    $msg = $phases[[int][Math]::Floor($el / 6) % $phases.Count]
     $last = ''
     try { $t = Get-Content $outF -Tail 1 -ErrorAction SilentlyContinue; if ($t) { $last = ([string]$t).Trim() } } catch {}
-    if ($last.Length -gt 34) { $last = $last.Substring(0, 34) }
+    if ($last.Length -gt 32) { $last = $last.Substring(0, 32) }
     if ($Plain) { Start-Sleep -Milliseconds 500; continue }
-    $line = ("    {0} {1} {2,4}s  {3}" -f $ch, $label.PadRight(26), $el, $last).PadRight(84)
+    $line = ("    {0} {1}: {2} ... {3}s  {4}" -f $ch, $label, $msg, $el, $last)
+    $line = $line.PadRight(96)
     Write-Host ("`r" + $line) -NoNewline -ForegroundColor DarkCyan
-    Start-Sleep -Milliseconds 180
+    Start-Sleep -Milliseconds 200
   }
   Clear-Line
   $code = if ($null -ne $p.ExitCode) { $p.ExitCode } else { -1 }
@@ -613,7 +632,6 @@ if __name__ == '__main__':
 }
 
 # ================================ banner =====================================
-try { Clear-Host } catch {}
 try { $host.UI.RawUI.WindowTitle = 'LEAP-2 MBD Simulation - Setup' } catch {}
 '' | Out-File -FilePath $LogFile -Encoding utf8
 Show-Banner
@@ -628,7 +646,7 @@ Write-Host ''
 try {
 
 # ---- Step 1 ------------------------------------------------------------------
-Step2 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'
+Step2 'Pre-flight checks (python / node / orekit-data) + simulator self-sufficiency'
  $py312 = Get-Py312
 if (-not $py312) { Fail "Python 3.12 not found - the ONLY prerequisite. Install python.org 3.12 64-bit WITH 'py launcher' checked, then re-run: https://www.python.org/downloads/release/python-3127/" }
 Ok ("Python 3.12 via: " + $py312.Exe + ' ' + ($py312.Args -join ' '))
@@ -685,11 +703,12 @@ StepDone 'ok'
 Step2 'Python dependencies (pip install -r requirements.txt)'
  $null = Run $VenvPy @('-m','pip','install','--upgrade','pip')
  $req = Join-Path $Root 'requirements.txt'
- $ec  = Run $VenvPy @('-m','pip','install','-r',$req)
-if ($ec -ne 0) {
+ $pipPhases = @('resolving dependency tree', 'downloading wheels', 'unpacking archives', 'installing into .venv', 'finalizing')
+ $r = Invoke-Animated $VenvPy @('-m','pip','install','-r',$req) 'pip install' $pipPhases 1200
+if ($r.Code -ne 0) {
   Warn 'first pip pass failed - retrying once with --no-cache-dir ...'
-  $ec = Run $VenvPy @('-m','pip','install','--no-cache-dir','-r',$req)
-  if ($ec -ne 0) { Fail "pip install failed twice. Open setup.log and search for 'ERROR:'." }
+  $r = Invoke-Animated $VenvPy @('-m','pip','install','--no-cache-dir','-r',$req) 'pip install (retry)' $pipPhases 1200
+  if ($r.Code -ne 0) { Fail ("pip install failed twice. Real error from pip:`n" + $r.Err) }
 }
  $ec = Run $VenvPy @('-c',"import flask,numpy,scipy,yaml,requests,waitress,orekit_jpype,jdk4py; print('py-deps-ok')")
 if ($ec -ne 0) { Fail 'dependency import check failed (flask/numpy/scipy/yaml/requests/waitress/orekit_jpype/jdk4py). See setup.log.' }
@@ -762,21 +781,19 @@ else {
     }
   }
   if ($npmCmd) {
-    Push-Location (Join-Path $Root 'frontend')
-    try {
-      Info 'npm install ...'
-      $ec = Run $npmCmd @('install')
-      if ($ec -ne 0) {
-        Warn 'npm install failed - cleaning node_modules + package-lock and retrying once ...'
-        Remove-Item -Recurse -Force '.\node_modules' -ErrorAction SilentlyContinue
-        Remove-Item -Force '.\package-lock.json' -ErrorAction SilentlyContinue
-        $ec = Run $npmCmd @('install')
-      }
-      Info 'npm run build ...'
-      $ec = Run $npmCmd @('run','build')
-    } finally { Pop-Location }
+    $fwd = Join-Path $Root 'frontend'
+    $npmIPhases = @('resolving packages', 'fetching tarballs', 'building dependency tree', 'linking node_modules')
+    $r = Invoke-Animated $npmCmd @('install') 'npm install' $npmIPhases 1200 $fwd
+    if ($r.Code -ne 0) {
+      Warn 'npm install failed - cleaning node_modules + package-lock and retrying once ...'
+      Remove-Item -Recurse -Force (Join-Path $fwd 'node_modules') -ErrorAction SilentlyContinue
+      Remove-Item -Force (Join-Path $fwd 'package-lock.json') -ErrorAction SilentlyContinue
+      $r = Invoke-Animated $npmCmd @('install') 'npm install (retry)' $npmIPhases 1200 $fwd
+    }
+    $npmBPhases = @('compiling frontend', 'bundling assets', 'optimizing dist')
+    $r = Invoke-Animated $npmCmd @('run','build') 'npm run build' $npmBPhases 900 $fwd
     if (Test-Path $DistIndex) { Ok ("frontend built: " + $DistIndex) }
-    else { $FrontendMissing = $true; $step5status = 'partial'; Warn "npm build did not produce frontend/dist/index.html. Open setup.log, search 'npm ERR!'." }
+    else { $FrontendMissing = $true; $step5status = 'partial'; Warn ("npm build did not produce frontend/dist/index.html. Real error:`n" + $r.Err) }
   }
   elseif ($DistUrl) {
     Warn 'no Node available - fetching prebuilt frontend from -DistUrl ...'
@@ -816,12 +833,18 @@ else {
   if ($ec -ne 0) { Fail 'run_simulator.py failed to compile - if setup patched it, restore run_simulator.py.orig and commit the v2 file by hand. See setup.log.' }
   Ok 'run_simulator.py compiles'
 
-  $r = Invoke-Animated $VenvPy '-c "from engine.orekit_runtime import ensure_initialized; print(''orekit-smoke-ok'')"' 'JVM + orekit-data' 300
+  # smoke tests run from SCRIPT FILES: no argument-quoting can break them,
+  # and failures are classified from the process's REAL stderr.
+  New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+  $env:OREKIT_DATA = $od
+  $smokeOrekit = Join-Path $ToolsDir 'smoke_orekit.py'
+  "from engine.orekit_runtime import ensure_initialized`nprint('orekit-smoke-ok')" | Out-File -FilePath $smokeOrekit -Encoding ascii
+  $r = Invoke-Animated $VenvPy @($smokeOrekit) 'JVM + orekit-data' @('loading modules', 'starting JVM', 'reading orekit-data') 300
   if ($r.Code -ne 0) {
-    $tail = Tail-File $LogFile 25
-    if ($tail -match 'jvm\.dll|JVMNotFound|JAVA_HOME') { Fail "JVM still not found (jdk4py path was $jdkHome). Fixes: 1) new terminal 2) $VenvPy -m pip install --force-reinstall jdk4py orekit-jpype 3) re-run Setup.bat. Log tail:`n$tail" }
-    elseif ($tail -match 'orekit-data|EGM2008|egm2008') { Fail "orekit-data invalid (EGM2008 check failed). Log tail:`n$tail" }
-    else { Fail ("Orekit smoke import failed. Tail of setup.log:`n" + $tail) }
+    $err = ($r.Err + ' ' + $r.Out)
+    if ($err -match 'jvm\.dll|JVMNotFound') { Fail ("JVM not found (jdk4py path was $jdkHome). Fixes: 1) new terminal 2) $VenvPy -m pip install --force-reinstall jdk4py orekit-jpype 3) re-run Setup.bat. Real error:`n" + $err.Trim()) }
+    elseif ($err -match 'orekit-data|EGM2008|egm2008') { Fail ("orekit-data invalid (EGM2008 check failed). Re-extract orekit-data/. Real error:`n" + $err.Trim()) }
+    else { Fail ("Orekit smoke import failed. Real error:`n" + $err.Trim()) }
   }
   Ok 'JVM + orekit-data load cleanly'
 
@@ -830,17 +853,17 @@ else {
   Ok 'viewer imports cleanly (no JVM needed)'
 
   Info 'warm-up: importing the FULL physics chain once (this also speeds up later boots) ...'
-  $r = Invoke-Animated $VenvPy ('-c "import time; t=time.time(); import satellite_flight_visualisation; print(''physics-import-ok %.1fs'' % (time.time()-t))"') 'importing physics stack' 900
+  $warmupPy = Join-Path $ToolsDir 'warmup.py'
+  "import time`nt = time.time()`nimport satellite_flight_visualisation`nprint('physics-import-ok %.1fs' % (time.time() - t))" | Out-File -FilePath $warmupPy -Encoding ascii
+  $r = Invoke-Animated $VenvPy @($warmupPy) 'importing physics stack' @('importing scipy / orekit / astropy', 'starting JVM + loading ephemerides', 'compiling bytecode caches', 'warming physics chain') 900
   if ($r.Code -ne 0) {
     $WarmOk = $false
-    $tail = Tail-File $LogFile 20
-    Warn ("full physics-chain import did not complete:`n" + $tail)
+    Warn ("full physics-chain import did not complete. Real error:`n" + ($r.Err + ' ' + $r.Out).Trim())
     Warn 'the live-boot step below will surface the real error and auto-fallback if needed.'
   } else {
     $m = ''
     try { $m = ([regex]::Match($r.Out, 'physics-import-ok ([0-9.]+)s')).Groups[1].Value } catch {}
     $secs = if ($m) { [double]$m } else { 0 }
-    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
     "$([int][Math]::Ceiling($secs))" | Out-File -FilePath (Join-Path $ToolsDir 'import-time.txt') -Encoding ascii
     Ok ("full physics chain imports cleanly (~{0:0}s; later boots are faster)" -f $secs)
   }
@@ -858,7 +881,7 @@ Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
 Ok ("sim process started hidden (pid " + $simProc.Id + "); output -> sim-boot.out.log / sim-boot.err.log")
  $up = $false; $partial = $false; $sawCode = ''; $bootStart = Get-Date; $f = 0
  $deadline = $bootStart.AddSeconds($BootTimeoutSec)
- $barW = 24
+ $barW = 26
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 400
   if ($simProc.HasExited) {
@@ -898,10 +921,9 @@ while ((Get-Date) -lt $deadline) {
       default     { ("server up (HTTP " + $code + ") ...") }
     }
     if ($Plain) { Start-Sleep -Milliseconds 500; continue }
-    if ($script:VT) { Write-Host ("`r    {0} " -f $sp) -NoNewline -ForegroundColor DarkCyan }
-    else { Write-Host ("`r    {0} " -f $sp) -NoNewline -ForegroundColor DarkCyan }
+    Write-Host ("`r    {0} " -f $sp) -NoNewline -ForegroundColor DarkCyan
     Out-Bar (Bar-Str $n $barW)
-    Write-Host (" {0,3}s/{1}s  {2}" -f $el, $BootTimeoutSec, $st.PadRight(28)) -NoNewline -ForegroundColor DarkCyan
+    Write-Host (" {0,3}s/{1}s  {2}" -f $el, $BootTimeoutSec, $st.PadRight(30)) -NoNewline -ForegroundColor DarkCyan
     Start-Sleep -Milliseconds 250
   }
 }
@@ -946,20 +968,16 @@ if ($up) {
   Info 're-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)'
 }
 Write-Host ''
- $HW = 58
-P ("  {0}{1}{2}" -f $S.tl, ($S.d * $HW), $S.tr) Cyan
- $hdr = ' HOW EVERYONE RUNS THE SIM (VS Code) '
-P ("  {0} {1}{2}{3} {4}" -f $S.v, $S.d, $hdr, ($S.d * ($HW - 2 - $hdr.Length)), $S.v) Cyan
- $how = @(
-  @('1.', 'VS Code  >  File  >  Open Folder  >  this folder', 'White'),
-  @('2.', 'open a NEW terminal (Ctrl+`) - the .venv activates itself', 'White'),
-  @('3.', 'python run_simulator.py', 'Yellow'),
-  @('4.', 'open http://127.0.0.1:5000     (Ctrl+C in the terminal stops it)', 'Gray')
-)
-foreach ($l in $how) { P ("  {0} {1} {2,-54} {3}" -f $S.v, $l[0], $l[1], $S.v) $l[2] }
-P ("  {0} {1,-56} {2}" -f $S.v, 'one instance at a time - a 2nd start prints a friendly message', $S.v) DarkCyan
-P ("  {0} {1,-56} {2}" -f $S.v, 'viewer-only, no Java:  python app.py', $S.v) DarkCyan
-P ("  {0}{1}{2}" -f $S.bl, ($S.d * $HW), $S.br) Cyan
+ $HW = 70
+Box-Top $HW
+Box-Row ('HOW EVERYONE RUNS THE SIM (VS Code)' + ($S.d * ($HW - 35))) $HW 'Cyan'
+Box-Row '1.  VS Code  >  File  >  Open Folder  >  this folder' $HW 'White'
+Box-Row '2.  open a NEW terminal (Ctrl+`) - the .venv activates itself' $HW 'White'
+Box-Row '3.  python run_simulator.py' $HW 'Yellow'
+Box-Row '4.  open http://127.0.0.1:5000     (Ctrl+C in the terminal stops it)' $HW 'Gray'
+Box-Row 'one instance at a time - a 2nd start prints a friendly message' $HW 'DarkCyan'
+Box-Row 'viewer-only, no Java:  python app.py' $HW 'DarkCyan'
+Box-Bot $HW
 Write-Host ''
 Info ("full log: " + $LogFile + "   boot log: " + $BootOut + " / " + $BootErr)
 
@@ -974,11 +992,11 @@ Info ("full log: " + $LogFile + "   boot log: " + $BootOut + " / " + $BootErr)
   Write-Host ''
   Write-Host ('    SETUP FAILED  -  read the [FAIL] line above for the exact fix  ') -ForegroundColor White -BackgroundColor DarkRed
   Log ("SETUP FAILED: " + $_.Exception.Message)
-  $w = 62
-  P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Red
-  foreach ($l in (Wrap54 $_.Exception.Message)) { P ("  {0} {1,-58} {2}" -f $S.v, $l, $S.v) Yellow }
-  P ("  {0} {1,-58} {2}" -f $S.v, ('details in: ' + $LogFile), $S.v) Gray
-  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Red
+  $w = 66
+  Box-Top $w
+  foreach ($l in (Wrap58 $_.Exception.Message)) { Box-Row $l $w 'Yellow' }
+  Box-Row ('details in: ' + $LogFile) $w 'Gray'
+  Box-Bot $w
   Write-Host ''
   exit 1
 }
