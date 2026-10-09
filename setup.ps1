@@ -1,17 +1,11 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v8)
+#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v9, pretty UI)
 #  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
-#
-#  v8 vs v7 - per user request:
-#   * NO separate launcher files (no Run-Sim.bat / run-sim.ps1 / opener)
-#   * NO auto-launch at the end. Setup downloads, builds, verifies (HTTP 200),
-#     then STOPS everything and leaves the machine clean for VS Code.
-#   * Setup always stops any running sim first (safe to re-run anytime).
-#   * run_simulator.py patched/upgraded to shield v2: friendly "already
-#     running" guard (no more WinError 10048 tracebacks on double-runs).
-#  Kept from v7: bulletproof .venv teardown (kill only venv processes, cmd
-#  rmdir with retries), orekit-data auto-download, portable-Node auto-fetch,
-#  proxy-immune 000/503/200 boot probe, boot-log capture + diagnosis.
+#  v9 = v8 logic + presentation layer: framed banners, colors, spinners,
+#       animated boot progress bar, curl download progress, per-step timing,
+#       end-of-run report card, boxed failure screen.
+#  File stays pure ASCII (all symbols built from code points at runtime),
+#  so saving/committing it in ANY encoding cannot corrupt the display.
 # ============================================================================
 param(
   [switch]$ReuseVenv,
@@ -20,6 +14,7 @@ param(
   [switch]$NoSmoke,
   [switch]$InstallNode,
   [switch]$NoPatchRunSim,
+  [switch]$Plain,
   [int]$BootTimeoutSec = 300,
   [string]$NodeVersion = '22.14.0',
   [string]$DistUrl = ''
@@ -37,23 +32,81 @@ Set-Location $Root
  $BootErr    = Join-Path $Root 'sim-boot.err.log'
  $ToolsDir   = Join-Path $Root 'tools'
  $PortableNodeDir = Join-Path $ToolsDir 'node'
- $StepTotal  = 8; $StepNo = 0
- $FrontendMissing = $false
+ $StepTotal  = 8; $StepNo = 0; $StepT0 = Get-Date; $T_Start = Get-Date
+ $FrontendMissing = $false; $WarmOk = $true
+ $script:Report = New-Object System.Collections.ArrayList
+ $script:SpinIdx = 0
 
-function Log([string]$m)  { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
-function Say([string]$m, [string]$c = 'Gray') { Write-Host $m -ForegroundColor $c; Log $m }
-function Ok([string]$m)   { Say "  [OK] $m" Green }
-function Warn([string]$m) { Say "  [!!] $m" Yellow }
-function Fail([string]$m) { Say "  [FAIL] $m" Red; throw $m }
-function Step([string]$t) {
-  $script:StepNo++
-  Write-Host ''
-  Write-Host "===== [$($script:StepNo)/$StepTotal] $t =====" -ForegroundColor Cyan
-  Log "STEP $($script:StepNo)/$StepTotal : $t"
+# ---------------------------- pretty-console kit ----------------------------
+ $S = @{
+  h    = [char]0x2500 ; d  = [char]0x2550 ; v  = [char]0x2502 ; dv = [char]0x2551
+  tl   = [char]0x2554 ; tr = [char]0x2557 ; bl = [char]0x255A ; br = [char]0x255D
+  blk  = [char]0x2588 ; s1 = [char]0x2591 ; s2 = [char]0x2592
+  arr  = [char]0x25BA ; chk = [char]0x221A ; crs = [char]0x00D7
 }
+ $Spin = @('|','/','-','\')
+
+function P([string]$t, [string]$c = 'Gray') { if ($Plain) { $c = 'Gray' }; Write-Host $t -ForegroundColor $c }
+function Log([string]$m) { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
+function Info([string]$m) { P ("    {0} {1}" -f $S.arr, $m) DarkCyan; Log ("  >> " + $m) }
+function Ok([string]$m)   { P ("    {0} {1}" -f $S.chk, $m) Green;    Log ("  OK: " + $m) }
+function Warn([string]$m) { P ("    ! {1}" -f $S.arr, $m) Yellow;    Log ("  WARN: " + $m) }
+function Fail([string]$m) { P ("    {0} {1}" -f $S.crs, $m) Red;      Log ("  FAIL: " + $m); throw $m }
+function Clear-Line() { Write-Host ("`r" + (' ' * 90) + "`r") -NoNewline }
+function Wrap54([string]$m) {
+  $out = @()
+  foreach ($ln in ($m -split "`r?`n")) {
+    $cur = ''
+    foreach ($word in ($ln -split ' ')) {
+      if (($cur + ' ' + $word).Trim().Length -gt 54) { if ($cur) { $out += $cur }; $cur = $word }
+      else { if ($cur) { $cur += ' ' + $word } else { $cur = $word } }
+    }
+    if ($cur) { $out += $cur }
+  }
+  return $out
+}
+function Step([string]$t) {
+  $script:StepNo++; $script:StepT0 = Get-Date
+  try { $host.UI.RawUI.WindowTitle = "LEAP-2 setup - step $StepNo/$StepTotal" } catch {}
+  $w = 58
+  $title = ("STEP {0}/{1}   {2}" -f $StepNo, $StepTotal, $t)
+  Write-Host ''
+  P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan
+  P ("  {0} {1} {2}" -f $S.dv, $title.PadRight($w), $S.dv) Cyan
+  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan
+  Log ("STEP $StepNo/$StepTotal : $t")
+}
+function StepDone([string]$status = 'ok') {
+  $el = ((Get-Date) - $script:StepT0).TotalSeconds
+  $secs = if ($el -lt 10) { '{0:0.#}' -f $el } else { '{0:0}' -f $el }
+  $bw = 22
+  $n = [int][Math]::Round($bw * $StepNo / $StepTotal)
+  $bar = ($S.blk * $n) + ($S.s1 * ($bw - $n))
+  $col = if ($status -eq 'ok') { 'Green' } elseif ($status -eq 'partial') { 'Yellow' } else { 'Red' }
+  P ("  {0}{0}{0} done in {1}s   {2}  {3}/{4}" -f $S.h, $secs, $bar, $StepNo, $StepTotal) $col
+  [void]$script:Report.Add([pscustomobject]@{ N = $StepNo; T = $t_stepName; S = $status; Secs = $secs })
+}
+ $script:t_stepName = ''
+function Step2([string]$t) { $script:t_stepName = $t; Step $t }   # named wrapper so StepDone can report
+function Show-Report() {
+  $w = 62
+  Write-Host ''
+  P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan
+  $hd = ' RESULTS '
+  P ("  {0} {1}{2}{3} {4}" -f $S.v, $S.d, $hd, ($S.d * ($w - 2 - $hd.Length)), $S.v) Cyan
+  foreach ($r in $script:Report) {
+    $mark = if ($r.S -eq 'ok') { $S.chk } elseif ($r.S -eq 'partial') { '!' } else { $S.crs }
+    $col = if ($r.S -eq 'ok') { 'Green' } elseif ($r.S -eq 'partial') { 'Yellow' } else { 'Red' }
+    $name = $r.T; if ($name.Length -gt 40) { $name = $name.Substring(0, 40) }
+    P ("  {0} {1,-2} {2,-40} {3} {4,6}s {5}" -f $S.v, $r.N, $name, $mark, $r.Secs, $S.v) $col
+  }
+  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan
+}
+
+# --------------------------- core helpers (v8) -------------------------------
 function Run([string]$exe, [string[]]$argList) {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  try { & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; Write-Host "  $ln" -ForegroundColor DarkGray; Log "  $ln" } }
+  try { & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; P ("    $ln") DarkGray; Log ("  " + $ln) } }
   finally { $ErrorActionPreference = $prev }
   return $LASTEXITCODE
 }
@@ -112,12 +165,8 @@ function Tail-File([string]$path, [int]$n = 20) {
 function Refresh-PathFromMachine {
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
 }
-
-# ---------- stop everything that runs from inside .venv --------------------
-# Kills ONLY: processes whose executable lives inside .venv, leftover
-# run-sim/Run-Sim wrappers from older setups, and the port-5000 owner.
 function Stop-VenvProcesses([string]$venvDir) {
-  Say '  stopping any running sim + processes from inside .venv ...' DarkCyan
+  Info 'stopping any running sim + processes from inside .venv ...'
   try {
     $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
       ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($venvDir, [StringComparison]::OrdinalIgnoreCase)) -or
@@ -125,16 +174,15 @@ function Stop-VenvProcesses([string]$venvDir) {
     }
     foreach ($p in $procs) {
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-      Log "  stopped pid $($p.ProcessId): $(if ($p.ExecutablePath) { $p.ExecutablePath } else { $p.CommandLine })"
+      Log ("  stopped pid $($p.ProcessId): " + $(if ($p.ExecutablePath) { $p.ExecutablePath } else { $p.CommandLine }))
     }
-  } catch { Log "  process scan failed: $($_.Exception.Message)" }
+  } catch { Log ("  process scan failed: " + $_.Exception.Message) }
   try {
     Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction Stop |
-      ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue; Log "  stopped port-5000 owner pid $($_.OwningProcess)" }
+      ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue; Log ("  stopped port-5000 owner pid " + $_.OwningProcess) }
   } catch {}
   Start-Sleep -Seconds 2
 }
-# cmd rmdir /s /q: immune to the PowerShell "directory is not empty" race.
 function Remove-Tree([string]$path) {
   if (-not (Test-Path -LiteralPath $path)) { return $true }
   for ($i = 1; $i -le 4; $i++) {
@@ -153,10 +201,50 @@ function Remove-Tree([string]$path) {
   } catch {}
   return (-not (Test-Path -LiteralPath $path))
 }
+# download with a REAL progress bar: curl.exe's own (falls back to IWR)
+function Get-File([string]$url, [string]$dest) {
+  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+    & curl.exe -L --fail --retry 2 --connect-timeout 20 --progress-bar -o "$dest" "$url"
+    return ($LASTEXITCODE -eq 0)
+  }
+  try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; return $true } catch { return $false }
+}
+# run a long silent command with a live spinner + elapsed timer
+function Invoke-Animated([string]$exe, [string]$argStr, [string]$label, [int]$timeoutSec = 900) {
+  $outF = [IO.Path]::GetTempFileName(); $errF = [IO.Path]::GetTempFileName()
+  $p = Start-Process -FilePath $exe -ArgumentList $argStr -WorkingDirectory $Root -PassThru `
+        -WindowStyle Hidden -RedirectStandardOutput $outF -RedirectStandardError $errF
+  $t0 = Get-Date; $f = 0
+  while (-not $p.HasExited) {
+    if (((Get-Date) - $t0).TotalSeconds -gt $timeoutSec) {
+      try { Stop-Process -Id $p.Id -Force } catch {}
+      Clear-Line; Warn "timeout after ${timeoutSec}s: $label"; break
+    }
+    $el = [int]((Get-Date) - $t0).TotalSeconds
+    $ch = $Spin[$f % 4]; $f++
+    $last = ''
+    try { $t = Get-Content $outF -Tail 1 -ErrorAction SilentlyContinue; if ($t) { $last = ([string]$t).Trim() } } catch {}
+    if ($last.Length -gt 34) { $last = $last.Substring(0, 34) }
+    if ($Plain) { Start-Sleep -Milliseconds 500; continue }
+    $line = ("    {0} {1} {2,4}s  {3}" -f $ch, $label.PadRight(26), $el, $last).PadRight(84)
+    Write-Host ("`r" + $line) -NoNewline -ForegroundColor DarkCyan
+    Start-Sleep -Milliseconds 180
+  }
+  Clear-Line
+  $code = if ($null -ne $p.ExitCode) { $p.ExitCode } else { -1 }
+  $out = ''; $err = ''
+  try { $out = [IO.File]::ReadAllText($outF) } catch {}
+  try { $err = [IO.File]::ReadAllText($errF) } catch {}
+  Log ("  animated-run [$label] exit=$code")
+  if ($out) { Log ($out.Trim()) }
+  if ($err) { Log ("  stderr: " + $err.Trim()) }
+  Remove-Item $outF, $errF -Force -ErrorAction SilentlyContinue
+  return @{ Code = $code; Out = $out; Err = $err }
+}
 
 function Install-NodeViaWinget {
   if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Warn 'winget not available on this machine.'; return $false }
-  Say '  winget install OpenJS.NodeJS.LTS (system-wide, may ask for elevation) ...' DarkCyan
+  Info 'winget install OpenJS.NodeJS.LTS (system-wide, may ask for elevation) ...'
   $null = Run winget @('install','-e','--id','OpenJS.NodeJS.LTS','--accept-source-agreements','--accept-package-agreements','--silent')
   Refresh-PathFromMachine
   if (Test-Npm) { Ok 'Node.js installed via winget and visible now'; return $true }
@@ -170,11 +258,10 @@ function Install-PortableNode([string]$Version) {
   $zipUrl  = "https://nodejs.org/dist/v$Version/node-v$Version-win-x64.zip"
   $zipPath = Join-Path $ToolsDir "node-v$Version-win-x64.zip"
   New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-  Say "  downloading portable Node $Version (~30 MB, one-time; cached in tools\node) ..." DarkCyan
-  Log "  url: $zipUrl"
-  try { Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing }
-  catch { Warn "download failed: $($_.Exception.Message) (no internet, or nodejs.org blocked by proxy/IT)"; return $false }
-  Say '  extracting ...' DarkCyan
+  Info "downloading portable Node $Version (~30 MB, one-time; cached in tools\node) ..."
+  Log ("  url: " + $zipUrl)
+  if (-not (Get-File $zipUrl $zipPath)) { Warn "download failed (no internet, or nodejs.org blocked by proxy/IT)"; return $false }
+  Info 'extracting ...'
   $tmp = Join-Path $ToolsDir 'node-extract'
   if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
   Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
@@ -187,7 +274,7 @@ function Install-PortableNode([string]$Version) {
   if (-not (Test-PortableNode)) { Warn 'portable Node extraction incomplete.'; return $false }
   Get-ChildItem $PortableNodeDir -Recurse -File | ForEach-Object { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue }
   $nv = (& (Join-Path $PortableNodeDir 'node.exe') --version) 2>&1 | Out-String
-  Ok "portable Node ready: $PortableNodeDir ($($nv.Trim())) - nothing installed system-wide"
+  Ok "portable Node ready: tools\node ($($nv.Trim())) - nothing installed system-wide"
   return $true
 }
 function Install-OrekitData {
@@ -195,10 +282,10 @@ function Install-OrekitData {
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
   New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
   $zip = Join-Path $ToolsDir 'orekit-data.zip'
-  Say '  downloading orekit-data from Orekit GitLab (one-time, ~100 MB) ...' DarkCyan
-  Log "  url: $url"
-  try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing }
-  catch { Warn "download failed: $($_.Exception.Message)"; return $false }
+  Info 'downloading orekit-data from Orekit GitLab (one-time, ~100 MB) ...'
+  Log ("  url: " + $url)
+  if (-not (Get-File $url $zip)) { Warn 'download failed.'; return $false }
+  Info 'extracting ...'
   $tmp = Join-Path $ToolsDir 'orekit-extract'
   if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
   Expand-Archive -Path $zip -DestinationPath $tmp -Force
@@ -213,7 +300,7 @@ function Install-OrekitData {
   return $true
 }
 
-# --- upgrades run_simulator.py to shield v2 (double-run guard) -------------
+# --- upgrades run_simulator.py to shield v2 (double-run guard) --------------
 function Ensure-RunSimShield {
   $rs = Join-Path $Root 'run_simulator.py'
   if (-not (Test-Path $rs)) { Warn 'run_simulator.py not found - skipping patch step.'; return }
@@ -222,7 +309,7 @@ function Ensure-RunSimShield {
   $known = ($raw -match 'Run physics and the viewer with shared command state') -and
            ($raw -match 'from satellite_flight_visualisation import run_simulation, _telemetry_publisher') -and
            ($raw -match 'run_simulation\(\)')
-  if (-not $known) { Warn 'run_simulator.py not recognized - NOT patching. Commit the shielded v2 file from the README/setup source.'; return }
+  if (-not $known) { Warn 'run_simulator.py not recognized - NOT patching. Commit the shielded v2 file.'; return }
   if ($NoPatchRunSim) { Warn 'run_simulator.py patch skipped via -NoPatchRunSim.'; return }
   if (-not (Test-Path "$rs.orig")) { Copy-Item $rs "$rs.orig" -Force }
   $new = @'
@@ -274,10 +361,8 @@ def main():
     if _already_running():
         print(f'LEAP-2 sim: ALREADY RUNNING in another window '
               f'(port {VIEWER_PORT} answers).', flush=True)
-        print(f'  -> open http://127.0.0.1:{VIEWER_PORT} in your browser, or',
-              flush=True)
-        print('     close the other sim window/terminal and run this again.',
-              flush=True)
+        print(f'  -> open http://127.0.0.1:{VIEWER_PORT} in your browser, or', flush=True)
+        print('     close the other sim window/terminal and run this again.', flush=True)
         raise SystemExit(0)
     print('LEAP-2 sim booting: importing the physics stack (heartbeat below; '
           'can take 1-3 min on corporate laptops). Ctrl+C is ignored until '
@@ -312,12 +397,10 @@ def main():
     try:
         run_simulation()
     except OSError as e:
-        # WinError 10048: another instance already bound the firmware/SITL port
         if getattr(e, 'winerror', None) == 10048 or e.errno in (48, 98, 10048):
             print('\nAnother LEAP-2 sim instance is already running (its port '
                   'is already bound).', flush=True)
-            print('Close the other sim window/terminal and run this again.',
-                  flush=True)
+            print('Close the other sim window/terminal and run this again.', flush=True)
             raise SystemExit(1)
         raise
 
@@ -326,36 +409,55 @@ if __name__ == '__main__':
     main()
 '@
   $new | Out-File -FilePath $rs -Encoding utf8
-  Ok 'run_simulator.py upgraded to shield v2 (backup: run_simulator.py.orig). COMMIT the v2 file once - then this step is a no-op.'
+  Ok 'run_simulator.py upgraded to shield v2 (backup: run_simulator.py.orig). COMMIT the v2 file once.'
 }
 
-# ============================== banner =====================================
+# ================================ banner =====================================
+try { Clear-Host } catch {}
+try { $host.UI.RawUI.WindowTitle = 'LEAP-2 MBD Simulation - Setup' } catch {}
 '' | Out-File -FilePath $LogFile -Encoding utf8
-Write-Host '============================================================' -ForegroundColor Cyan
-Write-Host ' LEAP-2 MBD Simulation : one-click setup (v8)' -ForegroundColor Cyan
-Write-Host " Root : $Root" -ForegroundColor Gray
-Write-Host " Log  : $LogFile" -ForegroundColor Gray
-Write-Host ' Setup ONLY installs + verifies, then stops everything.' -ForegroundColor Gray
-Write-Host ' Running the sim afterwards = VS Code, as usual (see end).' -ForegroundColor Gray
-Write-Host ' Safe to re-run anytime - Setup stops a running sim itself.' -ForegroundColor Gray
-Write-Host '============================================================' -ForegroundColor Cyan
+ $BW = 62
+Write-Host ''
+P ("  {0}{1}{2}" -f $S.tl, ($S.d * $BW), $S.tr) Cyan
+P ("  {0} {1} {2}" -f $S.dv, ''.PadRight($BW), $S.dv) Cyan
+ $t1 = 'L E A P - 2   M B D   S I M U L A T I O N'
+ $t2 = 'one-click setup   v9'
+P ("  {0} {1} {2}" -f $S.dv, $t1.PadRight($BW), $S.dv) White
+P ("  {0} {1} {2}" -f $S.dv, $t2.PadRight($BW), $S.dv) DarkCyan
+P ("  {0} {1} {2}" -f $S.dv, ''.PadRight($BW), $S.dv) Cyan
+if ($Plain) {
+  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $BW), $S.br) Cyan
+} else {
+  Write-Host '  ' -NoNewline
+  for ($i = 0; $i -le $BW; $i++) { Write-Host $S.blk -NoNewline -ForegroundColor Cyan; Start-Sleep -Milliseconds 7 }
+  Write-Host ("`r  {0}{1}{2}" -f $S.bl, ($S.d * $BW), $S.br) -ForegroundColor Cyan
+}
+Write-Host ''
+Info ("project : " + $Root)
+Info ("log     : " + $LogFile)
+Info ('mode    : ' + $(if ($ViewerOnly) { 'VIEWER-ONLY verification' } else { 'FULL SIM setup + verification' }))
+Info ('setup only installs + verifies, then stops - you run the sim from VS Code')
+Write-Host ''
 
-# ====================== Step 1 : pre-flight + shield =======================
-Step 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'
+# ================================ main flow ==================================
+try {
+
+# ---- Step 1 ------------------------------------------------------------------
+Step2 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'
  $py312 = Get-Py312
 if (-not $py312) { Fail "Python 3.12 not found - the ONLY prerequisite. Install python.org 3.12 64-bit WITH 'py launcher' checked, then re-run: https://www.python.org/downloads/release/python-3127/" }
-Ok "Python 3.12 via: $($py312.Exe) $($py312.Args -join ' ')"
+Ok ("Python 3.12 via: " + $py312.Exe + ' ' + ($py312.Args -join ' '))
 
  $npmOk = Test-Npm
 if ($npmOk) { Ok 'node/npm present on PATH' }
 elseif (Test-PortableNode) { Ok 'portable Node already cached (tools\node) - frontend can be built offline' }
-else { Say '  [..] Node not found - Step 5 will fetch a portable copy automatically (needs internet)' DarkCyan }
-if (Test-Path $DistIndex) { Ok "frontend/dist already present ($DistIndex)" }
+else { Info 'Node not found - Step 5 will fetch a portable copy automatically (needs internet)' }
+if (Test-Path $DistIndex) { Ok ("frontend/dist already present (" + $DistIndex + ")") }
 
  $od = Join-Path $Root 'orekit-data'
-if (Test-Path (Join-Path $od 'Potential')) { Ok "orekit-data present ($od)" }
+if (Test-Path (Join-Path $od 'Potential')) { Ok ("orekit-data present (" + $od + ")") }
 else {
-  Say '  orekit-data not in this clone - downloading it ...' DarkCyan
+  Info 'orekit-data not in this clone - downloading it ...'
   if (-not (Install-OrekitData)) {
     Fail "orekit-data missing AND download failed. Manual fix: download https://gitlab.orekit.org/orekit/orekit-data/-/archive/main/orekit-data-main.zip , unzip, rename orekit-data-main -> orekit-data at repo root, re-run Setup.bat -ReuseVenv"
   }
@@ -364,17 +466,18 @@ else {
 }
 
 if ($Root -match '(?i)(Downloads|OneDrive|Dropbox)') {
-  Warn "project sits in a Downloads/OneDrive-synced location ($Root) - synced+scanned folders stall imports and slow file deletion. Recommended: move to C:\Projects\ADCS_Sim and re-run Setup.bat."
+  Warn ("project sits in a Downloads/OneDrive-synced location (" + $Root + ") - synced+scanned folders stall imports and slow file deletion. Recommended: move to C:\Projects\ADCS_Sim and re-run Setup.bat.")
 }
 if (Test-PortFree 5000) { Ok 'port 5000 free' } else { Warn 'port 5000 busy (a sim is running) - Setup stops it automatically in Step 2.' }
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force } catch {}
 Ensure-RunSimShield
+StepDone 'ok'
 
-# ====================== Step 2 : fresh venv ================================
-Step 'Fresh virtual environment (.venv)'
-Stop-VenvProcesses $VenvDir      # always - makes re-runs safe
+# ---- Step 2 ------------------------------------------------------------------
+Step2 'Fresh virtual environment (.venv)'
+Stop-VenvProcesses $VenvDir
 if ((Test-Path $VenvDir) -and (-not $ReuseVenv)) {
-  Log '  removing old .venv ...'
+  Info 'removing old .venv ...'
   if (Remove-Tree $VenvDir) { Ok 'old .venv deleted cleanly' }
   else {
     Fail ("old .venv could not be fully deleted - OneDrive/antivirus/VS Code are holding files inside it. Do this, then re-run Setup.bat:`n" +
@@ -385,15 +488,16 @@ if ((Test-Path $VenvDir) -and (-not $ReuseVenv)) {
   }
 } elseif (Test-Path $VenvDir) { Ok 'reusing existing .venv (-ReuseVenv)' }
 if (-not (Test-Path $VenvPy)) {
-  Log "  creating venv: $($py312.Exe) $($py312.Args -join ' ') -m venv .venv ..."
+  Info ("creating venv: " + $py312.Exe + ' ' + ($py312.Args -join ' ') + ' -m venv .venv ...')
   $null = Run $py312.Exe ($py312.Args + @('-m','venv','.venv'))
   if (-not (Test-Path $VenvPy)) { Fail 'venv creation failed (see setup.log). Usual cause: broken Python install - repair via the python.org installer.' }
 }
-Ok "venv ready: $VenvPy"
+Ok ("venv ready: " + $VenvPy)
  $null = Run $VenvPy @('--version')
+StepDone 'ok'
 
-# ====================== Step 3 : python deps ===============================
-Step 'Python dependencies (pip install -r requirements.txt)'
+# ---- Step 3 ------------------------------------------------------------------
+Step2 'Python dependencies (pip install -r requirements.txt)'
  $null = Run $VenvPy @('-m','pip','install','--upgrade','pip')
  $req = Join-Path $Root 'requirements.txt'
  $ec  = Run $VenvPy @('-m','pip','install','-r',$req)
@@ -405,9 +509,10 @@ if ($ec -ne 0) {
  $ec = Run $VenvPy @('-c',"import flask,numpy,scipy,yaml,requests,waitress,orekit_jpype,jdk4py; print('py-deps-ok')")
 if ($ec -ne 0) { Fail 'dependency import check failed (flask/numpy/scipy/yaml/requests/waitress/orekit_jpype/jdk4py). See setup.log.' }
 Ok 'all python deps import cleanly'
+StepDone 'ok'
 
-# ============ Step 4 : Java 21 via jdk4py (JVM path fix) ===================
-Step 'Java 21 via jdk4py (fixes "No JVM shared library file (jvm.dll) found")'
+# ---- Step 4 ------------------------------------------------------------------
+Step2 'Java 21 via jdk4py (fixes "No JVM shared library file (jvm.dll) found")'
  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
  $jdkHome = (& $VenvPy -c "import jdk4py; print(jdk4py.JAVA_HOME)" 2>&1 | Out-String).Trim()
  $ErrorActionPreference = $prev
@@ -417,8 +522,8 @@ if (-not $jdkHome -or -not (Test-Path $jdkHome)) { Fail "jdk4py did not return a
 if (-not (Test-Path (Join-Path $jdkHome 'bin\server\jvm.dll'))) { Fail "jvm.dll not found under $jdkHome\bin\server - jdk4py install is corrupt. Re-run Setup.bat (fresh venv)." }
  $env:Path = "$jdkHome\bin;$env:Path"
  $env:JAVA_HOME = $jdkHome
-Log "  JAVA_HOME=$env:JAVA_HOME"
-Ok "jvm.dll present: $jdkHome\bin\server\jvm.dll (run_simulator.py sets this itself too - no terminal setup needed)"
+Log ("  JAVA_HOME=" + $env:JAVA_HOME)
+Ok ("jvm.dll present: " + $jdkHome + "\bin\server\jvm.dll (run_simulator.py sets this itself too - no terminal setup needed)")
 
  $vsDir = Join-Path $Root '.vscode'; New-Item -ItemType Directory -Force -Path $vsDir | Out-Null
  $settingsPath = Join-Path $vsDir 'settings.json'
@@ -445,19 +550,21 @@ Ok 'VS Code pinned: opening a terminal there auto-activates this .venv'
  $want = @('tools/','setup.log','sim-boot.*.log','sim-run.log','.env','run_simulator.py.orig')
  $cur = if (Test-Path $gi) { Get-Content $gi } else { @() }
  $add = $want | Where-Object { $cur -notcontains $_ }
-if ($add) { Add-Content -Path $gi -Value ''; Add-Content -Path $gi -Value '# auto-added by setup.ps1'; $add | ForEach-Object { Add-Content -Path $gi -Value $_ }; Ok ".gitignore updated (added: $($add -join ', '))" }
+if ($add) { Add-Content -Path $gi -Value ''; Add-Content -Path $gi -Value '# auto-added by setup.ps1'; $add | ForEach-Object { Add-Content -Path $gi -Value $_ }; Ok (".gitignore updated (added: " + ($add -join ', ') + ")") }
+StepDone 'ok'
 
-# ============ Step 5 : frontend (self-provisioning Node) ===================
-Step 'Frontend build (auto-gets Node if missing -> frontend/dist/index.html)'
-if ($SkipFrontend) { Warn 'skipped via -SkipFrontend (viewer will 503 until you build).' }
-elseif (Test-Path $DistIndex) { Ok "dist already present: $DistIndex" }
+# ---- Step 5 ------------------------------------------------------------------
+Step2 'Frontend build (auto-gets Node if missing -> frontend/dist/index.html)'
+ $step5status = 'ok'
+if ($SkipFrontend) { Warn 'skipped via -SkipFrontend (viewer will 503 until you build).'; $step5status = 'partial' }
+elseif (Test-Path $DistIndex) { Ok ("dist already present: " + $DistIndex) }
 else {
   $npmCmd = $null
   if (Test-Npm) { $npmCmd = 'npm.cmd'; Ok 'using system npm' }
   elseif (Test-PortableNode) {
     $env:Path = "$PortableNodeDir;$env:Path"
     $npmCmd = Join-Path $PortableNodeDir 'npm.cmd'
-    Ok "using cached portable Node: $PortableNodeDir (no download needed)"
+    Ok ("using cached portable Node: " + $PortableNodeDir + " (no download needed)")
   }
   if (-not $npmCmd -and $InstallNode) { if (Install-NodeViaWinget) { $npmCmd = 'npm.cmd' } }
   if (-not $npmCmd) {
@@ -472,7 +579,7 @@ else {
   if ($npmCmd) {
     Push-Location (Join-Path $Root 'frontend')
     try {
-      Say '  npm install ...' DarkCyan
+      Info 'npm install ...'
       $ec = Run $npmCmd @('install')
       if ($ec -ne 0) {
         Warn 'npm install failed - cleaning node_modules + package-lock and retrying once ...'
@@ -480,19 +587,18 @@ else {
         Remove-Item -Force '.\package-lock.json' -ErrorAction SilentlyContinue
         $ec = Run $npmCmd @('install')
       }
-      Say '  npm run build ...' DarkCyan
+      Info 'npm run build ...'
       $ec = Run $npmCmd @('run','build')
     } finally { Pop-Location }
-    if (Test-Path $DistIndex) { Ok "frontend built: $DistIndex" }
-    else { $FrontendMissing = $true; Warn "npm build did not produce frontend/dist/index.html. Open setup.log, search 'npm ERR!'." }
+    if (Test-Path $DistIndex) { Ok ("frontend built: " + $DistIndex) }
+    else { $FrontendMissing = $true; $step5status = 'partial'; Warn "npm build did not produce frontend/dist/index.html. Open setup.log, search 'npm ERR!'." }
   }
   elseif ($DistUrl) {
-    Warn "no Node available - fetching prebuilt frontend from -DistUrl ..."
+    Warn 'no Node available - fetching prebuilt frontend from -DistUrl ...'
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
     $dz = Join-Path $ToolsDir 'frontend-dist.zip'
-    try { Invoke-WebRequest -Uri $DistUrl -OutFile $dz -UseBasicParsing }
-    catch { $FrontendMissing = $true; Warn "dist download failed: $($_.Exception.Message)" }
+    if (-not (Get-File $DistUrl $dz)) { $FrontendMissing = $true; $step5status = 'partial'; Warn 'dist download failed.' }
     if (-not $FrontendMissing) {
       $tmp = Join-Path $ToolsDir 'dist-extract'
       if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
@@ -506,30 +612,31 @@ else {
         New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
         Move-Item $src $dest
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-        Ok "prebuilt frontend installed: $DistIndex"
-      } else { $FrontendMissing = $true; Warn 'the -DistUrl zip did not contain dist/index.html at its root.' }
+        Ok ("prebuilt frontend installed: " + $DistIndex)
+      } else { $FrontendMissing = $true; $step5status = 'partial'; Warn 'the -DistUrl zip did not contain dist/index.html at its root.' }
     }
   }
   else {
-    $FrontendMissing = $true
+    $FrontendMissing = $true; $step5status = 'partial'
     Warn 'NO Node and NO download path succeeded - frontend cannot be built here (needs internet once, or -DistUrl, or copy frontend\dist).'
   }
 }
+StepDone $step5status
 
-# ====================== Step 6 : smoke test + warm-up =======================
-Step 'Smoke test + timed warm-up (JVM / orekit-data / full physics import)'
+# ---- Step 6 ------------------------------------------------------------------
+Step2 'Smoke test + timed warm-up (JVM / orekit-data / full physics import)'
 if ($NoSmoke) { Warn 'skipped via -NoSmoke (including the warm-up import).' }
 else {
   $ec = Run $VenvPy @('-m','py_compile',(Join-Path $Root 'run_simulator.py'))
   if ($ec -ne 0) { Fail 'run_simulator.py failed to compile - if setup patched it, restore run_simulator.py.orig and commit the v2 file by hand. See setup.log.' }
   Ok 'run_simulator.py compiles'
 
-  $ec = Run $VenvPy @('-c',"from engine.orekit_runtime import ensure_initialized; print('orekit-smoke-ok')")
-  if ($ec -ne 0) {
+  $r = Invoke-Animated $VenvPy '-c "from engine.orekit_runtime import ensure_initialized; print(''orekit-smoke-ok'')"' 'JVM + orekit-data' 300
+  if ($r.Code -ne 0) {
     $tail = Tail-File $LogFile 25
     if ($tail -match 'jvm\.dll|JVMNotFound|JAVA_HOME') { Fail "JVM still not found (jdk4py path was $jdkHome). Fixes: 1) new terminal 2) $VenvPy -m pip install --force-reinstall jdk4py orekit-jpype 3) re-run Setup.bat. Log tail:`n$tail" }
     elseif ($tail -match 'orekit-data|EGM2008|egm2008') { Fail "orekit-data invalid (EGM2008 check failed). Log tail:`n$tail" }
-    else { Fail "Orekit smoke import failed. Tail of setup.log:`n$tail" }
+    else { Fail ("Orekit smoke import failed. Tail of setup.log:`n" + $tail) }
   }
   Ok 'JVM + orekit-data load cleanly'
 
@@ -537,43 +644,47 @@ else {
   if ($ec -ne 0) { Fail 'import app failed (viewer-only, no Java needed) - a python dep is broken. See setup.log.' }
   Ok 'viewer imports cleanly (no JVM needed)'
 
-  Say '  warm-up: importing the FULL physics chain once, with timing ...' DarkCyan
-  $t0 = Get-Date
-  $ec = Run $VenvPy @('-c',"import time; t=time.time(); import satellite_flight_visualisation; print('physics-import-ok %.1fs' % (time.time()-t))")
-  if ($ec -ne 0) {
+  Info 'warm-up: importing the FULL physics chain once (this also speeds up later boots) ...'
+  $r = Invoke-Animated $VenvPy ('-c "import time; t=time.time(); import satellite_flight_visualisation; print(''physics-import-ok %.1fs'' % (time.time()-t))"') 'importing physics stack' 900
+  if ($r.Code -ne 0) {
+    $WarmOk = $false
     $tail = Tail-File $LogFile 20
-    Warn "full physics-chain import did not complete:`n$tail"
+    Warn ("full physics-chain import did not complete:`n" + $tail)
     Warn 'the live-boot step below will surface the real error and auto-fallback if needed.'
   } else {
-    $secs = [int][Math]::Ceiling(((Get-Date) - $t0).TotalSeconds)
+    $m = ''
+    try { $m = ([regex]::Match($r.Out, 'physics-import-ok ([0-9.]+)s')).Groups[1].Value } catch {}
+    $secs = if ($m) { [double]$m } else { 0 }
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    "$secs" | Out-File -FilePath (Join-Path $ToolsDir 'import-time.txt') -Encoding ascii
-    Ok "full physics chain imports cleanly (~$secs s; later boots are faster)"
+    "$([int][Math]::Ceiling($secs))" | Out-File -FilePath (Join-Path $ToolsDir 'import-time.txt') -Encoding ascii
+    Ok ("full physics chain imports cleanly (~{0:0}s; later boots are faster)" -f $secs)
   }
 }
+StepDone $(if ($WarmOk) { 'ok' } else { 'partial' })
 
-# ============ Step 7 : live boot proof (then STOP) ==========================
-Step "Live boot proof (start sim hidden, wait up to ${BootTimeoutSec}s for 200, then stop)"
+# ---- Step 7 ------------------------------------------------------------------
+Step2 ("Live boot proof (start sim hidden, wait up to ${BootTimeoutSec}s for 200, then stop)")
  $targetPath = if ($ViewerOnly) { Join-Path $Root 'app.py' } else { Join-Path $Root 'run_simulator.py' }
  $mode = if ($ViewerOnly) { 'VIEWER-ONLY (app.py, no physics/Java)' } else { 'FULL SIM (run_simulator.py, physics + viewer)' }
-Log "  mode: $mode"
+Info ("mode: " + $mode)
 Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
  $simProc = Start-Process -FilePath $VenvPy -ArgumentList @('-u', "`"$targetPath`"") -WorkingDirectory $Root `
                -PassThru -WindowStyle Hidden -RedirectStandardOutput $BootOut -RedirectStandardError $BootErr
-Ok "sim process started hidden (pid $($simProc.Id)); output -> sim-boot.out.log / sim-boot.err.log"
- $up = $false; $partial = $false; $sawCode = ''; $bootStart = Get-Date
+Ok ("sim process started hidden (pid " + $simProc.Id + "); output -> sim-boot.out.log / sim-boot.err.log")
+ $up = $false; $partial = $false; $sawCode = ''; $bootStart = Get-Date; $f = 0
  $deadline = $bootStart.AddSeconds($BootTimeoutSec)
+ $barW = 24
 while ((Get-Date) -lt $deadline) {
-  Start-Sleep -Seconds 3
-  $elapsed = [int]((Get-Date) - $bootStart).TotalSeconds
+  Start-Sleep -Milliseconds 400
   if ($simProc.HasExited) {
+    Clear-Line
     $code = $simProc.ExitCode
     $tail = Tail-File $BootErr 20; if (-not $tail) { $tail = Tail-File $BootOut 20 }
-    if ($ViewerOnly) { Fail "viewer-only process exited early (code $code). Last output:`n$tail" }
-    Warn "physics process exited early (code $code) - last output:`n$tail"
-    if     ($tail -match 'Address already in use|Only one usage of each socket|10048') { Say '  -> diagnosis: PORT already bound - another sim was running. Setup stops those automatically; re-run Setup.bat.' Yellow }
-    elseif ($tail -match 'jvm\.dll|JVMNotFound|No JVM') { Say '  -> diagnosis: JVM missing. Re-run Setup.bat (reinstalls jdk4py).' Yellow }
-    elseif ($tail -match 'ModuleNotFoundError') { Say '  -> diagnosis: missing python module. Re-run Setup.bat without -ReuseVenv.' Yellow }
+    if ($ViewerOnly) { Fail ("viewer-only process exited early (code $code). Last output:`n$tail") }
+    Warn ("physics process exited early (code " + $code + ") - last output:`n" + $tail)
+    if     ($tail -match 'Address already in use|Only one usage of each socket|10048') { Info 'diagnosis: PORT already bound - another sim was running. Setup stops those automatically; re-run Setup.bat.' }
+    elseif ($tail -match 'jvm\.dll|JVMNotFound|No JVM') { Info 'diagnosis: JVM missing. Re-run Setup.bat (reinstalls jdk4py).' }
+    elseif ($tail -match 'ModuleNotFoundError') { Info 'diagnosis: missing python module. Re-run Setup.bat without -ReuseVenv.' }
     Warn 'auto-fallback: retrying in VIEWER-ONLY mode to at least prove the frontend/server ...'
     $targetPath = Join-Path $Root 'app.py'; $mode = 'VIEWER-ONLY fallback'
     Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
@@ -584,60 +695,105 @@ while ((Get-Date) -lt $deadline) {
   }
   $code = Get-HttpCode 5000
   $sawCode = $code
-  if ($code -eq '200') { $up = $true; break }
+  if ($code -eq '200') { $up = $true; Clear-Line; break }
   if ($code -eq '503') {
     $body = Get-HttpBody 5000
-    if ($FrontendMissing -or ($body -match 'Build the frontend')) { $partial = $true; break }
-    $snip = if ($body) { $body.Substring(0, [Math]::Min(100, $body.Length)) } else { '(empty)' }
-    Say "  [${elapsed}s] HTTP 503 - server is UP but unhappy. Body: $snip" Yellow
-  } elseif ($code -eq 'LISTENING' -and $FrontendMissing) { $partial = $true; break }
-  elseif ($code -eq '000') { Say "  [${elapsed}s] no listener yet (JVM/physics warming up) ..." DarkCyan }
-  else { Say "  [${elapsed}s] HTTP $code - server up ..." DarkCyan }
+    if ($FrontendMissing -or ($body -match 'Build the frontend')) { $partial = $true; Clear-Line; break }
+  }
+  elseif ($code -eq 'LISTENING' -and $FrontendMissing) { $partial = $true; Clear-Line; break }
+  # animate ~3s until the next probe
+  $animEnd = (Get-Date).AddSeconds(3)
+  while ((Get-Date) -lt $animEnd -and (Get-Date) -lt $deadline -and -not $simProc.HasExited) {
+    $el = [int]((Get-Date) - $bootStart).TotalSeconds
+    $n = [int][Math]::Round($barW * [Math]::Min(1.0, $el / $BootTimeoutSec))
+    $bar = ($S.blk * $n) + ($S.s1 * ($barW - $n))
+    $sp = $Spin[$f % 4]; $f++
+    $st = switch ($code) {
+      '000'      { 'booting JVM + physics stack ...' }
+      '503'      { 'server up - UI missing (503) ...' }
+      'LISTENING'{ 'server listening ...' }
+      default    { ("server up (HTTP " + $code + ") ...") }
+    }
+    if ($Plain) { Start-Sleep -Milliseconds 500; continue }
+    $line = ("    {0} {1} {2,3}s/{3}s  {4}" -f $sp, $bar, $el, $BootTimeoutSec, $st).PadRight(84)
+    Write-Host ("`r" + $line) -NoNewline -ForegroundColor DarkCyan
+    Start-Sleep -Milliseconds 250
+  }
 }
+Clear-Line
 if ($up) {
-  Ok "LIVE - viewer answered HTTP 200 ($mode)"
+  Write-Host ("    LIVE  -  viewer answered HTTP 200  (" + $mode + ")  ") -ForegroundColor White -BackgroundColor DarkGreen
+  Log ("  LIVE - HTTP 200 (" + $mode + ")")
   $api = Get-ApiCode '/api/latest'
-  if ($api -match '^2\d\d$') { Ok "telemetry endpoint /api/latest answers $api" }
-  else { Warn "/api/latest not 2xx yet (physics warming up - normal): $api" }
+  if ($api -match '^2\d\d$') { Ok ("telemetry endpoint /api/latest answers " + $api) }
+  else { Warn ("/api/latest not 2xx yet (physics warming up - normal): " + $api) }
 }
 elseif ($partial) {
   Warn 'SERVER IS UP but returns 503 - frontend/dist is missing on this machine.'
   $api = Get-ApiCode '/api/latest'
-  if ($api -match '^2\d\d$') { Ok "backend + telemetry PROVEN (/api/latest answers $api) - only the web UI files are missing" }
+  if ($api -match '^2\d\d$') { Ok ("backend + telemetry PROVEN (/api/latest answers " + $api + ") - only the web UI files are missing") }
 }
 else {
   try { Stop-Process -Id $simProc.Id -Force -ErrorAction SilentlyContinue } catch {}
   $tail = Tail-File $BootErr 20; if (-not $tail) { $tail = Tail-File $BootOut 20 }
-  Fail "no HTTP 200 within ${BootTimeoutSec}s (last probe: $sawCode). Boot log tail:`n$tail`nIf physics needs longer on this machine, re-run with:  Setup.bat -BootTimeoutSec 600"
+  Fail ("no HTTP 200 within ${BootTimeoutSec}s (last probe: $sawCode). Boot log tail:`n$tail`nIf physics needs longer on this machine, re-run with:  Setup.bat -BootTimeoutSec 600")
 }
+StepDone $(if ($up) { 'ok' } else { 'partial' })
 
-# ====================== Step 8 : stop + clean handover ======================
-Step 'Stop everything + clean handover to VS Code'
-try { Stop-Process -Id $simProc.Id -Force -ErrorAction Stop; Ok "proof-process stopped (pid $($simProc.Id))" }
-catch { Warn "could not kill pid $($simProc.Id) - closing via port owner instead." }
+# ---- Step 8 ------------------------------------------------------------------
+Step2 'Stop everything + clean handover to VS Code'
+try { Stop-Process -Id $simProc.Id -Force -ErrorAction Stop; Ok ("proof-process stopped (pid " + $simProc.Id + ")") }
+catch { Warn ("could not kill pid " + $simProc.Id + " - closing via port owner instead.") }
 Start-Sleep -Seconds 2
 if (-not (Test-PortFree 5000)) { Kill-Port 5000; Start-Sleep -Seconds 1 }
 if (Test-PortFree 5000) { Ok 'port 5000 free - machine is clean for VS Code' } else { Warn 'port 5000 still busy - kill leftover python.exe via Task Manager before starting the sim.' }
+StepDone 'ok'
 
+# ---- finale -------------------------------------------------------------------
+ $tot = ((Get-Date) - $T_Start).TotalSeconds
+ $totStr = ('{0}m {1:0}s' -f [int][Math]::Floor($tot / 60), ($tot % 60))
+Show-Report
 Write-Host ''
 if ($up) {
-  Write-Host '============================================================' -ForegroundColor Green
-  Write-Host ' SETUP COMPLETE - everything installed AND proven working.' -ForegroundColor Green
-  Write-Host '============================================================' -ForegroundColor Green
+  Write-Host ("    SETUP COMPLETE  -  everything installed AND proven working  -  total " + $totStr + "  ") -ForegroundColor White -BackgroundColor DarkGreen
 } else {
-  Write-Host '============================================================' -ForegroundColor Yellow
-  Write-Host ' SETUP ~90% COMPLETE - backend proven, UI files missing' -ForegroundColor Yellow
-  Write-Host '============================================================' -ForegroundColor Yellow
-  Write-Host ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
+  Write-Host ("    SETUP ~90% COMPLETE  -  backend proven, UI files missing  -  total " + $totStr + "  ") -ForegroundColor Black -BackgroundColor Yellow
+  Info 're-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)'
 }
 Write-Host ''
-Write-Host ' HOW EVERYONE RUNS THE SIM FROM NOW ON (VS Code, as usual):' -ForegroundColor Cyan
-Write-Host '   1. Open VS Code > File > Open Folder > this folder' -ForegroundColor White
-Write-Host '      (if it asks to use the existing virtual environment -> Yes)' -ForegroundColor Gray
-Write-Host '   2. Open a NEW terminal (Ctrl+`)  - the .venv activates itself' -ForegroundColor White
-Write-Host '   3. python run_simulator.py' -ForegroundColor White
-Write-Host '   4. open http://127.0.0.1:5000   (Ctrl+C in the terminal stops it)' -ForegroundColor White
-Write-Host ' ONE instance at a time - starting a second prints a friendly' -ForegroundColor Gray
-Write-Host ' message instead of a port error (shield v2 handles it).' -ForegroundColor Gray
-Write-Host ' Viewer-only, no Java:  python app.py' -ForegroundColor Gray
-Write-Host " Full log: $LogFile   Boot log: $BootOut / $BootErr" -ForegroundColor Gray
+ $HW = 62
+P ("  {0}{1}{2}" -f $S.tl, ($S.d * $HW), $S.tr) Cyan
+ $hdr = ' HOW EVERYONE RUNS THE SIM (VS Code) '
+P ("  {0} {1}{2}{3} {4}" -f $S.v, $S.d, $hdr, ($S.d * ($HW - 2 - $hdr.Length)), $S.v) Cyan
+ $how = @(
+  @('1.', 'VS Code  >  File  >  Open Folder  >  this folder', 'White'),
+  @('2.', 'open a NEW terminal (Ctrl+`) - the .venv activates itself', 'White'),
+  @('3.', 'python run_simulator.py', 'Yellow'),
+  @('4.', 'open http://127.0.0.1:5000     (Ctrl+C in the terminal stops it)', 'Gray')
+)
+foreach ($l in $how) { P ("  {0} {1} {2,-56} {3}" -f $S.v, $l[0], $l[1], $S.v) $l[2] }
+P ("  {0} {1,-58} {2}" -f $S.v, 'one instance at a time - a 2nd start prints a friendly message', $S.v) DarkCyan
+P ("  {0} {1,-58} {2}" -f $S.v, 'viewer-only, no Java:  python app.py', $S.v) DarkCyan
+P ("  {0}{1}{2}" -f $S.bl, ($S.d * $HW), $S.br) Cyan
+Write-Host ''
+Info ("full log: " + $LogFile + "   boot log: " + $BootOut + " / " + $BootErr)
+
+} catch {
+  # ---------------------------- failure screen -------------------------------
+  Clear-Line
+  if ($script:StepNo -gt 0 -and ($script:Report | Where-Object { $_.N -eq $script:StepNo }).Count -eq 0) {
+    $el = ((Get-Date) - $script:StepT0).TotalSeconds
+    [void]$script:Report.Add([pscustomobject]@{ N = $script:StepNo; T = $script:t_stepName; S = 'fail'; Secs = ('{0:0}' -f $el) })
+  }
+  Show-Report
+  Write-Host ''
+  Write-Host ("    SETUP FAILED  -  read the [FAIL] line above for the exact fix  ") -ForegroundColor White -BackgroundColor DarkRed
+  Log ("SETUP FAILED: " + $_.Exception.Message)
+  $w = 62
+  P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Red
+  foreach ($l in (Wrap54 $_.Exception.Message)) { P ("  {0} {1,-58} {2}" -f $S.v, $l, $S.v) Yellow }
+  P ("  {0} {1,-58} {2}" -f $S.v, ('details in: ' + $LogFile), $S.v) Gray
+  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Red
+  Write-Host ''
+  exit 1
+}
