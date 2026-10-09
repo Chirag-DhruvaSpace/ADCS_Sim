@@ -24,4 +24,13 @@
 .mission-tabs { background:rgba(7,24,40,.23); }
 .mission-tab[aria-selected=true]::before { display:none; }
 
+/* Eye-mode link lights: the same red/green/blue/yellow dots from the
+   Pointing-control card header. position:fixed keeps it fully out of the
+   header grid (zero layout impact). Hidden unless clear mode is active. */
+.mission-clear-lights { display:none; position:fixed; top:var(--mission-top); right:var(--mission-edge); z-index:41; padding:10px 14px; border-radius:14px; pointer-events:none; }
+.mission-clear-lights .quaternion-lights { margin-right:0; }
+.mission-clear-lights .quaternion-lights i { width:8px; height:8px; }
+body.mission-clear-active .mission-clear-lights:has(.quaternion-lights) { display:block; }
+@media(prefers-reduced-motion:reduce){.mission-clear-lights{transition:none;}}
+
 

@@ -65,5 +65,5 @@ export default function DashboardLayout({
     const timer = clear ? setTimeout(() => setSuspended(true), 500) : null;
     return () => { clearTimeout(timer); document.body.classList.remove('mission-clear-active'); };
   }, [clear]);
-  return <><MissionHeader active={active} onTabChange={setActive} clear={clear} onClearChange={setClear} /><section className={'mission-dashboard' + (clear ? ' mission-clear-view' : '')} id="mission-dashboard" data-tab={active}><WorkspacePages active={active} configuration={configuration} suspended={suspended} /></section></>;
+  return <><MissionHeader active={active} onTabChange={setActive} clear={clear} onClearChange={setClear} configuration={configuration} /><section className={'mission-dashboard' + (clear ? ' mission-clear-view' : '')} id="mission-dashboard" data-tab={active}><WorkspacePages active={active} configuration={configuration} suspended={suspended} /></section></>;
 }
