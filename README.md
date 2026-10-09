@@ -1,12 +1,16 @@
-﻿# LEAP-2 MBD Simulation â€” P-30XL ADCS Simulator
+# ADCS Sim -- P-30XL Attitude Determination & Control System Simulator
 
-> High-fidelity Model-Based Design simulator for the **Dhruva Space P-30XL** ADCS â€” Orekit orbital physics, sensor emulation, pointing laws, RW + MTQ actuation, firmware SITL, and a React + Three.js mission viewer.
+> High-fidelity Model-Based Design simulator for the **Dhruva Space P-30XL** ADCS -- Orekit orbital physics, sensor emulation, pointing laws, RW + MTQ actuation, firmware SITL, and a React + Three.js mission viewer.
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue?style=flat-square&logo=python)
 ![Orekit](https://img.shields.io/badge/Orekit-13.0_JDK21-orange?style=flat-square)
 ![Flask](https://img.shields.io/badge/Flask-3.1-black?style=flat-square)
 ![React](https://img.shields.io/badge/React-19_Vite-61DAFB?style=flat-square&logo=react)
 ![Three.js](https://img.shields.io/badge/Three.js-0.160-black?style=flat-square)
+
+<p align="center">
+  <img src="frontend/assets/loading/dhruva-logo.webp" alt="Dhruva Space logo" width="260" />
+</p>
 
 ## Table of Contents
 
@@ -26,6 +30,7 @@
 - [14. CAD Pipeline](#14-cad-pipeline)
 - [15. Troubleshooting](#15-troubleshooting)
 - [16. Docs & Credits](#16-additional-documentation)
+- [17. Credits & License](#17-credits--license)
 
 ---
 
@@ -33,13 +38,21 @@
 
 Closed-loop ADCS simulation for a ~500 km Sun-synchronous orbit (97 deg) P-30XL mission:
 
-- **Orbit truth** â€” Orekit Java propagator via JPype: EGM2008, NRLMSISE-00 drag + weather, SRP + eclipse, Sun/Moon ephemerides, IGRF field.
-- **Attitude truth** â€” Euler dynamics + quaternion kinematics at 10 Hz, coupled to faceted CAD surface physics.
-- **Flight belief** â€” emulated GPS, IMU (gyro + mag), sun-sensor array with noise/bias/latency/dropouts feeding a MEKF.
-- **Control** â€” B-dot detumble, Sun/Moon/Nadir, RW PD, periodic-gain LQR for MTQs, custom-quaternion, firmware-SITL.
-- **Viewer** â€” React + Three.js dashboard at `http://127.0.0.1:5000`.
+- **Orbit truth** -- Orekit Java propagator via JPype: EGM2008, NRLMSISE-00 drag + weather, SRP + eclipse, Sun/Moon ephemerides, IGRF field.
+- **Attitude truth** -- Euler dynamics + quaternion kinematics at 10 Hz, coupled to faceted CAD surface physics.
+- **Flight belief** -- emulated GPS, IMU (gyro + mag), sun-sensor array with noise/bias/latency/dropouts feeding a MEKF.
+- **Control** -- B-dot detumble, Sun/Moon/Nadir, RW PD, periodic-gain LQR for MTQs, custom-quaternion, firmware-SITL.
+- **Viewer** -- React + Three.js dashboard at `http://127.0.0.1:5000`.
 
 Default: `500.003 km` circular SSO, epoch `2026-10-01T15:00:00Z`, DOP853, 10 Hz loop.
+
+## Screenshots
+
+![Mission dashboard](validation/results/dashboard-1920.png)
+*Live mission dashboard -- 3D spacecraft, Earth, orbit track and telemetry charts.*
+
+![Orbit viewer](validation/results/orbit_viewer.png)
+![Sensor viewer](validation/results/sensor_viewer.png)
 
 ---
 
@@ -94,7 +107,7 @@ K_seq.npy / t_grid.npy            # Stored periodic-LQR gains
 | OS | Windows 10/11 64-bit (primary). Linux works with adapted steps. |
 | Python | 3.12 64-bit with py launcher (enforced by setup). |
 | Java | JDK 21 via jdk4py>=21,<22. JDK 25 breaks Orekit. |
-| Node.js | LTS 18+ with npm — frontend build only. |
+| Node.js | LTS 18+ with npm -- frontend build only. |
 | Resources | 8+ GB RAM, ~2 GB free. Port 5000 free. |
 
 Python deps: flask, waitress, requests, numpy, scipy, pyyaml, orekit-jpype, jdk4py, astropy, pymap3d, matplotlib, trimesh, pytest. Frontend: react 19, three 0.160.0, gsap 3.15.0, vite 6.
@@ -105,7 +118,7 @@ Python deps: flask, waitress, requests, numpy, scipy, pyyaml, orekit-jpype, jdk4
 
 ### 5.1 One-click setup (Windows)
 
-Double-click **Setup.bat** â€” checks Python 3.12 / Node / orekit-data / port 5000, (re)creates .venv, installs deps, fixes JAVA_HOME, builds frontend, smoke-tests JVM + Orekit, boots sim until / returns 200.
+Double-click **Setup.bat** -- checks Python 3.12 / Node / orekit-data / port 5000, (re)creates .venv, installs deps, fixes JAVA_HOME, builds frontend, smoke-tests JVM + Orekit, boots sim until / returns 200.
 
 ```batch
 Setup.bat                :: full setup (nuke .venv, reinstall, build, prove boot)
@@ -145,8 +158,14 @@ cd frontend; npm.cmd install; npm.cmd run build; cd ..
 
 Restart after YAML edits (except simulation.speed, hot-reloaded). Rebuild frontend + hard-refresh after viewer changes.
 
-### 5.4 Frontend dev mode
+```powershell
+cd frontend
+npm.cmd run dev      # -> http://127.0.0.1:5173/frontend/ (proxies to Flask)
+npm.cmd run preview  # preview production build
+npm.cmd test         # regression checks
+```
 
+---
 
 ## 6. Configuration
 
@@ -181,8 +200,8 @@ pointing:
     reference_quaternion: [1.0, 0.0, 0.0, 0.0]
 ```
 
-- legacy â€” dashboard selector (SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP, SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS).
-- custom â€” scalar-first body->ECI quaternions via YAML or live client:
+- legacy -- dashboard selector (SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP, SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS).
+- custom -- scalar-first body->ECI quaternions via YAML or live client:
 
 ```python
 from pointing_client import send_pointing_input
@@ -190,7 +209,7 @@ send_pointing_input([1, 0, 0, 0])
 send_pointing_input(q_err, quaternion_error=True, reference_quaternion=q_ref)
 ```
 
-- firmware_sitl â€” external firmware owns actuation over UDP (see section 11).
+- firmware_sitl -- external firmware owns actuation over UDP (see section 11).
 
 ### Sensor profiles
 
@@ -211,6 +230,14 @@ Flags use_gyro_for_control, use_mag_for_control, use_attitude_estimate_for_contr
 
 ```yaml
 simulation:
+  speed: 10.0                  # sim-sec per real-sec (hot-reloaded, max 1 Hz)
+  telemetry_publish_period_s: 0.25
+  orbit_output_window_s: 0.5   # 0.1 restores legacy coupling
+```
+
+1.0 = realtime. Steps are never skipped -- if hardware lags, /api/latest reports simulation_speed_requested / simulation_speed_actual / simulation_lag_s. Charts redraw at most 2 Hz, keep last 30 sim-seconds.
+
+---
 
 ## 7. Pointing Modes & Controllers
 
@@ -230,8 +257,12 @@ Boresight: body -Z to Sun (2 DOF; spin about Sun line is free). Design derivatio
 
 ## 8. Physics Engine
 
-- Orbit (engine/ + engine_adcs_bridge.py): Orekit NumericalPropagator DOP853 â€” central + EGM2008 Holmes-Featherstone, NRLMSISE-00 + CSSI weather, SRP + shadow. EngineOrbitProvider gives state, dense output, ECI/ECEF, Sun/Moon, IGRF, facet-coupled forces.
+- Orbit (engine/ + engine_adcs_bridge.py): Orekit NumericalPropagator DOP853 -- central + EGM2008 Holmes-Featherstone, NRLMSISE-00 + CSSI weather, SRP + shadow. EngineOrbitProvider gives state, dense output, ECI/ECEF, Sun/Moon, IGRF, facet-coupled forces.
 - Attitude: solve_ivp Euler + quaternion per 0.1 s tick; orbit segments extrapolate tick attitude; dense output resets at attitude updates.
+- Disturbances: calculate_disturbances.py (GG, aero, SRP, residual dipole, per-channel switches); spacecraft_surface_physics.py unifies facet forces/moments for orbit + attitude + telemetry.
+- Headless proof: python main.py -- engine-full vs raw-Orekit ~0 m; Kepler-only tens of km; EGM-only hundreds of m (24 h).
+
+---
 
 ## 9. Sensors & Navigation
 
@@ -253,7 +284,7 @@ Boresight: body -Z to Sun (2 DOF; spin about Sun line is free). Design derivatio
 
 ## 11. Firmware SITL (Hardware-in-the-Loop)
 
-pointing.strategy: firmware_sitl â€” real firmware owns arbitration over non-blocking UDP (polled per tick, held through RK stages):
+pointing.strategy: firmware_sitl -- real firmware owns arbitration over non-blocking UDP (polled per tick, held through RK stages):
 
 | Direction | Port | Format | Contents |
 |-----------|------|--------|----------|
@@ -261,6 +292,10 @@ pointing.strategy: firmware_sitl â€” real firmware owns arbitration over no
 | In (MTQ) | UDP 5105 | B3f (13 B) | ADS mode + dipole X/Y/Z A-m2 |
 | Out (state) | UDP 5002 | 17d (136 B) | ECI pos/vel, quat, rate rad/s, UTC sim-time, body B-field T |
 | Out (wheels) | UDP 5103 | 4x 3d | wheel idx, speed rpm, torque mNm per tick |
+
+Status dots: red = no packet for 2 s, green = 2 s after connect or mode change, yellow = working. Tests: `validation/test_firmware_sitl.py`.
+
+---
 
 ## 12. Web Viewer & Telemetry API
 
@@ -279,8 +314,8 @@ Flask serves frontend/dist/index.html + /frontend/* + /assets/*. Browser polls o
 | /update/control/inputs | POST | Legacy yaw/pitch/roll sliders |
 | /rw_telemetry, /mtr_telemetry | GET | Compat readouts (not polled) |
 | / | GET | Built React app |
-| /frontend/<path> | GET | Compiled assets |
-| /assets/<path> | GET | Models, imagery, reference video |
+| /frontend/:path | GET | Compiled assets |
+| /assets/:path | GET | Models, imagery, reference video |
 | /ground/track/no/yaw/steering | GET | Compat redirect |
 
 Viewer: worker CAD batching, GPU diagrams w/ async readback, 30-s chart windows, Earth/aurora/clouds, GSAP cosmic-zoom video, Overview/Sensors/Pointing pages. Details: frontend/README.md.
@@ -298,7 +333,7 @@ python scripts/verify_sensor_changes.py
 cd frontend; npm.cmd test
 ```
 
-Browser/GPU (needs Chrome): terminal 1 â€” python scripts/viewer_test_server.py; terminal 2 â€” cd frontend; npm.cmd run test:browser. Orbit proof: python main.py.
+Browser/GPU (needs Chrome): terminal 1 -- python scripts/viewer_test_server.py; terminal 2 -- cd frontend; npm.cmd run test:browser. Orbit proof: python main.py.
 
 ---
 
@@ -326,11 +361,11 @@ Compress each GLB with gltf-transform meshopt (pos quant 16-bit). Physics uses a
 | Python 3.12 not found | Install python.org 3.12 64-bit with py launcher. |
 | port 5000 busy | Kill leftover python.exe via Task Manager. |
 | JVM / Orekit crash | Force JDK 21: $env:JAVA_HOME = (python -c "import jdk4py; print(jdk4py.JAVA_HOME)"). Never JDK 25. |
-| Viewer 503 | frontend/dist missing â€” rebuild frontend. |
+| Viewer 503 | frontend/dist missing -- rebuild frontend. |
 | Charts frozen | Physics warming up; check simulation_lag_s in /api/latest. |
 | Edits invisible | YAML needs restart (except speed); viewer needs rebuild + Ctrl+Shift+R. |
 | orekit-data/ missing | Re-extract zip or download orekit-data-main.zip as orekit-data/. |
-| SITL red dot | No UDP 2 s â€” check firmware, firewall, ports 5104/5105/5002/5103. |
+| SITL red dot | No UDP 2 s -- check firmware, firewall, ports 5104/5105/5002/5103. |
 
 Logs: setup.log, Flask console + browser devtools, hs_err_pid*.log (JVM).
 
@@ -338,19 +373,19 @@ Logs: setup.log, Flask console + browser devtools, hs_err_pid*.log (JVM).
 
 ## 16. Additional Documentation
 
-- frontend/README.md â€” viewer architecture, dev/build, perf.
-- CAD_CONFIGURATION.md â€” deployed/stowed physics + mass properties.
-- GPS_DIAGRAM_INTEGRATION.md â€” viewer GPS contract.
-- imu_README.md â€” IMU emulation + MEKF.
-- frontend/assets/textures/README.md â€” texture credits.
-- CLAUDE.md â€” full ADCS study (LTP diagnosis, periodic-LQR, validation).
-- validation/README.md â€” suite map.
+- frontend/README.md -- viewer architecture, dev/build, perf.
+- CAD_CONFIGURATION.md -- deployed/stowed physics + mass properties.
+- GPS_DIAGRAM_INTEGRATION.md -- viewer GPS contract.
+- imu_README.md -- IMU emulation + MEKF.
+- frontend/assets/textures/README.md -- texture credits.
+- CLAUDE.md -- full ADCS study (LTP diagnosis, periodic-LQR, validation).
+- validation/README.md -- suite map.
 
 ---
 
 ## 17. Credits & License
 
-Made by **Chirag Malik** â€” malikchirag.2005@gmail.com â€” [LinkedIn: malikchirag](https://linkedin.com/in/malikchirag) for Dhruva Space.
+Made by **Chirag Malik** -- malikchirag.2005@gmail.com -- [LinkedIn: malikchirag](https://linkedin.com/in/malikchirag) for Dhruva Space.
 
 CAD STEP files, GLBs, textures, and reference footage retain their original licenses. Orekit by the Orekit community; 3D via Three.js, animation via GSAP. Please credit the author when reusing.
 
