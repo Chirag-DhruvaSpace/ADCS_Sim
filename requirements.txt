@@ -5,7 +5,10 @@ numpy>=1.26,<3
 scipy>=1.11
 pyyaml>=6.0
 orekit-jpype>=13.0
-jdk4py>=21
+# jdk4py MAJOR version == JDK major version. Orekit/JPype is validated on JDK 21.
+# "jdk4py>=21" alone can resolve to jdk4py 25.x (= JDK 25) which breaks Orekit,
+# so pin the 21.x line explicitly:
+jdk4py>=21,<22
 astropy>=6.0
 pymap3d>=2.9
 matplotlib>=3.8

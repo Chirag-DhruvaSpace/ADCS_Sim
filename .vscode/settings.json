@@ -1,0 +1,9 @@
+﻿{
+    "terminal.integrated.env.windows":  {
+                                            "JAVA_HOME":  "C:\\Projects\\Simulator\\Leap2_MBD_Simulation\\.venv\\Lib\\site-packages\\jdk4py\\java-runtime",
+                                            "OREKIT_DATA":  "C:\\Projects\\Simulator\\Leap2_MBD_Simulation\\orekit-data",
+                                            "PATH":  "C:\\Projects\\Simulator\\Leap2_MBD_Simulation\\.venv\\Lib\\site-packages\\jdk4py\\java-runtime\\bin;${env:PATH}"
+                                        },
+    "python.terminal.activateEnvironment":  true,
+    "python.defaultInterpreterPath":  "C:\\Projects\\Simulator\\Leap2_MBD_Simulation\\.venv\\Scripts\\python.exe"
+}

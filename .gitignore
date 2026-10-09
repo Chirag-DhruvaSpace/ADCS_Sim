@@ -1,0 +1,12 @@
+# python
+.venv/
+__pycache__/
+*.pyc
+# installer logs / local env (machine-specific JAVA_HOME paths)
+setup.log
+.env
+# frontend build output (rebuilt by setup.ps1)
+frontend/dist/
+frontend/node_modules/
+# JVM crash logs
+hs_err_pid*.log
