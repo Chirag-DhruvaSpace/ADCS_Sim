@@ -1,11 +1,21 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v9, pretty UI)
+#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v10)
 #  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
-#  v9 = v8 logic + presentation layer: framed banners, colors, spinners,
-#       animated boot progress bar, curl download progress, per-step timing,
-#       end-of-run report card, boxed failure screen.
-#  File stays pure ASCII (all symbols built from code points at runtime),
-#  so saving/committing it in ANY encoding cannot corrupt the display.
+#
+#  v10 fixes the v9 crash "The operation '[System.Char] * [System.Int32]'
+#  is not defined": Windows PowerShell 5.1 cannot multiply a char by a
+#  number. All box/block glyphs are now stored as STRINGS, so every
+#  ($S.d * $w) is legal string repetition.
+#  v10 also adds the presentation layer done right:
+#   - true-color (24-bit) VT output when the console supports it,
+#     with automatic 16-color fallback and -Plain monochrome mode
+#   - big shaded "LEAP-2" block-art banner with 3D drop shadow,
+#     per-character gradient + horizontal light shading
+#   - starfield, comet sweep animation, gradient progress bars
+#  All non-ASCII glyphs are built from code points -> the file itself
+#  stays pure ASCII and survives any encoding.
+#  Logic is identical to v8: install + verify + stop; no launcher files,
+#  no auto-launch; running the sim = VS Code terminal as usual.
 # ============================================================================
 param(
   [switch]$ReuseVenv,
@@ -35,22 +45,50 @@ Set-Location $Root
  $StepTotal  = 8; $StepNo = 0; $StepT0 = Get-Date; $T_Start = Get-Date
  $FrontendMissing = $false; $WarmOk = $true
  $script:Report = New-Object System.Collections.ArrayList
- $script:SpinIdx = 0
+ $script:ArtCache = $null
+ $script:t_stepName = ''
 
-# ---------------------------- pretty-console kit ----------------------------
+# ---------- glyph kit: STRINGS, never [char] (PS 5.1 char*int is illegal) --
  $S = @{
-  h    = [char]0x2500 ; d  = [char]0x2550 ; v  = [char]0x2502 ; dv = [char]0x2551
-  tl   = [char]0x2554 ; tr = [char]0x2557 ; bl = [char]0x255A ; br = [char]0x255D
-  blk  = [char]0x2588 ; s1 = [char]0x2591 ; s2 = [char]0x2592
-  arr  = [char]0x25BA ; chk = [char]0x221A ; crs = [char]0x00D7
+  h    = "$([char]0x2500)"   # -
+  d    = "$([char]0x2550)"   # =
+  v    = "$([char]0x2502)"   # |
+  dv   = "$([char]0x2551)"   # ||
+  tl   = "$([char]0x2554)"   # top-left corner
+  tr   = "$([char]0x2557)"   # top-right corner
+  bl   = "$([char]0x255A)"   # bottom-left corner
+  br   = "$([char]0x255D)"   # bottom-right corner
+  blk  = "$([char]0x2588)"   # full block
+  s1   = "$([char]0x2591)"   # light shade
+  s2   = "$([char]0x2592)"   # medium shade
+  arr  = "$([char]0x25BA)"   # right pointer
+  chk  = "$([char]0x221A)"   # check mark
+  crs  = "$([char]0x00D7)"   # multiplication sign
 }
  $Spin = @('|','/','-','\')
+ $E = [char]27
 
+# ---------- enable VT (true color) when the console supports it -----------
+ $script:VT = $false
+if (-not $Plain) {
+  try {
+    $k32 = Add-Type -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int h);
+[DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out int m);
+[DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, int m);
+'@ -Name 'K32VT' -Namespace 'LEAP' -PassThru -ErrorAction Stop
+    $hnd = $k32::GetStdHandle(-11)
+    $m = 0; $null = $k32::GetConsoleMode($hnd, [ref]$m)
+    $script:VT = $k32::SetConsoleMode($hnd, ($m -bor 4))
+  } catch { $script:VT = $false }
+}
+
+# ---------------------------- console kit ----------------------------------
 function P([string]$t, [string]$c = 'Gray') { if ($Plain) { $c = 'Gray' }; Write-Host $t -ForegroundColor $c }
 function Log([string]$m) { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
 function Info([string]$m) { P ("    {0} {1}" -f $S.arr, $m) DarkCyan; Log ("  >> " + $m) }
 function Ok([string]$m)   { P ("    {0} {1}" -f $S.chk, $m) Green;    Log ("  OK: " + $m) }
-function Warn([string]$m) { P ("    ! {1}" -f $S.arr, $m) Yellow;    Log ("  WARN: " + $m) }
+function Warn([string]$m) { P ("    ! {0}" -f $m) Yellow;             Log ("  WARN: " + $m) }
 function Fail([string]$m) { P ("    {0} {1}" -f $S.crs, $m) Red;      Log ("  FAIL: " + $m); throw $m }
 function Clear-Line() { Write-Host ("`r" + (' ' * 90) + "`r") -NoNewline }
 function Wrap54([string]$m) {
@@ -65,14 +103,172 @@ function Wrap54([string]$m) {
   }
   return $out
 }
-function Step([string]$t) {
+
+# ---------------------------- banner kit -----------------------------------
+function Get-Art {
+  if ($script:ArtCache) { return $script:ArtCache }
+  $K = $S.blk; $C = $S.tr; $Q = $S.tl; $Lc = $S.bl; $Rc = $S.br; $D = $S.d; $V = $S.dv
+  $Lt = @{}
+  $Lt['L'] = @( ($K+$K+$C+'     '), ($K+$K+$V+'     '), ($K+$K+$V+'     '), ($K+$K+$V+'     '), ($K*7+$C), ($Lc+$D*6+$Rc) )
+  $Lt['E'] = @( ($K*7+$C), ($K+$K+$Q+$D*4+$Rc), ($K*5+$C+'  '), ($K+$K+$Q+$D*2+$Rc+'  '), ($K*7+$C), ($Lc+$D*6+$Rc) )
+  $Lt['A'] = @( (' '+$K*6+$C+' '), ($K+$K+$Q+$D*3+$K+$K+$C), ($K*7+$V+' '), ($K+$K+$Q+$D*2+$K+$K+$V+' '), ($K+$K+$V+'  '+$K+$K+$V+' '), ($Lc+$D+$Rc+'  '+$Lc+$D+$Rc+' ') )
+  $Lt['P'] = @( ($K*6+$C+' '), ($K+$K+$Q+$D*2+$K+$K+$C), ($K*6+$Q+$Rc), ($K+$K+$Q+$D*3+$Rc+' '), ($K+$K+$V+'     '), ($Lc+$D+$Rc+'     ') )
+  $Lt['-'] = @( (' '*9), (' '*9), (' '+$K*7+$C), (' '+$Lc+$D*6+$Rc), (' '*9), (' '*9) )
+  $Lt['2'] = @( ($K*7+$C), ($Lc+$D*2+$K*3+$Q+$Rc), ('  '+$K*3+$Q+$Rc+' '), (' '+$K*3+$Q+$Rc+'  '), ($K*7+$C), ($Lc+$D*6+$Rc) )
+  $a = New-Object System.Collections.ArrayList
+  for ($r = 0; $r -lt 6; $r++) {
+    [void]$a.Add(($Lt['L'][$r] + $Lt['E'][$r] + $Lt['A'][$r] + $Lt['P'][$r] + $Lt['-'][$r] + $Lt['2'][$r]))
+  }
+  $script:ArtCache = $a.ToArray()
+  return $script:ArtCache
+}
+function Get-BannerCell([string[]]$art, [int]$i, [int]$j, [int]$rows, [int]$dy, [int]$dx) {
+  if ($i -lt $rows -and $j -lt $art[$i].Length -and $art[$i][$j] -ne ' ') { return @($art[$i][$j], 0) }
+  $si = $i - $dy; $sj = $j - $dx
+  if ($si -ge 0 -and $si -lt $rows -and $sj -ge 0 -and $sj -lt $art[$si].Length -and $art[$si][$sj] -ne ' ') { return @($art[$si][$sj], 1) }
+  return @(' ', 2)
+}
+function Show-Starfield([int]$width = 88) {
+  $chars = @('.', '.', '.', '*', '+', "$([char]0x00B7)")
+  for ($ln = 0; $ln -lt 2; $ln++) {
+    $line = ''
+    for ($j = 0; $j -lt $width; $j++) {
+      if ((Get-Random -Minimum 0 -Maximum 100) -lt 12) {
+        $ch = $chars[(Get-Random -Minimum 0 -Maximum $chars.Count)]
+        if ($script:VT) {
+          $b = Get-Random -Minimum 70 -Maximum 210
+          $line += "${E}[38;2;$b;$b;255m$ch"
+        } else { $line += $ch }
+      } else { $line += ' ' }
+    }
+    if ($script:VT) { Write-Host ('    ' + $line + "${E}[0m") }
+    else { Write-Host ('    ' + $line) -ForegroundColor DarkGray }
+  }
+}
+function Show-Comet([int]$width = 56) {
+  if (-not $script:VT -or $Plain) { return }
+  $tch = [string][char]0x00BB
+  for ($p = 3; $p -lt ($width + 10); $p++) {
+    $pre = ' ' * [Math]::Max(0, $p - 8)
+    $trail = ''
+    for ($k = [Math]::Max(0, $p - 8); $k -lt $p; $k++) {
+      $a = ($k - ($p - 8)) / 8.0; if ($a -lt 0) { $a = 0 }
+      $r = [int](255 * $a); $g = [int](205 * $a); $b = [int](95 * $a)
+      $trail += "${E}[38;2;$r;$g;${b}m" + $tch
+    }
+    $head = "${E}[38;2;255;255;255m" + $S.arr + "${E}[0m"
+    Write-Host ("`r    " + $pre + $trail + $head + "   ") -NoNewline
+    Start-Sleep -Milliseconds 26
+  }
+  Write-Host ("`r" + (' ' * 80) + "`r") -NoNewline
+  Write-Host ''
+}
+function Show-Banner {
+  $art = Get-Art
+  $dy = 1; $dx = 2
+  $rows = $art.Count
+  $w = 0; foreach ($l in $art) { if ($l.Length -gt $w) { $w = $l.Length } }
+  $H = $rows + $dy; $W = $w + $dx
+  $row16 = @('DarkMagenta','Magenta','DarkCyan','DarkCyan','Cyan','Cyan','DarkGray')
+  if ($Plain) {
+    foreach ($l in $art) { Write-Host ('    ' + $l) -ForegroundColor DarkCyan }
+    Write-Host '      A D C S   S I M U L A T O R' -ForegroundColor DarkCyan
+    return
+  }
+  if (-not $Plain) { Show-Starfield }
+  for ($i = 0; $i -lt $H; $i++) {
+    if ($script:VT) {
+      $s = ''
+      for ($j = 0; $j -lt $W; $j++) {
+        $c = Get-BannerCell $art $i $j $rows $dy $dx
+        if ($c[1] -eq 2) { $s += ' ' }
+        elseif ($c[1] -eq 0) {
+          $f = $i / [Math]::Max(1, ($H - 1))
+          $r = [int](120 + (0 - 120) * $f); $g = [int](40 + (235 - 40) * $f); $b = [int](235 + (255 - 235) * $f)
+          $hf = 1.06 - 0.20 * ($j / [Math]::Max(1, $W - 1))
+          $r = [Math]::Min(255, [int]($r * $hf)); $g = [Math]::Min(255, [int]($g * $hf)); $b = [Math]::Min(255, [int]($b * $hf))
+          $s += "${E}[38;2;$r;$g;${b}m" + $c[0]
+        } else {
+          $r = 40 + 6 * $i; $g = 40 + 6 * $i; $b = 64 + 10 * $i
+          $s += "${E}[38;2;$r;$g;${b}m" + $c[0]
+        }
+      }
+      Write-Host ('    ' + $s + "${E}[0m")
+    } else {
+      Write-Host '    ' -NoNewline
+      $runs = @(); $cur = ''; $curT = -1
+      for ($j = 0; $j -lt $W; $j++) {
+        $c = Get-BannerCell $art $i $j $rows $dy $dx
+        if ($c[1] -ne $curT) { if ($cur -ne '') { $runs += ,@($cur, $curT) }; $cur = ''; $curT = $c[1] }
+        $cur += $c[0]
+      }
+      if ($cur -ne '') { $runs += ,@($cur, $curT) }
+      foreach ($run in $runs) {
+        if ($run[1] -eq 0)      { $col = $row16[[Math]::Min($i, $row16.Count - 1)] }
+        elseif ($run[1] -eq 1)  { $col = 'DarkGray' }
+        else                     { $col = 'Black' }
+        Write-Host $run[0] -NoNewline -ForegroundColor $col
+      }
+      Write-Host ''
+    }
+  }
+  $sub = 'A D C S   S I M U L A T O R'
+  if ($script:VT) {
+    $line = ''
+    for ($j = 0; $j -lt $sub.Length; $j++) {
+      $f = $j / ($sub.Length - 1)
+      $r = [int](0 + 190 * $f); $g = [int](170 + 80 * $f); $b = 255
+      $line += "${E}[38;2;$r;$g;${b}m" + $sub[$j]
+    }
+    Write-Host ('      ' + $line + "${E}[0m")
+    Write-Host '    ' -NoNewline
+    for ($i2 = 0; $i2 -le 56; $i2++) {
+      $f = $i2 / 56
+      $r = [int](120 * (1 - $f)); $g = [int](120 + 115 * $f); $b = 255
+      Write-Host ("${E}[38;2;$r;$g;${b}m" + $S.blk) -NoNewline
+      Start-Sleep -Milliseconds 6
+    }
+    Write-Host "${E}[0m"
+  } else {
+    Write-Host ('      ' + $sub) -ForegroundColor Cyan
+    Write-Host ('    ' + ($S.blk * 57)) -ForegroundColor Cyan
+  }
+  Show-Comet
+}
+
+# ---------------------------- bar kit --------------------------------------
+function Bar-Str([int]$n, [int]$w) {
+  if ($script:VT) {
+    $s = ''
+    for ($x = 0; $x -lt $w; $x++) {
+      if ($x -lt $n) {
+        $f = $x / [Math]::Max(1, $w - 1)
+        $r = [int](30 + 200 * $f); $g = [int](90 + 140 * $f); $b = 255
+        $s += "${E}[38;2;$r;$g;${b}m" + $S.blk
+      } else { $s += "${E}[38;2;55;65;85m" + $S.s1 }
+    }
+    return $s + "${E}[0m"
+  }
+  return ($S.blk * $n) + ($S.s1 * ($w - $n))
+}
+function Out-Bar([string]$s) {
+  if ($script:VT) { Write-Host $s -NoNewline }
+  else { Write-Host $s -NoNewline -ForegroundColor Cyan }
+}
+
+# ---------------------------- step kit -------------------------------------
+function Step2([string]$t) {
+  $script:t_stepName = $t
   $script:StepNo++; $script:StepT0 = Get-Date
-  try { $host.UI.RawUI.WindowTitle = "LEAP-2 setup - step $StepNo/$StepTotal" } catch {}
+  try { $host.UI.RawUI.WindowTitle = ("LEAP-2 setup - step {0}/{1}" -f $StepNo, $StepTotal) } catch {}
   $w = 58
-  $title = ("STEP {0}/{1}   {2}" -f $StepNo, $StepTotal, $t)
+  if ($t.Length -gt 45) { $t = $t.Substring(0, 42) + '...' }
   Write-Host ''
   P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan
-  P ("  {0} {1} {2}" -f $S.dv, $title.PadRight($w), $S.dv) Cyan
+  Write-Host ("  {0} " -f $S.dv) -NoNewline -ForegroundColor Cyan
+  Write-Host ("STEP {0}/{1}" -f $StepNo, $StepTotal).PadRight(10) -NoNewline -ForegroundColor Magenta
+  Write-Host $t.PadRight(45) -NoNewline -ForegroundColor White
+  Write-Host (" {0}" -f $S.dv) -ForegroundColor Cyan
   P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan
   Log ("STEP $StepNo/$StepTotal : $t")
 }
@@ -80,30 +276,31 @@ function StepDone([string]$status = 'ok') {
   $el = ((Get-Date) - $script:StepT0).TotalSeconds
   $secs = if ($el -lt 10) { '{0:0.#}' -f $el } else { '{0:0}' -f $el }
   $bw = 22
-  $n = [int][Math]::Round($bw * $StepNo / $StepTotal)
-  $bar = ($S.blk * $n) + ($S.s1 * ($bw - $n))
+  $n = [int][Math]::Round($bw * $script:StepNo / $StepTotal)
   $col = if ($status -eq 'ok') { 'Green' } elseif ($status -eq 'partial') { 'Yellow' } else { 'Red' }
-  P ("  {0}{0}{0} done in {1}s   {2}  {3}/{4}" -f $S.h, $secs, $bar, $StepNo, $StepTotal) $col
-  [void]$script:Report.Add([pscustomobject]@{ N = $StepNo; T = $t_stepName; S = $status; Secs = $secs })
+  Write-Host ('   ' + ($S.h * 3) + (' done in {0}s  ' -f $secs)) -NoNewline -ForegroundColor $col
+  Out-Bar (Bar-Str $n $bw)
+  Write-Host ('  {0}/{1}' -f $script:StepNo, $StepTotal) -ForegroundColor $col
+  [void]$script:Report.Add([pscustomobject]@{ N = $script:StepNo; T = $script:t_stepName; S = $status; Secs = $secs })
 }
- $script:t_stepName = ''
-function Step2([string]$t) { $script:t_stepName = $t; Step $t }   # named wrapper so StepDone can report
-function Show-Report() {
+function Show-Report {
   $w = 62
   Write-Host ''
   P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Cyan
   $hd = ' RESULTS '
-  P ("  {0} {1}{2}{3} {4}" -f $S.v, $S.d, $hd, ($S.d * ($w - 2 - $hd.Length)), $S.v) Cyan
+  $inner = $hd + ($S.d * (60 - $hd.Length))
+  P ("  {0} {1} {2}" -f $S.dv, $inner, $S.dv) Cyan
   foreach ($r in $script:Report) {
     $mark = if ($r.S -eq 'ok') { $S.chk } elseif ($r.S -eq 'partial') { '!' } else { $S.crs }
-    $col = if ($r.S -eq 'ok') { 'Green' } elseif ($r.S -eq 'partial') { 'Yellow' } else { 'Red' }
-    $name = $r.T; if ($name.Length -gt 40) { $name = $name.Substring(0, 40) }
-    P ("  {0} {1,-2} {2,-40} {3} {4,6}s {5}" -f $S.v, $r.N, $name, $mark, $r.Secs, $S.v) $col
+    $col  = if ($r.S -eq 'ok') { 'Green' } elseif ($r.S -eq 'partial') { 'Yellow' } else { 'Red' }
+    $name = [string]$r.T; if ($name.Length -gt 36) { $name = $name.Substring(0, 33) + '...' }
+    $row = ('{0,2}  {1,-36} {2}  {3,7}' -f $r.N, $name, $mark, ($r.Secs + 's'))
+    P ("  {0} {1} {2}" -f $S.dv, $row.PadRight(60), $S.dv) $col
   }
   P ("  {0}{1}{2}" -f $S.bl, ($S.d * $w), $S.br) Cyan
 }
 
-# --------------------------- core helpers (v8) -------------------------------
+# --------------------------- core helpers ----------------------------------
 function Run([string]$exe, [string[]]$argList) {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; P ("    $ln") DarkGray; Log ("  " + $ln) } }
@@ -185,31 +382,34 @@ function Stop-VenvProcesses([string]$venvDir) {
 }
 function Remove-Tree([string]$path) {
   if (-not (Test-Path -LiteralPath $path)) { return $true }
-  for ($i = 1; $i -le 4; $i++) {
-    $null = & cmd.exe /c rmdir /s /q "$path" 2>&1
-    if (-not (Test-Path -LiteralPath $path)) { return $true }
-    Start-Sleep -Seconds (2 * $i)
-  }
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try {
-    $dead = Join-Path (Split-Path -Parent $path) ('._delete_me_' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-    Rename-Item -LiteralPath $path -NewName (Split-Path $dead -Leaf) -ErrorAction Stop
-    for ($i = 1; $i -le 3; $i++) {
-      $null = & cmd.exe /c rmdir /s /q "$dead" 2>&1
-      if (-not (Test-Path -LiteralPath $dead)) { return $true }
-      Start-Sleep -Seconds 2
+    for ($i = 1; $i -le 4; $i++) {
+      $null = & cmd.exe /c rmdir /s /q "$path" 2>&1
+      if (-not (Test-Path -LiteralPath $path)) { return $true }
+      Start-Sleep -Seconds (2 * $i)
     }
-  } catch {}
-  return (-not (Test-Path -LiteralPath $path))
+    try {
+      $dead = Join-Path (Split-Path -Parent $path) ('._delete_me_' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+      Rename-Item -LiteralPath $path -NewName (Split-Path $dead -Leaf) -ErrorAction Stop
+      for ($i = 1; $i -le 3; $i++) {
+        $null = & cmd.exe /c rmdir /s /q "$dead" 2>&1
+        if (-not (Test-Path -LiteralPath $dead)) { return $true }
+        Start-Sleep -Seconds 2
+      }
+    } catch {}
+    return (-not (Test-Path -LiteralPath $path))
+  } finally { $ErrorActionPreference = $prev }
 }
-# download with a REAL progress bar: curl.exe's own (falls back to IWR)
 function Get-File([string]$url, [string]$dest) {
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    & curl.exe -L --fail --retry 2 --connect-timeout 20 --progress-bar -o "$dest" "$url"
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & curl.exe -L --fail --retry 2 --connect-timeout 20 --progress-bar -o "$dest" "$url" }
+    finally { $ErrorActionPreference = $prev }
     return ($LASTEXITCODE -eq 0)
   }
   try { Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing; return $true } catch { return $false }
 }
-# run a long silent command with a live spinner + elapsed timer
 function Invoke-Animated([string]$exe, [string]$argStr, [string]$label, [int]$timeoutSec = 900) {
   $outF = [IO.Path]::GetTempFileName(); $errF = [IO.Path]::GetTempFileName()
   $p = Start-Process -FilePath $exe -ArgumentList $argStr -WorkingDirectory $Root -PassThru `
@@ -260,7 +460,7 @@ function Install-PortableNode([string]$Version) {
   New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
   Info "downloading portable Node $Version (~30 MB, one-time; cached in tools\node) ..."
   Log ("  url: " + $zipUrl)
-  if (-not (Get-File $zipUrl $zipPath)) { Warn "download failed (no internet, or nodejs.org blocked by proxy/IT)"; return $false }
+  if (-not (Get-File $zipUrl $zipPath)) { Warn 'download failed (no internet, or nodejs.org blocked by proxy/IT)'; return $false }
   Info 'extracting ...'
   $tmp = Join-Path $ToolsDir 'node-extract'
   if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
@@ -300,7 +500,7 @@ function Install-OrekitData {
   return $true
 }
 
-# --- upgrades run_simulator.py to shield v2 (double-run guard) --------------
+# --- upgrades run_simulator.py to shield v2 if the clone has the old one ---
 function Ensure-RunSimShield {
   $rs = Join-Path $Root 'run_simulator.py'
   if (-not (Test-Path $rs)) { Warn 'run_simulator.py not found - skipping patch step.'; return }
@@ -416,22 +616,7 @@ if __name__ == '__main__':
 try { Clear-Host } catch {}
 try { $host.UI.RawUI.WindowTitle = 'LEAP-2 MBD Simulation - Setup' } catch {}
 '' | Out-File -FilePath $LogFile -Encoding utf8
- $BW = 62
-Write-Host ''
-P ("  {0}{1}{2}" -f $S.tl, ($S.d * $BW), $S.tr) Cyan
-P ("  {0} {1} {2}" -f $S.dv, ''.PadRight($BW), $S.dv) Cyan
- $t1 = 'L E A P - 2   M B D   S I M U L A T I O N'
- $t2 = 'one-click setup   v9'
-P ("  {0} {1} {2}" -f $S.dv, $t1.PadRight($BW), $S.dv) White
-P ("  {0} {1} {2}" -f $S.dv, $t2.PadRight($BW), $S.dv) DarkCyan
-P ("  {0} {1} {2}" -f $S.dv, ''.PadRight($BW), $S.dv) Cyan
-if ($Plain) {
-  P ("  {0}{1}{2}" -f $S.bl, ($S.d * $BW), $S.br) Cyan
-} else {
-  Write-Host '  ' -NoNewline
-  for ($i = 0; $i -le $BW; $i++) { Write-Host $S.blk -NoNewline -ForegroundColor Cyan; Start-Sleep -Milliseconds 7 }
-  Write-Host ("`r  {0}{1}{2}" -f $S.bl, ($S.d * $BW), $S.br) -ForegroundColor Cyan
-}
+Show-Banner
 Write-Host ''
 Info ("project : " + $Root)
 Info ("log     : " + $LogFile)
@@ -701,22 +886,22 @@ while ((Get-Date) -lt $deadline) {
     if ($FrontendMissing -or ($body -match 'Build the frontend')) { $partial = $true; Clear-Line; break }
   }
   elseif ($code -eq 'LISTENING' -and $FrontendMissing) { $partial = $true; Clear-Line; break }
-  # animate ~3s until the next probe
   $animEnd = (Get-Date).AddSeconds(3)
   while ((Get-Date) -lt $animEnd -and (Get-Date) -lt $deadline -and -not $simProc.HasExited) {
     $el = [int]((Get-Date) - $bootStart).TotalSeconds
     $n = [int][Math]::Round($barW * [Math]::Min(1.0, $el / $BootTimeoutSec))
-    $bar = ($S.blk * $n) + ($S.s1 * ($barW - $n))
     $sp = $Spin[$f % 4]; $f++
     $st = switch ($code) {
-      '000'      { 'booting JVM + physics stack ...' }
-      '503'      { 'server up - UI missing (503) ...' }
-      'LISTENING'{ 'server listening ...' }
-      default    { ("server up (HTTP " + $code + ") ...") }
+      '000'       { 'booting JVM + physics stack ...' }
+      '503'       { 'server up - UI missing (503) ...' }
+      'LISTENING' { 'server listening ...' }
+      default     { ("server up (HTTP " + $code + ") ...") }
     }
     if ($Plain) { Start-Sleep -Milliseconds 500; continue }
-    $line = ("    {0} {1} {2,3}s/{3}s  {4}" -f $sp, $bar, $el, $BootTimeoutSec, $st).PadRight(84)
-    Write-Host ("`r" + $line) -NoNewline -ForegroundColor DarkCyan
+    if ($script:VT) { Write-Host ("`r    {0} " -f $sp) -NoNewline -ForegroundColor DarkCyan }
+    else { Write-Host ("`r    {0} " -f $sp) -NoNewline -ForegroundColor DarkCyan }
+    Out-Bar (Bar-Str $n $barW)
+    Write-Host (" {0,3}s/{1}s  {2}" -f $el, $BootTimeoutSec, $st.PadRight(28)) -NoNewline -ForegroundColor DarkCyan
     Start-Sleep -Milliseconds 250
   }
 }
@@ -761,7 +946,7 @@ if ($up) {
   Info 're-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)'
 }
 Write-Host ''
- $HW = 62
+ $HW = 58
 P ("  {0}{1}{2}" -f $S.tl, ($S.d * $HW), $S.tr) Cyan
  $hdr = ' HOW EVERYONE RUNS THE SIM (VS Code) '
 P ("  {0} {1}{2}{3} {4}" -f $S.v, $S.d, $hdr, ($S.d * ($HW - 2 - $hdr.Length)), $S.v) Cyan
@@ -771,9 +956,9 @@ P ("  {0} {1}{2}{3} {4}" -f $S.v, $S.d, $hdr, ($S.d * ($HW - 2 - $hdr.Length)), 
   @('3.', 'python run_simulator.py', 'Yellow'),
   @('4.', 'open http://127.0.0.1:5000     (Ctrl+C in the terminal stops it)', 'Gray')
 )
-foreach ($l in $how) { P ("  {0} {1} {2,-56} {3}" -f $S.v, $l[0], $l[1], $S.v) $l[2] }
-P ("  {0} {1,-58} {2}" -f $S.v, 'one instance at a time - a 2nd start prints a friendly message', $S.v) DarkCyan
-P ("  {0} {1,-58} {2}" -f $S.v, 'viewer-only, no Java:  python app.py', $S.v) DarkCyan
+foreach ($l in $how) { P ("  {0} {1} {2,-54} {3}" -f $S.v, $l[0], $l[1], $S.v) $l[2] }
+P ("  {0} {1,-56} {2}" -f $S.v, 'one instance at a time - a 2nd start prints a friendly message', $S.v) DarkCyan
+P ("  {0} {1,-56} {2}" -f $S.v, 'viewer-only, no Java:  python app.py', $S.v) DarkCyan
 P ("  {0}{1}{2}" -f $S.bl, ($S.d * $HW), $S.br) Cyan
 Write-Host ''
 Info ("full log: " + $LogFile + "   boot log: " + $BootOut + " / " + $BootErr)
@@ -781,13 +966,13 @@ Info ("full log: " + $LogFile + "   boot log: " + $BootOut + " / " + $BootErr)
 } catch {
   # ---------------------------- failure screen -------------------------------
   Clear-Line
-  if ($script:StepNo -gt 0 -and ($script:Report | Where-Object { $_.N -eq $script:StepNo }).Count -eq 0) {
+  if ($script:StepNo -gt 0 -and (@($script:Report | Where-Object { $_.N -eq $script:StepNo })).Count -eq 0) {
     $el = ((Get-Date) - $script:StepT0).TotalSeconds
     [void]$script:Report.Add([pscustomobject]@{ N = $script:StepNo; T = $script:t_stepName; S = 'fail'; Secs = ('{0:0}' -f $el) })
   }
   Show-Report
   Write-Host ''
-  Write-Host ("    SETUP FAILED  -  read the [FAIL] line above for the exact fix  ") -ForegroundColor White -BackgroundColor DarkRed
+  Write-Host ('    SETUP FAILED  -  read the [FAIL] line above for the exact fix  ') -ForegroundColor White -BackgroundColor DarkRed
   Log ("SETUP FAILED: " + $_.Exception.Message)
   $w = 62
   P ("  {0}{1}{2}" -f $S.tl, ($S.d * $w), $S.tr) Red

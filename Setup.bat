@@ -14,7 +14,7 @@ REM  Setup.bat -ReuseVenv           keep existing .venv (fast re-run)
 REM  Setup.bat -ViewerOnly          verify viewer-only mode instead
 REM  Setup.bat -SkipFrontend        skip the npm build
 REM  Setup.bat -NoSmoke             skip import smoke tests + warm-up
-REM  Setup.bat -Plain               no colors/spinners (weird terminals)
+REM  Setup.bat -Plain               no colors/spinners/art (weird terminals)
 REM  Setup.bat -BootTimeoutSec 600  more time for slow machines
 REM
 REM  Safe to re-run anytime - Setup stops any running sim first.
