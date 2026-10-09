@@ -3,9 +3,23 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import MissionHeader from '../header/MissionHeader.jsx';
 import WorkspacePages from '../../routes/WorkspacePages.jsx';
 import { telemetryStore } from '../../services/telemetryStore.js';
+import { useTelemetry } from '../../hooks/useTelemetry.js';
 import './DashboardLayout.css';
 import './DashboardLayout.layout.css';
 import './DashboardLayout.glass.css';
+// Bare eye-mode mirror of the Pointing card's link dots. Identical
+// .quaternion-lights markup (pixel-identical, no wrapper, no background),
+// parked at the card's screen spot. Lives outside the sliding section so
+// rail transforms/opacity can't touch it. Same store subscription as the
+// header clock -- no extra fetch.
+function ClearDots({ configuration, clear }) {
+  const { data } = useTelemetry();
+  if (!clear || configuration?.pointing_strategy === 'legacy') return null;
+  const status = data.custom_pointing_status || 'red';
+  const isSitl = data.mode === 'FIRMWARE_SITL' || data.ads_mode !== undefined;
+  const label = (isSitl ? 'Firmware link: ' : 'Quaternion command: ') + status;
+  return <span className="quaternion-lights clear-dots" role="status" aria-label={label}>{['red', 'green', 'blue', 'yellow'].map(color => <i key={color} data-color={color} className={status === color ? 'lit' : ''} />)}</span>;
+}
 export default function DashboardLayout({
   configuration
 }) {
@@ -65,5 +79,5 @@ export default function DashboardLayout({
     const timer = clear ? setTimeout(() => setSuspended(true), 500) : null;
     return () => { clearTimeout(timer); document.body.classList.remove('mission-clear-active'); };
   }, [clear]);
-  return <><MissionHeader active={active} onTabChange={setActive} clear={clear} onClearChange={setClear} configuration={configuration} /><section className={'mission-dashboard' + (clear ? ' mission-clear-view' : '')} id="mission-dashboard" data-tab={active}><WorkspacePages active={active} configuration={configuration} suspended={suspended} /></section></>;
+  return <><MissionHeader active={active} onTabChange={setActive} clear={clear} onClearChange={setClear} /><ClearDots configuration={configuration} clear={clear} /><section className={'mission-dashboard' + (clear ? ' mission-clear-view' : '')} id="mission-dashboard" data-tab={active}><WorkspacePages active={active} configuration={configuration} suspended={suspended} /></section></>;
 }
