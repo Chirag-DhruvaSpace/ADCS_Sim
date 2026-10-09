@@ -1,0 +1,9 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.live-chart { margin:10px 0 0; }
+.live-chart canvas { width:100%; height:100px; display:block; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.chart-legend { display:flex; justify-content:flex-end; gap:12px; font-size:.73em; color:#abc6d8; }
+.chart-legend span::before { content:''; display:inline-block; width:6px; height:6px; background:var(--series); border-radius:50%; margin-right:5px; }
+.live-chart { margin-top:5px; }
+
+

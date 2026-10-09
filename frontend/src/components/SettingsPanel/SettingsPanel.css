@@ -1,0 +1,62 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+/* The existing settings dialog and its GSAP transitions retain their styles. */
+
+
+.settings-tabs { display: flex; gap: 4px; margin: 8px 0; }
+.settings-tabs button { flex: 1; padding: 7px; color: white; background: #263649; border: 0; cursor: pointer; }
+.settings-tabs button[aria-selected="true"] { background: #365f8c; }
+.settings-content[hidden] { display: none; }
+#settings-panel {
+      position: fixed; inset: 0 0 0 auto; width: min(390px, 100vw); height: 100dvh;
+      max-height: none; overflow-y: auto;
+      background: rgba(16, 21, 28, 0.96); color: #cfd8e3;
+      border: 1px solid #2a3443; border-radius: 10px;
+      padding: 10px 14px 14px; z-index: 1500; display: block; font-size: 12px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+      transform: translateX(105%); opacity: 0; pointer-events: none;
+      transition: transform .24s cubic-bezier(.2,.8,.2,1), opacity .18s ease;
+      /* Slim themed scrollbar (thin style for Firefox; webkit rules below) */
+      scrollbar-width: thin; scrollbar-color: #33415599 transparent;
+    }
+#settings-panel.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
+#settings-panel::-webkit-scrollbar { width: 8px; }
+#settings-panel::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 4px;
+    }
+#settings-panel::-webkit-scrollbar-thumb {
+      background: #33415599;            /* dark slate, blends with the panel */
+      border-radius: 4px;
+    }
+#settings-panel::-webkit-scrollbar-thumb:hover { background: #475569; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#settings-panel::-webkit-scrollbar-corner { background: transparent; }
+#settings-panel .sp-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin: -10px -14px 8px; padding: 10px 14px;
+      background: rgba(127, 183, 255, 0.10);
+      border-bottom: 1px solid #2a3443;
+      border-radius: 10px 10px 0 0;
+      font-size: 13px; font-weight: 600; color: #e6edf5;
+      position: sticky; top: -10px; backdrop-filter: blur(4px);
+    }
+#settings-panel h3.sec {
+      display: flex; align-items: center; gap: 7px;
+      margin: 13px 0 5px; padding: 5px 8px;
+      font: 600 10.5px/1.3 sans-serif; text-transform: uppercase; letter-spacing: 1.3px;
+      color: #e8eef5;
+      background: rgba(255,255,255,0.05);
+      border-left: 3px solid var(--acc, #7fb7ff);
+      border-radius: 4px 3px 3px 4px;
+    }
+#settings-panel h3.sec:first-of-type { margin-top: 2px; }
+#settings-panel h3.sec .ico { font-size: 12px; }
+.set-row { display: flex; align-items: center; justify-content: space-between;
+               margin: 4px 0; gap: 8px; padding: 2px 4px; border-radius: 4px; }
+.set-row:hover { background: rgba(127,183,255,0.07); }
+.set-row label { flex: 1; color: #9aa4b2; }
+.set-row input[type=range] { width: 110px; }
+.set-row .val { width: 38px; text-align: right; color: #7fb7ff; font-family: monospace; }
+.set-row select, .set-row input[type=checkbox] { cursor: pointer; }
+.set-row select { padding: 2px; background: #1a222e; color: #cfd8e3; border: 1px solid #2a3443; border-radius: 3px; }
+

@@ -1,0 +1,23 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-overview .mission-bottom { left:calc(var(--mission-edge) + var(--mission-left) + 14px); right:calc(var(--mission-edge) + var(--mission-right) + 14px); display:block; }
+#mission-page-overview .mission-bottom { top:var(--mission-top); bottom:24px; pointer-events:none; }
+#mission-page-overview .mission-bottom { top:82px;bottom:auto; }
+#mission-page-overview .mission-bottom { top:84px;bottom:auto; }
+#mission-page-overview .context-card { height:auto; }
+#mission-page-overview .context-card.glass { background:transparent;border:0;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:0; }
+#mission-page-overview .context-card.glass::before { display:none; }
+#mission-page-overview .context-card>.mini-world { display:none; }
+#mission-page-overview .solar-strip canvas { height:128px; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-overview .mission-bottom {
+  top:auto;bottom:22px;left:var(--mission-edge);right:auto;
+  width:min(390px,calc(100vw - 2*var(--mission-edge)));height:160px;
+}
+#mission-page-overview .context-card { pointer-events:none; }
+#mission-page-overview .solar-strip canvas { width:100%;height:112px;display:block; }
+#mission-page-overview .context-distances { font-size:.72em;display:flex;justify-content:space-around;gap:8px; }
+#mission-page-overview .model-list>div { flex-direction:row;align-items:baseline; }
+#mission-page-overview .model-list dd { text-align:right;font-size:.83em; }
+#mission-page-overview .rail-left .mini-world canvas { height:125px; }
+#mission-page-overview .rail-left .mini-world figcaption { display:none; }
+#mission-page-overview .mission-bottom { left:calc(var(--mission-edge) + var(--mission-left) + 14px); }

@@ -1,0 +1,17 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+/* Manual controls use the existing .control-panel, .card and .controls rules. */
+
+
+.control-panel {
+      position: fixed; top: 120px; right: 15px;
+      display: flex; flex-direction: column; gap: 10px; z-index: 1000;
+    }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.card {
+      background: #1a1a1a; padding: 12px 15px; border-radius: 10px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3); text-align: center;
+      width: 240px; color: white;
+    }
+.display { font-size: 1.4rem; font-weight: bold; margin-bottom: 8px; color: #4CAF50; }
+.controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+

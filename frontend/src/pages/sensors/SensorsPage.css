@@ -1,0 +1,22 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-sensors .rail-left { gap:12px; }
+#mission-page-sensors .rail-right { bottom:310px; }
+#mission-page-sensors .mission-bottom { left:calc(var(--mission-edge) + var(--mission-left) + 12px); display:block; }
+#mission-page-sensors .rail-right .vector-pair { grid-template-columns:1fr 1fr; gap:6px; }
+#mission-page-sensors .rail-right .vector-pair span { padding:7px; font-size:.69em; }
+#mission-page-sensors .rail-right .mini-world canvas { height:175px; }
+#mission-page-sensors .rail-right .sensor-table { font-size:.8em; }
+#mission-page-sensors .rail-right .sensor-table th,#mission-page-sensors .rail-right .sensor-table td { padding:5px; }
+#mission-page-sensors .rail-right .mini-world canvas { height:145px; }
+#mission-page-sensors .rail-right .metric-highlight { padding:7px 9px; margin-top:7px; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-sensors .rail-right .vector-pair { margin-top:8px; }
+#mission-page-sensors .gps-card .mini-world canvas { height:125px; }
+#mission-page-sensors .vector-sensor-card .live-chart canvas { height:65px; }
+#mission-page-sensors .vector-sensor-card .live-chart figcaption { display:none; }
+#mission-page-sensors .rail-right .mini-world canvas { height:115px; }
+#mission-page-sensors .rail-right .mini-world figcaption { display:none; }
+#mission-page-sensors .estimator-card .mini-world figcaption { display:none; }
+#mission-page-sensors .estimator-card .vector-pair span { padding:5px 6px; }
+#mission-page-sensors .estimator-card .estimator-metric { width:85px;height:85px; }
+#mission-page-sensors .estimator-card .live-chart canvas { height:42px; }

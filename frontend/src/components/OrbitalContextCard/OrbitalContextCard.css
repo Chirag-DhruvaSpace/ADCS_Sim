@@ -1,0 +1,21 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.context-card .mini-world canvas { height:180px; }
+.context-distances { display:flex; justify-content:space-around; gap:8px; color:#a8bfd1; font-size:.75em; margin-top:7px; flex-wrap:wrap; }
+.context-distances b { color:#e7f6ff; font-weight:500; }
+.context-card { height:100%; background:none; border:0; box-shadow:none; backdrop-filter:none; -webkit-backdrop-filter:none; pointer-events:none; display:flex; flex-direction:column; padding:0; }
+.context-card>.card-heading { justify-content:center; opacity:.75; margin:0; }
+.context-card>.mini-world { flex:1; min-height:0; }
+.context-card>.mini-world canvas { height:100%; }
+.context-card>.mini-world figcaption { position:absolute; bottom:0; left:0; right:0; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.solar-strip .mini-world { margin:0; }
+.solar-strip figcaption { font-size:.63em; }
+.context-distances { order:0; }
+.context-card { height:auto;overflow:visible; }
+.context-card>.card-heading { display:none; }
+.solar-strip { width:100%; }
+.solar-strip figcaption { text-align:center; }
+.context-distances { order:2;justify-content:center;margin:0; }
+.context-distances span { padding:3px 10px;border:1px solid #a6d7f31c;border-radius:999px;background:#0b24331c; }
+
+

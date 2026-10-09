@@ -1,0 +1,282 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+/* Two aligned telemetry stacks. All cards retain their original live bindings. */
+@media (min-width:801px) {
+  .mission-dashboard[data-tab=sensors],
+  .mission-dashboard[data-tab=pointing] {
+    --mission-left:clamp(350px,29vw,560px);
+    --mission-right:clamp(350px,29vw,560px);
+    --mission-gap:8px;
+  }
+  #mission-page-sensors .mission-rail,
+  #mission-page-pointing .mission-rail {
+    bottom:9px;
+    overflow-y:auto;
+    overflow-x:hidden;
+    gap:8px;
+    scrollbar-width:none;
+  }
+  #mission-page-sensors .mission-rail::-webkit-scrollbar,
+  #mission-page-pointing .mission-rail::-webkit-scrollbar { display:none; }
+}
+#mission-page-sensors .mission-card,
+#mission-page-pointing .mission-card { padding:8px 10px; }
+#mission-page-sensors .card-heading,
+#mission-page-pointing .card-heading { margin-bottom:4px;padding-bottom:4px; }
+#mission-page-sensors .metric-list>div,
+#mission-page-pointing .metric-list>div { padding:2px 0; }
+#mission-page-sensors .sensor-table th,
+#mission-page-sensors .sensor-table td,
+#mission-page-pointing .sensor-table th,
+#mission-page-pointing .sensor-table td { padding:3px 3px; }
+#mission-page-sensors .mini-world figcaption,
+#mission-page-pointing .mini-world figcaption,
+#mission-page-sensors .live-chart figcaption,
+#mission-page-pointing .live-chart figcaption { display:none; }
+
+/* Sensor column: attitude belief, GPS, gyro, magnetometer. */
+#mission-page-sensors .belief-card { display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:3px 8px;align-items:center; }
+#mission-page-sensors .belief-card .card-heading { grid-column:1/-1; }
+#mission-page-sensors .belief-card .vector-pair { grid-column:1;grid-row:2;margin:0;gap:3px; }
+#mission-page-sensors .belief-card .vector-pair span { padding:3px 5px;font-size:.68em;line-height:1.2; }
+#mission-page-sensors .belief-card .vector-pair b { margin-top:2px;font-size:1.04em;white-space:normal; }
+#mission-page-sensors .belief-card .mini-world { grid-column:2;grid-row:2;margin:0; }
+#mission-page-sensors .belief-card .mini-world canvas { height:91px; }
+#mission-page-sensors .belief-card .metric-list { grid-column:1/-1;grid-row:3;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.72em; }
+#mission-page-sensors .belief-card .metric-list>div { border:0; }
+#mission-page-sensors .gps-card .gps-layout { grid-template-columns:1.12fr .88fr;gap:5px; }
+#mission-page-sensors .gps-card .gps-layout .metric-list { font-size:.77em; }
+#mission-page-sensors .gps-card .gps-layout .metric-list>div { padding:2px 0; }
+#mission-page-sensors .gps-card .mini-world canvas { height:130px; }
+#mission-page-sensors .gps-card>.metric-list { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;font-size:.7em;margin-top:3px; }
+#mission-page-sensors .gps-card>.metric-list>div { display:block;padding:3px 4px; }
+#mission-page-sensors .gps-card>.metric-list dd { text-align:left;white-space:nowrap; }
+#mission-page-sensors .gps-card .metric-highlight { margin-top:4px;padding:4px 6px; }
+#mission-page-sensors .gps-card #gps-links-status { margin:3px 0 0;font-size:.7em; }
+#mission-page-sensors .vector-sensor-card .sensor-split { display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr);gap:5px;align-items:center; }
+#mission-page-sensors .vector-sensor-card .sensor-table { font-size:.72em; }
+#mission-page-sensors .vector-sensor-card .sensor-table th,
+#mission-page-sensors .vector-sensor-card .sensor-table td { padding:3px 2px; }
+#mission-page-sensors .vector-sensor-card .live-chart { margin:0;min-width:0; }
+#mission-page-sensors .vector-sensor-card .live-chart canvas { height:63px; }
+#mission-page-sensors .vector-sensor-card .chart-legend { gap:4px;font-size:.64em; }
+
+/* Sensor column: estimate error, solar sensors, then trend and Euler belief. */
+#mission-page-sensors .attitude-error-card .estimator-metric { padding:4px 7px; }
+#mission-page-sensors .attitude-error-card .estimator-metric b { font-size:1.35em; }
+#mission-page-sensors .attitude-error-card .quiet { margin:2px 0 0;font-size:.7em; }
+#mission-page-sensors .sun-card .sun-meta { margin-bottom:3px; }
+#mission-page-sensors .sun-card .table-scroll { overflow:visible; }
+#mission-page-sensors .sun-card .vector-pair { grid-template-columns:1fr 1fr;gap:4px;margin-top:4px; }
+#mission-page-sensors .sun-card .vector-pair span { padding:4px;font-size:.74em; }
+#mission-page-sensors .sun-card .vector-pair b { margin-top:2px; }
+#mission-page-sensors .sun-card .metric-highlight { padding:4px 6px;margin-top:4px; }
+#mission-page-sensors .sun-card .mini-world canvas { height:132px; }
+#mission-page-sensors .attitude-trend-card { display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:5px 8px;align-items:center; }
+#mission-page-sensors .attitude-trend-card .card-heading { grid-column:1/-1; }
+#mission-page-sensors .attitude-trend-card .live-chart { margin:0;min-width:0; }
+#mission-page-sensors .attitude-trend-card .live-chart canvas { height:71px; }
+#mission-page-sensors .attitude-trend-card .chart-legend { font-size:.65em; }
+#mission-page-sensors .attitude-trend-card .sensor-table { font-size:.7em; }
+#mission-page-sensors .attitude-trend-card .sensor-table th,
+#mission-page-sensors .attitude-trend-card .sensor-table td { padding:3px 2px; }
+
+/* Pointing: each column is a single compact vertical telemetry stack. */
+#mission-page-pointing .position-body { grid-template-columns:105px minmax(0,1fr);gap:6px; }
+#mission-page-pointing .position-body .metric-list { font-size:.76em; }
+#mission-page-pointing .position-body .metric-list>div { display:block;padding:2px 0; }
+#mission-page-pointing .position-body .metric-list dd { text-align:left; }
+#mission-page-pointing .position-body .mini-world { margin:0; }
+#mission-page-pointing .position-body .mini-world canvas { height:140px; }
+#mission-page-pointing .position-vectors { margin-top:4px;font-size:.68em; }
+#mission-page-pointing .position-vectors>div { display:flex;justify-content:space-between;gap:5px;padding:1px 0; }
+#mission-page-pointing .position-vectors b { font-weight:500;text-align:right;overflow-wrap:anywhere; }
+#mission-page-pointing .position-card>.metric-highlight { padding:4px 6px;margin-top:4px; }
+#mission-page-pointing .pointing-graph-card .card-heading { margin-bottom:2px;padding-bottom:2px; }
+#mission-page-pointing .pointing-graph-card .live-chart { margin:0; }
+#mission-page-pointing .pointing-graph-card .live-chart canvas { height:55px; }
+#mission-page-pointing .pointing-graph-card .chart-legend { font-size:.68em;gap:7px; }
+#mission-page-pointing .pointing-controls .quiet { margin:3px 0 0;font-size:.66em; }
+#mission-page-pointing .pointing-controls select { padding:5px 7px; }
+#mission-page-pointing .pointing-controls .camera-field { margin-top:4px; }
+#mission-page-pointing .attitude-layout { grid-template-columns:minmax(0,1.35fr) minmax(0,.65fr);gap:5px;align-items:center; }
+#mission-page-pointing .attitude-layout .sensor-table { font-size:.74em; }
+#mission-page-pointing .attitude-layout .mini-world { margin:0; }
+#mission-page-pointing .attitude-layout .mini-world canvas { height:90px; }
+#mission-page-pointing .attitude-layout~.metric-highlight { padding:4px 6px;margin-top:3px; }
+#mission-page-pointing .attitude-layout~.quiet { margin:2px 0 0;font-size:.66em; }
+#mission-page-pointing .actuator-card .mode-status { margin:0 0 3px;font-size:.72em; }
+#mission-page-pointing #mission-actuators { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 8px; }
+#mission-page-pointing .actuator-line { padding:2px 0;gap:1px;font-size:.76em; }
+#mission-page-pointing .actuator-line span { font-size:.9em; }
+#mission-page-pointing .actuator-line b { font-size:1em;overflow-wrap:anywhere; }
+#mission-page-pointing .actuator-card details { margin-top:4px; }
+#mission-page-pointing .disturbance-card .metric-list { font-size:.76em; }
+#mission-page-pointing .disturbance-card details { margin-top:3px;font-size:.72em; }
+@media (min-width:801px) and (max-height:830px) {
+  #mission-page-sensors .mission-rail { gap:5px; }
+  #mission-page-sensors .mission-card { padding:5px 8px; }
+  #mission-page-sensors .card-heading { margin-bottom:2px;padding-bottom:2px; }
+  #mission-page-sensors .gps-card>.metric-list>div { padding:1px 3px; }
+  #mission-page-sensors .vector-sensor-card .sensor-table th,
+  #mission-page-sensors .vector-sensor-card .sensor-table td { padding:2px; }
+  #mission-page-sensors .belief-card .mini-world canvas { height:74px; }
+  #mission-page-sensors .gps-card .mini-world canvas { height:106px; }
+  #mission-page-sensors .vector-sensor-card .live-chart canvas { height:49px; }
+  #mission-page-sensors .sun-card .mini-world canvas { height:100px; }
+  #mission-page-sensors .attitude-trend-card .live-chart canvas { height:55px; }
+  #mission-page-pointing .position-body .mini-world canvas { height:112px; }
+  #mission-page-pointing .pointing-graph-card .live-chart canvas { height:43px; }
+  #mission-page-pointing .attitude-layout .mini-world canvas { height:72px; }
+}
+@media (max-width:800px) {
+  #mission-page-sensors .belief-card { grid-template-columns:minmax(0,1fr) 112px; }
+  #mission-page-sensors .attitude-trend-card { grid-template-columns:1fr 1fr; }
+  #mission-page-pointing .position-body { grid-template-columns:105px minmax(0,1fr); }
+}
+
+/* Slightly larger reading size with narrower, bottom-anchored telemetry stacks. */
+:root { --mission-font:clamp(14px,1.04vw,21px); }
+@media (min-width:801px) {
+  .mission-dashboard[data-tab=sensors],.mission-dashboard[data-tab=pointing] {
+    --mission-left:clamp(350px,29vw,560px);
+    --mission-right:clamp(350px,29vw,560px);
+  }
+  #mission-page-sensors .mission-rail,#mission-page-pointing .mission-rail { justify-content:flex-start; }
+  #mission-page-sensors .mission-rail>.mission-card:first-child,#mission-page-pointing .mission-rail>.mission-card:first-child { margin-top:auto; }
+}
+#mission-page-sensors .mission-card,#mission-page-pointing .mission-card { font-size:1.06em; }
+#mission-page-sensors .belief-card .vector-pair span { font-size:.75em; }
+#mission-page-sensors .gps-card .gps-layout .metric-list { font-size:.81em; }
+#mission-page-sensors .gps-card>.metric-list { font-size:.76em; }
+#mission-page-sensors .gps-card #gps-links-status { font-size:.74em; }
+#mission-page-sensors .vector-sensor-card .sensor-table { font-size:.77em; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-sensors .attitude-trend-card .sensor-table { font-size:.82em; }
+#mission-page-pointing .position-body .metric-list { font-size:.82em; }
+#mission-page-pointing .position-vectors { font-size:.73em; }
+#mission-page-pointing .attitude-layout .sensor-table { font-size:.78em; }
+#mission-page-pointing .disturbance-card .metric-list { font-size:.8em; }
+#mission-page-sensors .attitude-error-card .estimator-metric[data-severity=good] b { color:#52e9af; }
+#mission-page-sensors .attitude-error-card .estimator-metric[data-severity=warn] b { color:#ffd06a; }
+#mission-page-sensors .attitude-error-card .estimator-metric[data-severity=bad] b { color:#ff777b; }
+#mission-page-sensors .attitude-error-card .attitude-trend-card { display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:6px 8px;align-items:center;border-top:1px solid #d7edff27;margin-top:8px;padding-top:8px; }
+#mission-page-sensors .attitude-error-card .attitude-trend-card h3 { grid-column:1/-1;font-size:.81em;font-weight:600;color:#cee8f8;margin:0; }
+#mission-page-sensors .attitude-error-card .attitude-trend-card .live-chart canvas { height:75px; }
+#mission-page-sensors .attitude-error-card .attitude-trend-card .sensor-table { font-size:.78em; }
+
+/* The header and instruments move independently, using composited transforms. */
+.mission-tabs .tab-indicator { transition:transform 550ms cubic-bezier(.16,1,.3,1),background 400ms ease;will-change:transform; }
+.mission-header { animation:mission-header-arrive 600ms cubic-bezier(.16,1,.3,1) both; }
+@keyframes mission-header-arrive { from { opacity:0;transform:translate3d(0,-22px,0); } to { opacity:1;transform:translate3d(0,0,0); } }
+.mission-dashboard .mission-rail { transition:transform 520ms cubic-bezier(.16,1,.3,1),opacity 420ms ease;will-change:transform,opacity; }
+.mission-dashboard.mission-clear-view .mission-page:not([hidden]) { display:block!important; }
+.mission-dashboard.mission-clear-view .mission-page:not([hidden]) .rail-left { transform:translate3d(-110%,0,0);opacity:0;pointer-events:none; }
+.mission-dashboard.mission-clear-view .mission-page:not([hidden]) .rail-right { transform:translate3d(110%,0,0);opacity:0;pointer-events:none; }
+.mission-dashboard.mission-clear-view #mission-page-overview .mission-bottom { transform:translate(-50%,120%);opacity:0;pointer-events:none; }
+.mission-clear .eye-slash { opacity:0;transition:opacity 200ms ease; }
+.mission-clear[aria-pressed=true] .eye-slash { opacity:1; }
+.pointing-controls select { color-scheme:dark;background:linear-gradient(135deg,rgba(106,167,205,.2),rgba(9,27,44,.49))!important;border:1px solid #bbebff57!important;backdrop-filter:blur(10px);transition:border-color 260ms,box-shadow 260ms,transform 260ms; }
+.pointing-controls select:focus,.pointing-controls select:hover { border-color:#c6f0ffb8!important;box-shadow:0 0 0 3px #82d7ff1c; }
+.pointing-controls select:active { transform:scale(.985); }
+.pointing-controls select option { color:#eaf6ff;background:#122c3f; }
+.pointing-controls .glass-select { position:relative;width:100%;margin-top:4px; }
+.pointing-controls .glass-native-select { position:absolute!important;inset:0!important;width:100%!important;height:100%!important;opacity:0!important;pointer-events:none!important; }
+.pointing-controls .glass-select-trigger { width:100%;min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:11px;color:#eaf7ff;font:inherit;text-align:left;cursor:pointer; }
+.pointing-controls .glass-select-trigger svg { width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round; }
+.glass-select-menu { position:fixed;z-index:80;overflow:auto;padding:5px;box-shadow:0 18px 42px #0008,inset 0 1px #ffffff40;background:linear-gradient(145deg,rgba(83,127,156,.72),rgba(7,26,42,.89))!important;backdrop-filter:blur(24px) saturate(145%);-webkit-backdrop-filter:blur(24px) saturate(145%); }
+.glass-select-menu[hidden] { display:none!important; }
+.glass-select-option { display:block;width:100%;padding:8px 10px;border:0;border-radius:9px;background:transparent;color:#e5f4ff;font:14px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:left;cursor:pointer; }
+.glass-select-option:hover,.glass-select-option:focus-visible { background:#b4e5ff25;outline:none; }
+.glass-select-option[aria-selected=true] { background:#9cdbfc30;color:#fff; }
+.pointing-controls.mode-changed,.pointing-controls.camera-changed { animation:control-pulse 520ms cubic-bezier(.16,1,.3,1); }
+@keyframes control-pulse { 0% { border-color:#8de6ffab;box-shadow:0 0 0 0 #8de6ff3b; } 100% { box-shadow:0 0 0 12px transparent; } }
+
+/* Large glass settings sheet, with an independent blurred backdrop. */
+.mission-settings-backdrop { position:fixed;inset:0;z-index:59;background:rgba(1,8,20,.35);backdrop-filter:blur(9px) saturate(75%);-webkit-backdrop-filter:blur(9px) saturate(75%);opacity:0;pointer-events:none;transition:opacity 300ms ease; }
+.mission-settings-backdrop.open { opacity:1;pointer-events:auto; }
+#settings-panel.mission-settings { inset:50% auto auto 50%!important;translate:none!important;transform:translate(-50%,-50%)!important;width:min(65vw,1120px)!important;height:auto!important;min-height:min(52dvh,540px)!important;max-height:min(78dvh,calc(100dvh - 64px))!important;padding:22px 26px!important;background:linear-gradient(135deg,rgba(93,145,178,.24),rgba(9,27,44,.62) 48%,rgba(25,53,74,.52))!important;border:1px solid #dbf2ff73!important;border-radius:24px!important;box-shadow:inset 0 1px 0 #ffffff50,0 30px 90px #0008!important;backdrop-filter:blur(25px) saturate(145%)!important;-webkit-backdrop-filter:blur(25px) saturate(145%)!important;overflow:auto; }
+#settings-panel.mission-settings.open { animation:none!important; }
+#settings-panel.mission-settings .settings-tabs { position:sticky;top:0;z-index:2;background:rgba(15,39,59,.73);backdrop-filter:blur(15px);border:1px solid #d6eeff37;border-radius:14px;padding:4px; }
+#settings-panel.mission-settings .sp-head { position:sticky;top:-22px;z-index:3;margin:-22px -26px 14px;padding:17px 25px;background:linear-gradient(125deg,rgba(119,184,221,.24),rgba(6,27,44,.74));border-bottom:1px solid #d8edff4b;border-radius:24px 24px 0 0;backdrop-filter:blur(18px);font-size:1.1em; }
+#settings-panel.mission-settings #settings-close { display:grid;place-items:center;width:34px;height:34px;border:1px solid #e5f4ff43;border-radius:10px;background:#b8e6ff13;transition:background 180ms,transform 180ms; }
+#settings-panel.mission-settings #settings-close:hover { background:#b8e6ff30;transform:scale(1.05); }
+#settings-panel.mission-settings .settings-tabs button { border-radius:10px;transition:background 240ms ease,color 240ms ease,transform 240ms ease; }
+#settings-panel.mission-settings .settings-tabs button { background:transparent;color:#cbdfee;font:inherit;padding:9px 12px; }
+#settings-panel.mission-settings .settings-tabs button[aria-selected=true] { background:linear-gradient(135deg,#a3dfff33,#6bcbfc13);color:#f2fbff;box-shadow:inset 0 1px #ffffff36; }
+#settings-panel.mission-settings .settings-content:not([hidden]) { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 18px;align-content:start;padding:15px 2px; }
+#settings-panel.mission-settings .settings-content h3.sec { grid-column:1/-1;margin:10px 0 0; }
+#settings-panel.mission-settings .settings-content p { grid-column:1/-1; }
+#settings-panel.mission-settings .set-row { min-width:0;background:rgba(153,211,244,.07);border:1px solid #d5eeff1a;border-radius:11px;padding:8px 10px; }
+#settings-panel.mission-settings .set-row label { color:#d2e4f1; }
+#settings-panel.mission-settings h3.sec { font-size:.77em;letter-spacing:.08em;background:linear-gradient(100deg,#b7e7ff20,transparent);border-left:2px solid var(--acc,#8acaff);border-radius:7px; }
+#settings-panel.mission-settings select,#settings-panel.mission-settings input[type=number] { min-width:0;max-width:100%;padding:6px 8px;background:linear-gradient(135deg,#8fcfff24,#071c30a8);border:1px solid #ccecff55;border-radius:9px;color:#f0faff;color-scheme:dark;font:inherit; }
+#settings-panel.mission-settings select option { background:#173147;color:#e7f6ff; }
+#settings-panel.mission-settings input[type=range] { max-width:45%; }
+#settings-panel.mission-settings input[type=checkbox] { width:17px;height:17px; }
+#settings-panel.mission-settings input,#settings-panel.mission-settings select,#settings-panel.mission-settings button { accent-color:#82dfff; }
+@media (max-width:800px) { #settings-panel.mission-settings { width:calc(100vw - 20px)!important;height:calc(100dvh - 32px)!important;padding:14px!important; } #settings-panel.mission-settings .settings-content:not([hidden]) { grid-template-columns:1fr; } }
+@media (prefers-reduced-motion:reduce) { .mission-header,.pointing-controls.mode-changed,.pointing-controls.camera-changed { animation:none; } .mission-dashboard .mission-rail,.mission-tabs .tab-indicator,.mission-settings-backdrop { transition:none; } }
+
+/* Keep the scene interactive beneath the read-only overview instruments. */
+#mission-page-overview .mission-card { pointer-events:none; }
+
+/* Stable actuator columns prevent telemetry updates from changing card height. */
+#mission-page-pointing #mission-actuators { grid-template-columns:minmax(0,1fr);gap:1px; }
+#mission-page-pointing .actuator-line { display:grid;grid-template-columns:58px repeat(3,minmax(0,1fr));align-items:center;gap:4px;padding:3px 0;min-width:0; }
+#mission-page-pointing .actuator-line span { white-space:nowrap; }
+#mission-page-pointing .actuator-line b { min-width:0;white-space:nowrap;overflow:hidden;text-overflow:clip;font-size:.78em;font-variant-numeric:tabular-nums; }
+
+/* Fixed sheet dimensions and full-size controls on every settings page. */
+#settings-panel.mission-settings { height:min(72dvh,740px)!important;min-height:0!important;overflow-y:auto;scrollbar-width:none; }
+#settings-panel.mission-settings::-webkit-scrollbar { display:none; }
+#settings-panel.mission-settings .settings-content:not([hidden]) { padding-bottom:18px; }
+#settings-panel.mission-settings .set-row { display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,42%) auto;min-height:46px;gap:8px; }
+#settings-panel.mission-settings .set-row label { font-size:.9em;line-height:1.25;cursor:pointer; }
+#settings-panel.mission-settings .set-row input[type=range] { grid-column:2;width:100%!important;max-width:none!important;height:28px;margin:0;cursor:pointer;touch-action:none; }
+#settings-panel.mission-settings .set-row .val { grid-column:3;min-width:40px;color:#a6dfff;font-size:.83em; }
+#settings-panel.mission-settings .set-row input[type=checkbox] { grid-column:3;width:38px;height:23px;margin:0;cursor:pointer; }
+#settings-panel.mission-settings .set-row input[type=checkbox]::after { width:17px;height:17px;top:2px;left:2px; }
+#settings-panel.mission-settings .set-row input:checked[type=checkbox]::after { transform:translateX(15px); }
+#settings-panel.mission-settings .set-row select { grid-column:2/4;width:100%; }
+#settings-panel.mission-settings .set-row input[type=number] { width:100%; }
+#settings-panel.mission-settings .set-row:has(#mount-position),#settings-panel.mission-settings .set-row:has(#mount-normal) { grid-template-columns:125px minmax(0,1fr); }
+#settings-panel.mission-settings #mount-position,#settings-panel.mission-settings #mount-normal { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;min-width:0; }
+
+.glass-select-menu { scrollbar-width:none;max-height:calc(100dvh - 16px)!important; }
+.glass-select-menu::-webkit-scrollbar { display:none; }
+.glass-select-menu.mode-menu:not([hidden]) { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px; }
+.glass-select-menu.mode-menu .glass-select-option { font-size:12px;padding:7px 8px; }
+
+@media (min-width:801px) and (max-height:830px) {
+  #mission-page-sensors .mission-rail { gap:2px; }
+  #mission-page-sensors .mission-card { padding:3px 8px; }
+  #mission-page-sensors .card-heading { margin-bottom:1px;padding-bottom:1px; }
+  #mission-page-sensors .belief-card .mini-world canvas { height:60px; }
+  #mission-page-sensors .gps-card .mini-world canvas { height:84px; }
+  #mission-page-sensors .vector-sensor-card .live-chart canvas { height:40px; }
+  #mission-page-sensors .sun-card .mini-world canvas { height:96px; }
+  #mission-page-sensors .attitude-error-card .attitude-trend-card .live-chart canvas { height:56px; }
+}
+@media (min-width:801px) and (max-width:1150px) {
+  :root { --mission-font:clamp(13px,1.27vw,15px); }
+  .mission-dashboard[data-tab=sensors],.mission-dashboard[data-tab=pointing] { --mission-left:clamp(285px,33vw,355px);--mission-right:clamp(285px,33vw,355px); }
+  #mission-page-sensors .gps-card .gps-layout { grid-template-columns:1fr .8fr; }
+  #mission-page-sensors .vector-sensor-card .sensor-table { font-size:.72em; }
+  #mission-page-pointing .actuator-line { grid-template-columns:49px repeat(3,minmax(0,1fr)); }
+  #mission-page-pointing .actuator-line b { font-size:.78em; }
+}
+@media (min-width:801px) and (max-width:1150px) {
+  .mission-dashboard[data-tab=sensors],.mission-dashboard[data-tab=pointing] { top:var(--mission-top);bottom:0;overflow-y:auto;overflow-x:hidden;padding:0 18px 10px;scrollbar-width:none;box-sizing:border-box; }
+  .mission-dashboard[data-tab=sensors]::-webkit-scrollbar,.mission-dashboard[data-tab=pointing]::-webkit-scrollbar { display:none; }
+  #mission-page-sensors,#mission-page-pointing { position:relative;inset:auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:8px;min-height:calc(100dvh - var(--mission-top) - 10px); }
+  #mission-page-sensors .mission-rail,#mission-page-pointing .mission-rail { position:static;width:100%;max-height:none;overflow:visible;padding:0 0 8px; }
+  #mission-page-sensors .mission-rail>.mission-card:first-child,#mission-page-pointing .mission-rail>.mission-card:first-child { margin-top:0; }
+}
+@media (min-width:2200px) { :root { --mission-font:clamp(20px,.85vw,27px); } .mission-dashboard[data-tab=sensors],.mission-dashboard[data-tab=pointing] { --mission-left:clamp(520px,23vw,700px);--mission-right:clamp(520px,23vw,700px); } }
+@media (max-width:800px) { #settings-panel.mission-settings { height:calc(100dvh - 32px)!important; } #settings-panel.mission-settings .set-row { grid-template-columns:minmax(0,1fr) minmax(100px,42%) auto; } }
+
+
+/* Keep eye-mode panels laid out offscreen so restoration can transition. */
+.mission-dashboard .mission-foot { transition:transform 520ms cubic-bezier(.16,1,.3,1),opacity 420ms ease; }
+.mission-dashboard.mission-clear-view .mission-foot { transform:translate3d(0,120%,0);opacity:0;pointer-events:none; }
+@media(prefers-reduced-motion:reduce) { .mission-dashboard .mission-foot { transition:none; } }

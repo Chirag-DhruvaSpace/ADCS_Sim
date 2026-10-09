@@ -1,0 +1,12 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.launch-screen {position:fixed;inset:0;z-index:10000;background:#030304 url('/assets/loading/black-hole.jpg') center center/cover no-repeat;color:#fff;display:flex;align-items:center;opacity:1;transition:opacity .45s ease;}
+.launch-ready {opacity:0;pointer-events:none;}
+.launch-brand {width:min(34vw,520px);margin-left:7.5vw;}
+.launch-logo {width:100%;height:auto;display:block;object-fit:contain;mix-blend-mode:screen;}
+.launch-progress {height:3px;background:#ffffff24;margin:34px 0 14px;overflow:hidden;}
+.launch-progress>span {display:block;height:100%;background:#fff;box-shadow:0 0 12px #fff8;transition:width .25s ease;}
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.launch-status {display:flex;justify-content:space-between;gap:20px;font:11px system-ui;color:#d1d4db;letter-spacing:.05em;}
+.launch-credit {position:absolute;right:8px;bottom:7px;font:1px 'Courier New',monospace;letter-spacing:.2px;text-transform:lowercase;text-shadow:0 1px 5px #000;}
+@media(max-width:600px){.launch-brand{width:70vw;margin-left:8vw;}.launch-screen{background-position:65% center;}.launch-credit{font-size:.8px;right:6px;bottom:6px;}.launch-status{font-size:10px;}}
+@media(prefers-reduced-motion:reduce){.launch-screen,.launch-progress>span{transition:none;}}

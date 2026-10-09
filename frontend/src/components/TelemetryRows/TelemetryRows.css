@@ -1,0 +1,18 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.model-list>div { flex-direction:column; gap:4px; }
+.model-list dd { text-align:left; font-size:.9em; }
+.health-row { display:flex; align-items:center; gap:9px; padding:12px 0; border-bottom:1px solid #e8f7ff0d; }
+.health-row b { margin-left:auto; font-weight:500; font-size:.9em; }
+.sensor-table { width:100%; border-collapse:collapse; font-size:.85em; font-variant-numeric:tabular-nums; }
+.sensor-table th,.sensor-table td { padding:7px 5px; text-align:right; border-bottom:1px solid #c9ecff0e; white-space:nowrap; }
+.sensor-table th { color:#acbfd0; font-weight:500; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.sensor-table th:first-child,.sensor-table td:first-child { text-align:left; }
+.sensor-table thead { background:#b6dcff09; }
+.sensor-table td[data-used=true] { color:#57e7a9; }
+.actuator-line { display:flex; flex-direction:column; padding:8px 0; gap:4px; border-bottom:1px solid #e1f3ff0e; }
+.actuator-line span { color:var(--mission-muted); font-size:.8em; }
+.actuator-line b { font-weight:500; font-size:.88em; }
+.health-row { padding:8px 0; }
+
+

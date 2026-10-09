@@ -1,0 +1,3 @@
+[pyinstaller40]
+hook-dirs = orekit_jpype._pyinstaller.entry_points:get_hook_dirs
+tests = orekit_jpype._pyinstaller.entry_points:get_PyInstaller_tests

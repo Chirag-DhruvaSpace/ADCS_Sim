@@ -1,0 +1,13 @@
+flask>=3.1,<4
+waitress>=2.1
+requests>=2.31
+numpy>=1.26,<3
+scipy>=1.11
+pyyaml>=6.0
+orekit-jpype>=13.0
+jdk4py>=21
+astropy>=6.0
+pymap3d>=2.9
+matplotlib>=3.8
+trimesh>=4.0
+pytest>=8.0

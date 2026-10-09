@@ -1,0 +1,9 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.gps-layout { display:grid; grid-template-columns:minmax(0, .85fr) minmax(0, 1.15fr); gap:4px; align-items:center; }
+.gps-layout .metric-list { font-size:.85em; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.gps-layout .mini-world canvas { height:180px; }
+.gps-layout .metric-list>div { flex-wrap:wrap; gap:2px; }
+.gps-layout .metric-list dd { margin-left:auto; }
+
+

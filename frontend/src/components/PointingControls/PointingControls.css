@@ -1,0 +1,19 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.camera-field { display:block; font-size:.87em; color:#aec6d6; margin-top:10px; }
+.camera-field span { display:block; margin-top:5px; }
+.pointing-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.pointing-controls .card-heading { grid-column:1 / -1; margin-bottom:0; }
+.pointing-controls>.quiet { grid-column:1 / -1; font-size:.67em; margin:0; }
+.camera-field span { margin:0; }
+.pointing-controls #modeSelect,.pointing-controls #cameraSelect { width:100%; max-width:100%; padding:9px; font-size:1em; height:40px; }
+
+
+
+.quaternion-lights { display:inline-flex;gap:4px;margin-right:7px;vertical-align:middle; }
+.quaternion-lights i { width:5px;height:5px;border-radius:50%;background:var(--light);opacity:.18;transition:opacity .15s; }
+.quaternion-lights [data-color=red] { --light:#ff555c; }
+.quaternion-lights [data-color=green] { --light:#4ce99d; }
+.quaternion-lights [data-color=blue] { --light:#54acff; }
+.quaternion-lights [data-color=yellow] { --light:#ffd65c; }
+.quaternion-lights .lit { opacity:1;box-shadow:0 0 4px var(--light); }

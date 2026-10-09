@@ -1,0 +1,329 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+/* Mission overlay: the Three.js scene always retains the entire viewport. */
+:root { --mission-font:clamp(12px,.84vw,18px); --mission-gap:12px; --mission-top:88px; --mission-edge:18px; --mission-left:clamp(270px,24vw,380px); --mission-right:clamp(310px,27vw,430px); --mission-text:#e7f2fb; --mission-muted:#a0b4c5; }
+html,body { height:100%; overflow:hidden; }
+#viewer-layout,#viewer-layout.settings-open { display:block!important; height:100dvh!important; min-height:0; padding:0; }
+#threeContainer { position:fixed!important; inset:0; width:100vw!important; height:100dvh!important; }
+#instrument-dock,#inspector-dock,#view-controls { display:none!important; }
+#clock,#fps-meter,#feed-meter { display:none!important; }
+#attribution { max-width:calc(100vw - 36px); font-size:8px!important; opacity:.7; }
+.mission-dashboard,.mission-header,.mission-settings { font:var(--mission-font)/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; color:var(--mission-text); font-variant-numeric:tabular-nums; }
+.glass { background:linear-gradient(130deg,rgba(66,95,115,.37),rgba(12,26,37,.73) 58%,rgba(31,50,64,.57)); border:1px solid #c0e2f52b; border-top-color:#d4edff59; border-radius:18px; box-shadow:inset 0 1px 0 #ffffff12,0 8px 30px #0003; backdrop-filter:blur(20px) saturate(135%); -webkit-backdrop-filter:blur(20px) saturate(135%); }
+.live-dot,.health-dot { width:7px; height:7px; border-radius:50%; background:#728391; flex:none; display:inline-block; }
+.live-dot.is-live,.health-dot[data-valid=true] { background:#4beb9a; box-shadow:0 0 10px #4beb9a55; }
+.settings-glyph { width:18px;height:18px;vertical-align:-3px;filter:brightness(0) invert(1);opacity:.92; }
+.mission-dashboard { position:fixed; inset:0; z-index:20; pointer-events:none; }
+.mission-rail { position:absolute; top:var(--mission-top); bottom:24px; width:var(--mission-left); display:flex; flex-direction:column; gap:var(--mission-gap); overflow:auto; scrollbar-width:thin; scrollbar-color:#aac8df44 transparent; padding-bottom:3px; pointer-events:none; }
+.rail-left { left:var(--mission-edge); }
+.rail-right { right:var(--mission-edge); width:var(--mission-right); }
+.mission-card { padding:14px; flex:none; min-width:0; pointer-events:auto; overflow:hidden; }
+.quiet,.mini-world figcaption,.live-chart figcaption { color:var(--mission-muted); font-size:.78em; line-height:1.55; margin:8px 0 0; overflow-wrap:anywhere; }
+.table-scroll { overflow:auto; }
+.sun-meta { display:flex; justify-content:space-between; gap:10px; margin-bottom:10px; font-size:.78em; color:#abc2d2; }
+.mission-bottom { position:absolute; bottom:24px; left:var(--mission-edge); right:var(--mission-edge); display:grid; gap:12px; grid-template-columns:repeat(3,minmax(0,1fr)); pointer-events:none; }
+#settings-panel.mission-settings { position:fixed!important; inset:var(--mission-top) var(--mission-edge) auto auto!important; width:min(390px,calc(100vw - 36px))!important; height:auto!important; max-height:calc(100dvh - 110px)!important; padding:16px!important; border-radius:18px!important; background:#122331ed!important; border:1px solid #b8dfff38!important; backdrop-filter:blur(24px)!important; z-index:60!important; display:none!important; transform:none; margin:0!important; overflow:auto; font-size:var(--mission-font)!important; }
+#settings-panel.mission-settings.open { display:block!important; opacity:1; pointer-events:auto!important; animation:settings-arrive 220ms ease-out; }
+@keyframes settings-arrive { from { opacity:0; translate:15px 0; } to { opacity:1; translate:0 0; } }
+.mission-dashboard button:focus-visible,.mission-header button:focus-visible { outline:2px solid #99dcff; outline-offset:3px; }
+body[data-quality=low] .glass { backdrop-filter:none; -webkit-backdrop-filter:none; background:#132331ed; box-shadow:inset 0 1px 0 #ffffff15; }
+@media(min-width:2000px) { :root { --mission-top:100px; --mission-edge:24px; --mission-left:420px; --mission-right:470px; } .mini-world canvas { height:210px; } .live-chart canvas { height:135px; } #mission-page-pointing .mission-rail { bottom:290px; } }
+@media(max-width:1150px) { :root { --mission-edge:10px; --mission-left:270px; --mission-right:300px; } .mission-clock { gap:7px; padding:8px; } .mission-clock time { font-size:.87em; } .mission-fps { padding-left:6px; } .mission-tabs { min-width:290px; } .mission-tab { padding:10px 12px; } .mission-actions { gap:5px; } .mission-actions .mission-action { width:40px; height:44px; } }
+@media(max-width:800px) {
+ :root { --mission-top:125px; --mission-left:100%; --mission-right:100%; }
+ .mission-header { top:10px; grid-template-columns:1fr auto; gap:8px; }
+ .mission-tabs { grid-column:1 / -1; grid-row:2; justify-self:center; min-width:310px; }
+ .mission-clock time { font-size:.85em; } .mission-clock { min-height:44px; }
+ .mission-clock small { font-size:.68em; } .mission-fps { font-size:.72em; }
+ .mission-actions .mission-action { width:34px; height:40px; padding:8px; }
+ .mission-dashboard { top:var(--mission-top); bottom:18px; overflow:auto; padding:0 10px; }
+ .mission-page { position:relative; inset:auto; display:flex; flex-direction:column; gap:12px; padding-top:26dvh; }
+ .mission-rail,.mission-bottom,#mission-page-overview .mission-bottom { position:static; width:100%; overflow:visible; display:flex; flex-direction:column; gap:12px; padding:0; }
+ .mission-rail { pointer-events:none; } .mission-card { padding:13px; }
+ .mission-bottom { order:3; } .rail-right { order:2; }
+ #mission-page-overview .mission-bottom { order:0; } #mission-page-overview .rail-left { order:1; }
+ .mission-card .mini-world canvas { height:180px; } .gps-layout .mini-world canvas { height:170px; }
+ .mission-clock .live-dot { display:none; }
+ #settings-panel.mission-settings { max-height:calc(100dvh - 150px)!important; }
+}
+@media(prefers-reduced-motion:reduce) { .tab-indicator { transition:none; } #settings-panel.mission-settings.open { animation:none; } }
+
+/* Reference composition, with responsive panel budgets rather than fixed mockup sizes. */
+:root { --mission-font:clamp(13px,.97vw,19px); --mission-left:clamp(260px,20vw,330px); --mission-right:clamp(280px,21vw,350px); }
+.glass { border-radius:15px; background:linear-gradient(135deg,rgba(60,87,105,.28),rgba(7,21,31,.68) 60%,rgba(27,51,67,.42)); }
+.mission-card { padding:13px; }
+.metric-list dd,.health-row b,.vector-pair b { font-weight:400; }
+.mission-dashboard[data-tab=sensors] { --mission-left:clamp(370px,36vw,590px); --mission-right:clamp(340px,30vw,480px); }
+.gps-card .gps-layout { grid-template-columns:1.3fr 1fr; }
+.gps-card .gps-layout .metric-list { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.gps-card .gps-layout .metric-list>div { flex-direction:column; align-items:start; border:1px solid #d0ebff13; border-radius:9px; padding:7px 9px; gap:3px; background:#b9deff06; }
+.gps-card .gps-layout .metric-list dd { margin:0; color:#f2f7ff; font-size:1.1em; }
+.gps-card>.metric-list { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:8px 0; border:1px solid #d4eaff18; background:#b9deff06; padding:8px 10px; border-radius:10px; }
+.gps-card>.metric-list>div { flex-direction:column; gap:4px; font-size:.83em; padding:0; border:0; }
+.gps-card .gps-layout .mini-world canvas { height:185px; }
+.gps-card .metric-highlight { margin-top:0; }
+.gps-card #gps-links-status { font-size:.7em; }
+.sensor-split { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; align-items:center; }
+.sensor-split .live-chart { margin:0; }
+.sensor-split .live-chart canvas { height:112px; }
+.sensor-split .sensor-table { font-size:.82em; }
+.sensor-split .sensor-table th,.sensor-split .sensor-table td { padding:7px 3px; }
+.sensor-split figcaption { font-size:.63em; }
+.vector-sensor-card>.quiet { float:right; margin:-30px 0 10px; font-size:.67em; }
+.estimator-layout { display:grid; grid-template-columns:1.15fr .68fr 1.2fr; gap:13px; }
+.estimator-layout .vector-pair { margin:0; }
+.estimator-layout .metric-list { display:flex; gap:12px; margin-top:7px; }
+.estimator-layout .metric-list>div { flex-direction:column; gap:2px; border:0; font-size:.75em; }
+.estimator-layout .sensor-table { font-size:.74em; }
+.estimator-layout .estimator-metric { border-radius:50%; height:112px; width:112px; margin:auto; display:flex; flex-direction:column; justify-content:center; padding:6px; background:radial-gradient(ellipse,#b4e7ff08 55%,#6ca1ba21 57%,#6ca1ba21 62%,transparent 64%); box-shadow:inset 0 0 0 1px #adcfe724; }
+.estimator-layout .estimator-metric b { font-size:1.4em; }
+.estimator-layout .estimator-metric span { font-size:.68em; }
+.estimator-layout .live-chart { margin-top:5px; }
+.estimator-layout .live-chart canvas { height:65px; }
+.estimator-layout .live-chart figcaption,.estimator-layout .chart-legend { display:none; }
+.estimator-layout .quiet { text-align:center; font-size:.66em; }
+.estimate-orientation { display:grid; grid-template-columns:1fr .8fr; gap:4px; align-items:center; }
+.estimate-orientation .mini-world canvas { height:175px; }
+.estimate-orientation .mini-world figcaption { font-size:.58em; }
+.mission-dashboard[data-tab=pointing] { --mission-left:clamp(350px,35vw,590px); --mission-right:clamp(335px,28vw,470px); --foot-height:175px; --plots-height:175px; }
+.mission-foot { position:absolute; bottom:24px; left:var(--mission-edge); right:var(--mission-edge); height:var(--foot-height); display:grid; grid-template-columns:1.2fr 1fr; gap:12px; pointer-events:none; }
+.mission-foot .mission-card { overflow:auto; scrollbar-width:thin; }
+.mission-foot #mission-actuators { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px 16px; }
+.mission-foot .actuator-line { padding:4px 0; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.mission-foot .actuator-line b { font-size:.78em; }
+.mission-foot .actuator-card>.quiet { margin:-7px 0 5px; }
+.mission-foot .disturbance-card .metric-list { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; font-size:.8em; }
+.mission-foot .disturbance-card details { margin:3px 0; font-size:.76em; }
+.position-body { display:grid; grid-template-columns:1fr 1fr; align-items:center; gap:12px; }
+.position-body .mini-world canvas { height:200px; }
+.position-body .metric-list { font-size:.9em; }
+#mission-control-slot,.camera-field { display:flex; flex-direction:column; gap:5px; font-size:.84em; margin:0; }
+.attitude-layout { display:grid; grid-template-columns:1.4fr 1fr; align-items:center; gap:8px; }
+.attitude-layout .mini-world canvas { height:170px; }
+.attitude-layout .sensor-table { font-size:.78em; }
+@media(max-height:830px) and (min-width:801px) {
+ :root { --mission-top:78px; --mission-font:13px; }
+ .mission-header { top:10px; }
+ .mission-card { padding:10px; }
+ .card-heading { margin-bottom:8px; }
+ .gps-card .gps-layout .mini-world canvas { height:142px; }
+ .gps-card .gps-layout .metric-list>div { padding:4px 7px; gap:0; }
+ .gps-card .metric-highlight { padding:6px; }
+ .gps-card #gps-links-status { margin-top:4px; }
+ .sensor-split .live-chart canvas { height:82px; }
+ .sensor-split .sensor-table th,.sensor-split .sensor-table td { padding:5px 2px; }
+ #mission-page-sensors .rail-right { bottom:250px; }
+ #mission-page-sensors .rail-right .mini-world canvas { height:112px; }
+ #mission-page-sensors .rail-right .sensor-table th,#mission-page-sensors .rail-right .sensor-table td { padding:5px; }
+ .estimator-layout .estimator-metric { width:90px; height:90px; }
+ .estimator-layout .live-chart canvas { height:48px; }
+ .estimate-orientation { display:block; }
+ .estimate-orientation .mini-world canvas { height:75px; }
+ .mission-dashboard[data-tab=pointing] { --foot-height:140px; --plots-height:150px; }
+ #mission-page-pointing .mission-bottom .live-chart canvas { height:75px; }
+ .position-body .mini-world canvas { height:145px; }
+ .attitude-layout .mini-world canvas { height:120px; }
+ .mission-foot .card-heading { margin-bottom:5px; }
+}
+
+/* Thin, refractive glass lets the orbital scene carry the composition. */
+.glass {
+  position:relative;
+  background:linear-gradient(135deg,rgba(128,179,213,.18),rgba(12,28,43,.33) 32%,rgba(3,15,25,.47) 75%,rgba(83,137,171,.17));
+  border:1px solid rgba(191,226,247,.29);
+  border-top-color:rgba(225,245,255,.52);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.18),inset 1px 0 0 rgba(255,255,255,.06),0 14px 32px rgba(0,5,14,.19);
+  backdrop-filter:blur(9px) saturate(145%) brightness(1.08);
+  -webkit-backdrop-filter:blur(9px) saturate(145%) brightness(1.08);
+}
+.glass::before { content:'';position:absolute;inset:1px;pointer-events:none;border-radius:inherit;background:linear-gradient(158deg,rgba(255,255,255,.10),transparent 24%,transparent 73%,rgba(134,211,255,.045));mask-image:linear-gradient(#000,transparent 55%); }
+.mission-card { padding:12px 14px; }
+.metric-highlight,.vector-pair span,.gps-card .gps-layout .metric-list>div,.gps-card>.metric-list { background:linear-gradient(130deg,rgba(115,176,209,.10),rgba(13,38,57,.13)); }
+#settings-panel.mission-settings { background:linear-gradient(130deg,rgba(39,70,91,.65),rgba(3,19,31,.79))!important;backdrop-filter:blur(15px) saturate(145%)!important; }
+body[data-quality=low] .glass { background:rgba(10,25,39,.75); }
+body[data-economy=true] .glass { backdrop-filter:none;-webkit-backdrop-filter:none;background:linear-gradient(140deg,rgba(36,64,82,.67),rgba(5,20,32,.79)); }
+@media(max-width:800px) { #mission-page-overview .mission-bottom { position:static; } .context-card { height:auto; } .solar-strip canvas { height:90px!important; } }
+@media(max-width:1150px) and (min-width:801px) {
+ .mission-dashboard[data-tab=sensors] { --mission-left:43vw; --mission-right:40vw; }
+ .mission-dashboard[data-tab=pointing] { --mission-left:40vw; --mission-right:40vw; }
+ .estimator-layout { grid-template-columns:1fr .7fr; }
+ .estimate-orientation { display:none; }
+ .sensor-split { gap:6px; }
+}
+@media(max-width:800px) {
+ .mission-dashboard[data-tab=sensors],.mission-dashboard[data-tab=pointing] { --mission-left:100%; --mission-right:100%; }
+ #mission-page-sensors .mission-bottom,#mission-page-pointing .mission-bottom,.mission-foot { position:static; height:auto; display:flex; flex-direction:column; gap:12px; }
+ .mission-foot { order:4; }
+ .estimator-layout { grid-template-columns:1fr; }
+ .estimate-orientation { display:grid; }
+ .estimator-layout .metric-list { justify-content:space-around; }
+ .estimator-layout .live-chart canvas { height:90px; }
+ .sensor-split { grid-template-columns:1fr; }
+ .vector-sensor-card>.quiet { float:none; margin:0 0 7px; }
+ .gps-card .gps-layout { grid-template-columns:1.2fr 1fr; }
+ .gps-card .gps-layout .metric-list { font-size:.75em; }
+ #mission-page-overview .mission-bottom { position:static; }
+ .context-card { height:430px; }
+ .context-card>.mini-world canvas { height:270px!important; }
+ .solar-strip canvas { height:90px!important; }
+ .mission-foot .mission-card { overflow:visible; }
+ .position-body,.attitude-layout { grid-template-columns:1fr; }
+ .mission-foot #mission-actuators { grid-template-columns:1fr 1fr; }
+ .mission-foot .disturbance-card .metric-list { display:block; }
+}
+
+.vector-sensor-card .card-label { margin-left:auto; }
+.position-vectors { margin:8px 0; border:1px solid #d5edff18; background:#b0d7ed07; border-radius:10px; padding:8px; font-size:.74em; color:var(--mission-muted); }
+.position-vectors>div { display:flex; justify-content:space-between; align-items:baseline; gap:9px; margin-top:5px; }
+.position-vectors b { font-weight:400; color:var(--mission-text); text-align:right; overflow-wrap:anywhere; }
+.card-icon { width:23px; height:23px; flex:none; stroke:#c3e7fd; fill:none; stroke-width:1.3; stroke-linecap:round; stroke-linejoin:round; }
+.vector-sensor-card .card-label .quiet { margin:0; font-size:.66em; white-space:nowrap; }
+.vector-sensor-card .card-heading { gap:10px; }
+.gps-card .gps-layout .mini-world canvas { height:145px; }
+.gps-card .gps-layout .metric-list>div { padding:5px 8px; gap:1px; }
+.gps-card .gps-layout .metric-list { gap:6px; font-size:.8em; }
+.gps-card>.metric-list { padding:7px 9px; margin:5px 0; }
+.gps-card>.metric-list>div { gap:1px; }
+.gps-card .metric-highlight { padding:7px 9px; }
+.gps-card #gps-links-status { margin-top:5px; }
+.vector-sensor-card .sensor-table th,.vector-sensor-card .sensor-table td { padding:5px 3px; }
+.vector-sensor-card .sensor-split .live-chart canvas { height:94px; }
+.vector-sensor-card .live-chart figcaption { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+@media(max-height:830px) and (min-width:801px) {
+ .gps-card .gps-layout .mini-world canvas { height:128px; }
+ .gps-card .gps-layout .metric-list>div { padding:3px 6px; }
+ .vector-sensor-card .sensor-split .live-chart canvas { height:76px; }
+ #mission-page-sensors .rail-right .mini-world canvas { height:95px; }
+ #mission-page-pointing .mission-bottom .live-chart canvas { height:65px; }
+ .position-body .mini-world canvas { height:130px; }
+ .pointing-controls>.quiet { display:none; }
+ .attitude-layout .mini-world canvas { height:90px; }
+ .attitude-layout .sensor-table th,.attitude-layout .sensor-table td { padding:4px 3px; }
+ #mission-page-pointing .rail-right .metric-highlight { padding:6px; margin-top:5px; }
+ #mission-page-pointing .rail-right .mission-card>.quiet { display:none; }
+}
+
+/* Keep the live solar diagram compact; the primary scene supplies the Earth. */
+@media(max-width:800px) { #mission-page-overview .mission-bottom { position:static; } #mission-page-overview .context-card { height:auto; } }
+
+/* Pointing instruments fit inside their allocated panes without nested scrollbars. */
+@media(max-height:830px) and (min-width:801px) {
+  #mission-page-pointing .position-card .mini-world figcaption,
+  #mission-page-pointing .attitude-layout .mini-world figcaption { display:none; }
+  #mission-page-pointing .position-vectors { margin:4px 0;padding:5px 7px; }
+  #mission-page-pointing .position-body .metric-list>div { padding:4px 0; }
+}
+@media(max-width:800px) { #mission-page-pointing .mission-rail,#mission-page-pointing .mission-foot .mission-card { overflow:visible; } }
+
+/* Compact scene-only view and a flat, lower-left orbital key. */
+.mission-dashboard.mission-clear-view .mission-page { display:none!important; }
+.mission-clear-active #attribution,.mission-clear-active #sensor-labels { display:none!important; }
+.mission-clear[aria-pressed=true] { color:#81d8ff; border-color:#8bdcff88; }
+
+/* Inset arrows need an allocated viewport; the figure never clips its drawing. */
+#mission-page-sensors .rail-right .mini-world,
+#mission-page-pointing .position-body .mini-world { min-width:0;width:100%;overflow:visible; }
+#mission-page-sensors .rail-right .mini-world canvas,
+#mission-page-pointing .position-body .mini-world canvas { object-fit:contain; }
+
+@media (min-width:801px) {
+  #mission-page-pointing .mission-rail { overflow:visible; }
+  #mission-page-pointing .rail-left { bottom:calc(var(--foot-height) + var(--plots-height) + 46px); }
+  #mission-page-pointing .rail-right { bottom:calc(var(--foot-height) + var(--plots-height) + 46px); }
+  #mission-page-pointing .mission-foot { bottom:8px;height:var(--foot-height);min-height:0; }
+  #mission-page-pointing .mission-foot .mission-card { min-height:0;padding:9px 11px; }
+  #mission-page-pointing .mission-foot .card-heading { margin-bottom:5px; }
+  #mission-page-pointing .mission-bottom { height:var(--plots-height); }
+  .mission-foot #mission-actuators { grid-template-columns:repeat(4,minmax(0,1fr));gap:3px 7px; }
+  .mission-foot .actuator-line { display:flex;flex-direction:column;gap:2px;padding:3px 6px;border:1px solid #c9e9ff1a;border-radius:8px;background:#c0e5ff0a;min-width:0; }
+  .mission-foot .actuator-line span { color:#bdd4e5;font-size:.72em; }
+  .mission-foot .actuator-line b { font-size:.68em;font-weight:500;white-space:normal;overflow-wrap:anywhere;line-height:1.25; }
+}
+@media (max-width:800px) {
+  #mission-page-overview .mission-bottom { position:fixed;bottom:16px;left:10px;right:auto;width:min(360px,calc(100vw - 20px)); }
+}
+@media (min-width:801px) and (max-height:830px) {
+  .mission-dashboard[data-tab=pointing] { --foot-height:170px; }
+  #mission-page-pointing .mission-bottom .live-chart canvas { height:52px; }
+  #mission-page-pointing .mission-bottom .live-chart figcaption { margin-top:1px; }
+  #mission-page-pointing .mission-foot .disturbance-card .metric-list>div { padding:3px 0; }
+}
+
+/* Airier liquid glass: keep the simulation readable through every panel. */
+.glass {
+  background:linear-gradient(145deg,rgba(111,173,207,.16),rgba(6,24,38,.25) 42%,rgba(1,12,25,.34) 78%,rgba(91,152,187,.12));
+  border-color:rgba(209,237,255,.33);
+  border-top-color:rgba(240,250,255,.62);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 -1px 0 rgba(101,176,219,.08),0 12px 28px rgba(0,8,20,.18);
+  backdrop-filter:blur(6px) saturate(138%);
+  -webkit-backdrop-filter:blur(6px) saturate(138%);
+}
+.glass::before { background:linear-gradient(160deg,rgba(255,255,255,.13),transparent 26%,rgba(121,205,255,.035) 88%); }
+.metric-highlight,.vector-pair span,.gps-card .gps-layout .metric-list>div,.gps-card>.metric-list {
+  background:linear-gradient(130deg,rgba(127,194,228,.075),rgba(5,25,41,.08));
+}
+body[data-quality=low] .glass { background:rgba(8,25,40,.55); }
+body[data-economy=true] .glass { background:rgba(9,27,42,.68);backdrop-filter:none;-webkit-backdrop-filter:none; }
+
+/* Compact instrument layout. Keep every telemetry value while removing
+   repeated captions and unnecessary padding around the live plots. */
+.mission-card { padding:10px 12px; }
+.mission-dashboard[data-tab=pointing] { --plots-height:135px; }
+
+@media (min-width:801px) and (max-height:830px) {
+  #mission-page-sensors .gps-card .mini-world canvas { height:108px; }
+  #mission-page-sensors .vector-sensor-card .live-chart canvas { height:54px; }
+  #mission-page-sensors .rail-right .mini-world canvas { height:75px; }
+  #mission-page-sensors .rail-right .sensor-table th,
+  #mission-page-sensors .rail-right .sensor-table td { padding:3px 4px; }
+  #mission-page-sensors .rail-right .vector-pair span { padding:4px 5px; }
+  #mission-page-sensors .estimator-card .estimate-orientation {
+    display:grid;grid-template-columns:minmax(0,1.35fr) minmax(85px,.8fr);gap:5px;align-items:center;
+  }
+  #mission-page-sensors .estimator-card .estimate-orientation .mini-world { margin:0; }
+  #mission-page-sensors .estimator-card .estimate-orientation .mini-world canvas { height:90px; }
+  #mission-page-sensors .estimator-card .sensor-table { font-size:.69em; }
+  #mission-page-sensors .estimator-card .sensor-table th,
+  #mission-page-sensors .estimator-card .sensor-table td { padding:3px 2px; }
+  .mission-dashboard[data-tab=pointing] { --plots-height:125px; }
+  #mission-page-pointing .mission-bottom .live-chart canvas { height:50px; }
+}
+@media(max-width:800px) {
+  #mission-page-overview .mission-bottom { left:10px; }
+  #mission-page-sensors .estimator-card .estimate-orientation { display:grid; }
+  .mission-dashboard[data-tab=pointing] { --plots-height:auto; }
+}
+
+/* Diagrams use their available width; overview context belongs at page center. */
+@media(min-width:801px) {
+  #mission-page-overview .mission-bottom {
+    left:50%;right:auto;top:auto;bottom:20px;
+    width:min(500px,calc(100vw - var(--mission-left) - var(--mission-right) - 80px));
+    height:auto;transform:translateX(-50%);
+  }
+  #mission-page-overview .solar-strip canvas { height:150px; }
+  #mission-page-sensors .gps-card .mini-world canvas { height:145px; }
+  #mission-page-sensors .rail-right .mini-world canvas { height:145px; }
+  #mission-page-pointing .position-body .mini-world canvas { height:190px; }
+}
+@media(min-width:801px) and (min-height:831px) {
+  .mission-dashboard[data-tab=pointing] { --foot-height:160px;--plots-height:120px; }
+  #mission-page-pointing .mission-bottom .live-chart canvas { height:48px; }
+}
+@media(min-width:801px) and (max-height:830px) {
+  #mission-page-overview .solar-strip canvas { height:135px; }
+  #mission-page-sensors .gps-card .mini-world canvas { height:125px; }
+  #mission-page-sensors .rail-right .mini-world canvas { height:115px; }
+  #mission-page-pointing .position-body .mini-world canvas { height:145px; }
+}
+@media(max-width:800px) {
+  #mission-page-overview .mission-bottom { position:static;transform:none;width:100%; }
+  #mission-page-overview .solar-strip canvas { height:130px!important; }
+  #mission-page-sensors .gps-card .mini-world canvas,
+  #mission-page-sensors .rail-right .mini-world canvas { height:155px; }
+}
+@media(min-width:2000px) and (min-height:831px) {
+  .mission-dashboard[data-tab=pointing] { --foot-height:185px;--plots-height:135px; }
+  #mission-page-pointing .mission-bottom .live-chart canvas { height:55px; }
+}
+

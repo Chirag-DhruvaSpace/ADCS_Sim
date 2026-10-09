@@ -1,0 +1,44 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.card-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:8px; }
+.card-heading h2 { font:600 1.02em/1.3 inherit; font-family:inherit; font-size:1.02em; color:#eaf5ff; margin:0; letter-spacing:.015em; }
+.card-heading h2::before { content:''; display:inline-block; height:11px; width:3px; background:#9ddffc; border-radius:2px; margin-right:8px; box-shadow:0 0 9px #90cffa33; }
+.metric-list { margin:0; }
+.metric-list>div { display:flex; justify-content:space-between; align-items:baseline; gap:14px; padding:7px 1px; border-bottom:1px solid #e8f7ff0c; }
+.metric-list dt { color:var(--mission-muted); min-width:0; }
+.metric-list dd { margin:0; text-align:right; font-weight:500; overflow-wrap:anywhere; }
+.metric-list>div:last-child { border-bottom:0; }
+.card-foot { border-top:1px solid #e8f7ff13; padding-top:10px; margin-top:7px; color:#67e6c1; font-size:.83em; letter-spacing:.08em; }
+.card-state { display:inline-flex; align-items:center; font-size:.78em; color:#e8bb73; margin:-6px 0 8px; }
+.card-state::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; margin-right:6px; }
+.card-state[data-valid=true] { color:#54e6a2; }
+.vector-pair { display:grid; gap:8px; margin-top:12px; }
+.vector-pair span { background:#8ec6e309; border:1px solid #e1f3ff12; border-radius:10px; padding:9px; color:var(--mission-muted); font-size:.8em; min-width:0; }
+.vector-pair b { display:block; color:#dcedfa; margin-top:4px; font-size:1.07em; font-weight:500; overflow-wrap:anywhere; }
+.metric-highlight { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#73d8d708; border:1px solid #b3e9ff16; border-radius:10px; padding:9px; font-size:.85em; margin:10px 0 0; }
+.metric-highlight b { color:#60e5bd; font-size:1.1em; white-space:nowrap; }
+.estimator-metric { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px; border:1px solid #b3e9ff19; border-radius:12px; background:linear-gradient(120deg,#8ce5ff10,transparent); }
+.estimator-metric b { font-weight:500; font-size:1.8em; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.estimator-metric span { color:var(--mission-muted); font-size:.83em; }
+.mission-card details { margin-top:10px; font-size:.87em; }
+.mission-card summary { color:#b5d6ed; cursor:pointer; }
+.mission-card #mode-panel { position:static!important; background:none!important; border:0!important; box-shadow:none!important; backdrop-filter:none!important; padding:0!important; margin:0!important; width:100%!important; font:inherit!important; }
+.mission-card #mode-panel h3,.mission-card #mode-panel p { display:none; }
+.mission-card #mode-panel select,.mission-card select { width:100%; font:inherit; color:#e5f3ff; background:#102231bc; border:1px solid #d4efff24; padding:10px; border-radius:10px; min-width:0; }
+.mission-card .control-panel { position:static!important; transform:none!important; background:none!important; box-shadow:none!important; border:0!important; width:100%!important; padding:8px 0!important; }
+.mission-card .control-panel .card { width:100%; background:#ffffff07; padding:8px; }
+.mission-card .controls input { min-width:0; width:100%; }
+.mission-card .display { font-size:1.1em; }
+.card-heading h2 { font-weight:500; font-size:1em; }
+.mission-card .card-heading .card-state { margin:0; font-size:.78em; white-space:nowrap; }
+.card-heading { border-bottom:1px solid rgba(200,231,250,.10);padding-bottom:8px; }
+.card-heading h2 { display:flex; align-items:center; gap:9px; }
+.card-heading h2::before { display:none; }
+.card-heading { margin-bottom:7px;padding-bottom:6px; }
+.metric-list>div { padding:4px 1px;gap:8px; }
+.vector-pair { gap:5px;margin-top:7px; }
+.vector-pair span { padding:6px 8px; }
+.metric-highlight { padding:6px 8px;margin-top:6px; }
+
+
+

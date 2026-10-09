@@ -1,0 +1,186 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+/* ---------- UI: identical to the Cesium version ---------- */
+    html, body, #threeContainer {
+      width: 100%; height: 100%;
+      margin: 0; padding: 0;
+      overflow: hidden; display: block;
+      font-family: Arial, sans-serif;
+    }
+    /* Dead legacy rules removed 2026-09-18: the standalone #cameraSelect /
+       #axis-toggle / #settings-toggle absolute rules below conflicted with
+       the #view-controls bar and left a phantom Axes pill floating mid-left.
+       All three controls now live ONLY inside #view-controls. */
+    #telemetry {
+      position: absolute; bottom: 15px; right: 10px;
+      width: min(440px, calc(100vw - 20px));
+      background: rgba(0, 0, 0, 0.6); color: white;
+      padding: 0; font-size: 14px; border-radius: 5px;
+      z-index: 10;
+    }
+    #telemetry span { display: block; }
+    #tlm-page-sensors span { display: inline; }
+    #tlm-page-sensors td, #tlm-page-sensors th { white-space: nowrap; }
+    #mount-position, #mount-normal { display: flex; gap: 3px; }
+    #mount-position input, #mount-normal input { width: 52px; }
+    #mount-fov { width: 70px; }
+    /* Telemetry / Sensors tabs share one fixed-size, non-closable box. */
+    .tlm-tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
+    .tlm-tab {
+      flex: 1; border: none; border-radius: 4px 4px 0 0;
+      background: rgba(255,255,255,0.08); color: #9aa4b2;
+      font-size: 12px; font-weight: bold; padding: 4px 0; cursor: pointer;
+    }
+    .tlm-tab.active { background: rgba(127,183,255,0.25); color: #fff; }
+    .tlm-page { padding: 6px 10px 10px; font-size: 13px; max-height: calc(100vh - 100px); overflow: auto; }
+    .tlm-page[hidden] { display: none; }
+    #tlm-page-sensors { font-size: 11px; }
+    #tlm-page-sensors .sens-hint { font-size: 10px; color: #8b95a3; margin: 2px 0 4px; }
+    #tlm-page-sensors .sens-row { font-size: 11px; }
+    #disturbance-panel { margin-top: 8px; font-size: 13px; }
+    #disturbance-panel summary { cursor: pointer; color: #7fb7ff; font-weight: bold; margin-bottom: 4px; }
+    #disturbance-panel span { display: block; }
+
+    #rw-panel {
+      position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
+      width: 320px; background-color: #121821;
+      border: 1px solid #2a3443; border-radius: 8px; padding: 16px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.6); color: white;
+      z-index: 1000; display: none; /* shown only in RW modes */
+    }
+    #rw-panel h2 { margin: 0 0 12px 0; font-size: 18px; text-align: center; color: #7fb7ff; }
+    .rw-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+    .rw-label { color: #9aa4b2; }
+    .rw-value { color: #e6e6e6; font-weight: bold; }
+    #rw-mode { color: #00e0ff; }
+
+    #mtr-panel {
+      position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
+      width: 320px; background-color: #121821;
+      border: 1px solid #2a3443; border-radius: 8px; padding: 16px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.6); color: white;
+      z-index: 1000;
+    }
+    #mtr-panel h2 { margin: 0 0 12px 0; font-size: 16px; text-align: center; color: #00e0ff; }
+
+    /* (Legacy standalone #axis-toggle / #tick absolute rules removed --
+       the live Axes button lives inside #view-controls above.) */
+
+    /* ---------- Top-left controls (camera / settings / fullscreen) ---------- */
+    #view-controls {
+      position: fixed; top: 8px; left: 10px; z-index: 12;
+      display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+      background: rgba(10, 14, 18, 0.88); border: 1px solid #2a3443; border-radius: 10px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.45);
+    }
+    #view-controls .vc-widget { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+    #view-controls .vc-label { font: 600 11px sans-serif; color: #7fb7ff; }
+    #view-controls #cameraSelect {
+      position: static; background: #161d29; color: #e6edf5;
+      border: 1px solid #2a3443; border-radius: 6px;
+      padding: 5px 10px; font: 12px sans-serif; cursor: pointer;
+    }
+    #view-controls #cameraSelect:hover { border-color: #4dd0e1; }
+    #view-controls #settings-toggle, #view-controls #fullscreen-toggle,
+    #view-controls #axis-toggle {
+      position: static; background: rgba(42,42,42,0.9); color: #fff;
+      border: 1px solid #2a3443; border-radius: 6px; padding: 6px 10px;
+      font: 12px sans-serif; cursor: pointer;
+    }
+    #view-controls #settings-toggle:hover { background: #4CAF50; }
+    #view-controls #fullscreen-toggle:hover { background: #4CAF50; }
+    /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+    #view-controls #axis-toggle { display: inline-flex; align-items: center; gap: 5px; }
+    #view-controls #axis-toggle:hover { background: #4CAF50; }
+    #view-controls #axis-toggle.on { background: #1d2733; border-color: #4CAF50; color: #7fff7f; }
+
+    /* ---------- Control-mode panel ---------- */
+    #mode-panel {
+      position: fixed; top: 10px; right: 10px; z-index: 1000;
+      width: 252px; background: rgba(10, 14, 18, 0.92); color: #fff;
+      border: 1px solid #2a3443; border-radius: 10px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.45); padding: 10px 14px; font-family: sans-serif;
+    }
+    #mode-panel .mp-head {
+      font: 600 11px sans-serif; color: #7fb7ff; text-transform: uppercase;
+      letter-spacing: 1.2px; margin-bottom: 6px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    #modeSelect {
+      width: 100%; background: #161d29; color: #e6edf5;
+      border: 1px solid #2a3443; border-radius: 6px;
+      padding: 5px 8px; font: 12px sans-serif; cursor: pointer;
+    }
+    #modeSelect:hover { border-color: #4dd0e1; }
+    #mode-panel .mp-note { font-size: 10.5px; margin-top: 6px; color: #9aa4b2; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0; background-color: #f0f2f5;
+    }
+    h3 { font-size: 0.8rem; margin: 0 0 5px 0; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+    input[type="range"] { flex-grow: 1; cursor: pointer; }
+    button {
+      padding: 5px 8px; font-size: 0.7rem; cursor: pointer; border: none;
+      border-radius: 4px; background-color: #333; color: white; white-space: nowrap;
+    }
+    button:hover { background-color: #4CAF50; }
+
+    /* ---------- three.js extras ---------- */
+    #labels { position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+              pointer-events: none; z-index: 5; overflow: hidden; }
+    .glabel {
+      position: absolute; transform: translate(-50%, -130%);
+      font: 12px monospace; white-space: nowrap;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+    }
+    #attribution {
+      position: absolute; bottom: 2px; left: 6px; z-index: 10;
+      font: 11px sans-serif; color: rgba(255,255,255,0.55);
+      text-shadow: 0 0 2px #000; pointer-events: none;
+    }
+    #clock {
+      position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(23, 26, 29, 0.85); color: #cfe8ff;
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;
+      padding: 4px 14px; font: 13px/1.5 monospace; letter-spacing: 1px;
+      z-index: 10; pointer-events: none; white-space: nowrap;
+    }
+    #fps-meter {
+      position: absolute; bottom: 46px; left: 10px; z-index: 10;
+      font: 12px monospace; color: #9fe08f; background: rgba(0,0,0,0.45);
+      padding: 2px 8px; border-radius: 4px; display: none; pointer-events: none;
+    }
+    #feed-meter {
+      position: absolute; bottom: 24px; left: 10px; z-index: 10;
+      font: 12px monospace; color: #9fe08f; background: rgba(0,0,0,0.45);
+      padding: 2px 8px; border-radius: 4px; display: block; pointer-events: none; white-space: nowrap;
+    }
+    #threeContainer canvas { display: block; }
+
+    /* ---------- Settings panel (redesigned) ---------- */
+    /* (Legacy standalone #settings-toggle absolute rule removed -- the live
+       Settings button is the one inside #view-controls.) */
+    #settings-toggle:hover { background: #4CAF50; }
+    @media (max-width: 620px) { #settings-panel { width: 100vw; } #view-controls { max-width: calc(100vw - 20px); flex-wrap: wrap; } }
+    /* ---------- Sensors content (Telemetry/Sensors tab page, NOT a panel) --- */
+    #tlm-page-sensors .sens-sec { margin: 6px 0 8px; }
+    #tlm-page-sensors h4 { margin: 2px 0 3px; font-size: 10px; letter-spacing: 1px;
+                        color: #7fb7ff; text-transform: uppercase; }
+    #tlm-page-sensors .sens-head3 { display: grid; grid-template-columns: 1.3fr 1fr 1fr;
+                                 font-size: 9px; color: #6b7684; }
+    #tlm-page-sensors .sens-row { display: grid; grid-template-columns: 1.3fr 1fr 1fr; }
+    #tlm-page-sensors .sens-flags { font: 10px monospace; color: #8b95a3; margin-top: 2px; }
+    #tlm-page-sensors table { width: 100%; border-collapse: collapse; font: 10px monospace;
+                           color: #cfd8e3; margin: 3px 0; }
+    #tlm-page-sensors th, #tlm-page-sensors td { text-align: left; padding: 1px 3px;
+                                           border-bottom: 1px solid rgba(255,255,255,0.06); }
+    #tlm-page-sensors .sens-ok { color: #7fff7f; }
+    #tlm-page-sensors .sens-warn { color: #ffd27f; }
+    #tlm-page-sensors .sens-bad { color: #ff7f7f; }
+    #settings-close {
+      background: none; border: none; color: #9aa4b2; font-size: 15px;
+      cursor: pointer; padding: 0 4px; line-height: 1;
+    }
+    #settings-close:hover { color: #ff8a80; background: none; }
+
+

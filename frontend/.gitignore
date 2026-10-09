@@ -1,0 +1,6 @@
+# made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
+node_modules/
+dist/
+# made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
+.env.local
+.env.*.local

@@ -1,0 +1,635 @@
+# POINTING SELECTION: legacy keeps the existing selectable pointing modes.
+# custom hides the legacy selector and accepts quaternion commands.
+# Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
+pointing:
+  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
+  legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
+  # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
+  # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
+  custom:
+    input: desired_quaternion      # desired_quaternion | quaternion_error
+    quaternion: [1.0, 0.0, 0.0, 0.0]
+    # Error convention: inverse(q_desired) * q_reference.
+    # Converted once into a fixed target. Reference required for error input.
+    reference_quaternion: [1.0, 0.0, 0.0, 0.0]
+
+# Independent profiles: custom, off, perfect, nominal, degraded, stress.
+# custom uses all literals below; presets replace preset error channels.
+# nominal resets those channels to nominal defaults. Geometry/seeds are retained.
+# Per-unit overrides take precedence; sun profile is independent of IMU.
+sensor_profiles:
+  gps: custom
+  imu: stress        # Shared gyro/magnetometer baseline
+  gyroscope: custom  # Optional independent override of the IMU profile
+  magnetometer: custom
+  sun_array: custom
+
+# P-30XL simulation configuration. Units are included in field names.
+# =============================================================================
+# P-30XL SPACECRAFT AND SIMULATION PARAMETERS
+# =============================================================================
+# Basic model and shared simulation settings. Advanced CAD overrides live in
+# advanced_satellite_parameters.yaml when the switch below is true.
+# Python code in satellite_parameters.py defines runtime objects, loads this
+# file, and validates it. Change parameter values here.
+#
+# UNIT AND COORDINATE CONVENTIONS
+#   - SI units are used unless a field name explicitly names another unit.
+#   - Body vectors are ordered [X, Y, Z].
+#   - Quaternions are scalar-first: [w, x, y, z].
+#   - Matrices are written as rows.
+#   - Sigma means one standard deviation (1-sigma).
+#   - A zero sigma disables that individual random error contribution.
+#
+# Values marked ASSUMPTION must be replaced with measured, CAD, test, or
+# supplier data before flight-quality analysis.
+
+# =============================================================================
+# SPACECRAFT MASS, GEOMETRY, AERODYNAMICS, AND ACTUATOR LIMITS
+# =============================================================================
+# Legacy spacecraft assumptions below are used when the advanced switch is false.
+# Actuator limits are shared by both models unless explicitly overridden.
+# MODEL SELECTION — true loads CAD overrides; false uses the legacy values below.
+# Restart the simulator after changing this switch. No second viewer switch.
+use_advanced_satellite_model: true
+
+spacecraft:
+  mass_kg: 6.0                    # Legacy SRP/orbit mass assumption [kg]
+  body_radius_m: 0.259807621      # Circumscribed radius of the legacy 0.3 m cube
+  inertia_kg_m2: [1.465, 1.176, 1.244]  # Legacy P-30XL open-panel diagonal inertia
+  drag_reference_area_m2: 0.09    # Legacy reference cross-section [m²]
+  srp_reference_area_m2: 0.09     # Legacy reference cross-section [m²]
+  model_url: /assets/models/P-30XL.glb  # Original simplified viewer model
+  name: "P-30XL"
+  drag_coefficient: 2.2  # ASSUMPTION: no measured aerodynamic coefficient
+  srp_reflectivity_coefficient: 1.0  # Only the eclipse-helper model uses Cr; forces use facet optics
+  panels_deployed: true  # Legacy state label; advanced deployment is chosen in its own file
+  mtr_max_dipole_Am2: 2.0           # Common magnetorquer dipole limit
+  mtr_dipole_step_Am2: 0.1          # Command quantization/increment
+  # Maximum current for body X, Y, and Z magnetorquers.
+  mtr_max_current_A:
+    [0.3, 0.3, 2.0]
+  wheel_max_torque_Nm: 0.004         # Per-wheel torque limit
+  wheel_max_momentum_Nms: 0.04       # Per-wheel stored momentum limit
+
+# =============================================================================
+# INITIAL ORBIT
+# =============================================================================
+orbit:
+  # Space-weather data is real through 4 June 2026 and predicted through
+  # 14 November 2026. Z means this epoch is UTC.
+  epoch_utc: "2026-10-01T15:00:00Z"
+  altitude_m: 500003.0
+  inclination_deg: 97.0
+  eccentricity: 0.0             # ASSUMPTION: circular starting orbit
+  raan_deg: 0.0                 # ASSUMPTION: not supplied
+  argument_of_perigee_deg: 0.0  # ASSUMPTION: not supplied
+  true_anomaly_deg: 0.0         # ASSUMPTION: not supplied
+
+# =============================================================================
+# INITIAL ATTITUDE
+# =============================================================================
+attitude:
+  # Identity attitude. Quaternion order is [w, x, y, z].
+  initial_quaternion_scalar_first:
+    [1.0, 0.0, 0.0, 0.0]
+  # Body tumble rate [X, Y, Z]. Previous tumbling example: [-5.5, 7.4, 0.0].
+  initial_body_rates_deg_s:
+    [-0.0, 0.0, 0.0]
+  inertia_is_principal_axes: true  # Legacy diagonal axes; advanced loader overrides this
+
+# =============================================================================
+# EXTERNAL ENVIRONMENT MODEL DATA
+# =============================================================================
+model_data:
+  orekit_data_path: "orekit-data"  # Relative to this YAML file
+  magnetic_model: "WMM"            # World Magnetic Model
+  space_weather_file_pattern: "SpaceWeather.*\\.txt"
+  gravity_degree: 36                # Spherical-harmonic maximum degree
+  gravity_order: 36                 # Spherical-harmonic maximum order
+
+# =============================================================================
+# ADCS CONTROL
+# =============================================================================
+control:
+  detumble_on_rate_deg_s: 2.0       # Enter detumble above this rate norm
+  detumble_off_rate_deg_s: 0.5      # Leave detumble below this rate norm
+  sun_pointing_rate_cap_deg_s: 2.0  # Maximum commanded pointing slew rate
+  control_loop_period_s: 0.1        # ASSUMPTION: replace with flight-computer rate
+  # Physical magnetorquer limits are inherited from spacecraft above.
+  # PD tuning. Natural frequency [rad/s], dimensionless damping ratio.
+  # These preserve existing active gains; they are not newly tuned for CAD inertia.
+  pointing_natural_frequency_rad_s: 0.05 # Automatic RW target modes
+  pointing_damping_ratio: 1.0
+  manual_rw_natural_frequency_rad_s: 0.018 # Manual Euler target controller
+  manual_rw_damping_ratio: 1.0
+  magnetic_pd_natural_frequency_rad_s: 0.1 # Manual magnetic B-cross controller
+  magnetic_pd_damping_ratio: 1.5
+  kinematic_spin_rate_deg_s: 1.0        # Continuous body-axis rotation
+  target_rate_difference_step_s: 0.2   # Finite-difference step for moving targets
+  sun_pointing_base_rate_deg_s: 0.2    # Nominal MTR governor slew rate
+  # Post-convergence oscillation about body y or z; angular units are degrees.
+  moon_spin_axis: z
+  moon_spin_rate_deg_s: 0.06
+  moon_spin_amplitude_deg: 12.0       # Symmetric ±amplitude
+  moon_spin_achieve_threshold_deg: 2.0 # Start oscillation below this target error
+  sun_sweep_axis: z
+  sun_sweep_rate_deg_s: 0.06
+  sun_sweep_amplitude_deg: 64.0
+  sun_sweep_achieve_threshold_deg: 2.0
+
+# =============================================================================
+# DISTURBANCE MODEL
+# =============================================================================
+# `enabled` is the master switch. Individual switches allow gravity-gradient,
+# residual-magnetic-dipole, and atmospheric-drag torques to be isolated.
+disturbances:
+  enabled: true                         # Master disturbance-torque switch
+  residual_dipole_Am2:
+    [0.0001, 0.0, 0.0]                  # ASSUMPTION: unmeasured magnitude/direction
+  drag_density_kg_m3: 2.0e-13           # BUDGET ONLY; live orbit/attitude use NRLMSISE-00
+  # Cd is inherited from spacecraft.drag_coefficient; no second live coefficient.
+  drag_area_m2: 0.09  # Legacy budget only; live drag uses selected model facets
+  center_of_pressure_arm_body_m:
+    [0.15, 0.0, 0.0]                    # Legacy budget only; live moments use facet centroid minus COM
+  gravity_gradient_enabled: true
+  residual_dipole_enabled: true
+  atmospheric_drag_enabled: true
+  srp_enabled: true                    # Solar-pressure orbital force
+  srp_torque_enabled: true             # Solar-pressure attitude moment
+  solar_pressure_at_1au_pa: 4.56e-6    # Solar momentum flux at 1 AU [Pa]
+
+# =============================================================================
+# SPACECRAFT OPTICAL GEOMETRY
+# =============================================================================
+# Surface normals, centers of pressure, and optical coefficients are used by
+# radiation-pressure models. Absorptivity + diffuse + specular should equal 1.
+# Legacy 0.3 m cube. Optics are assumed; facet forces/torques remain coupled.
+geometry:
+  center_of_mass_body_m: [0.0, 0.0, 0.0]
+  surfaces:
+  - name: legacy_X_-1
+    area_m2: 0.09
+    normal_body: [-1.0, 0.0, 0.0]
+    center_of_pressure_body_m: [-0.15, 0.0, 0.0]
+    absorptivity: 0.6
+    diffuse_reflectivity: 0.2
+    specular_reflectivity: 0.2
+  - name: legacy_X_+1
+    area_m2: 0.09
+    normal_body: [1.0, 0.0, 0.0]
+    center_of_pressure_body_m: [0.15, 0.0, 0.0]
+    absorptivity: 0.6
+    diffuse_reflectivity: 0.2
+    specular_reflectivity: 0.2
+  - name: legacy_Y_-1
+    area_m2: 0.09
+    normal_body: [0.0, -1.0, 0.0]
+    center_of_pressure_body_m: [0.0, -0.15, 0.0]
+    absorptivity: 0.6
+    diffuse_reflectivity: 0.2
+    specular_reflectivity: 0.2
+  - name: legacy_Y_+1
+    area_m2: 0.09
+    normal_body: [0.0, 1.0, 0.0]
+    center_of_pressure_body_m: [0.0, 0.15, 0.0]
+    absorptivity: 0.6
+    diffuse_reflectivity: 0.2
+    specular_reflectivity: 0.2
+  - name: legacy_Z_-1
+    area_m2: 0.09
+    normal_body: [0.0, 0.0, -1.0]
+    center_of_pressure_body_m: [0.0, 0.0, -0.15]
+    absorptivity: 0.6
+    diffuse_reflectivity: 0.2
+    specular_reflectivity: 0.2
+  - name: legacy_Z_+1
+    area_m2: 0.09
+    normal_body: [0.0, 0.0, 1.0]
+    center_of_pressure_body_m: [0.0, 0.0, 0.15]
+    absorptivity: 0.6
+    diffuse_reflectivity: 0.2
+    specular_reflectivity: 0.2
+  blockers: []
+
+# =============================================================================
+# REACTION WHEELS
+# =============================================================================
+# Four-wheel pyramid with a 35 degree cant. axis_matrix_body is 3x4: each
+# column is one wheel spin axis expressed in the body frame.
+reaction_wheels:
+  count: 4
+  axis_matrix_body:
+    - [0.5792279653395692, -0.5792279653395692, -0.5792279653395692, 0.5792279653395692]
+    - [0.5792279653395692, 0.5792279653395692, -0.5792279653395692, -0.5792279653395692]
+    - [0.573576436351046, 0.573576436351046, 0.573576436351046, 0.573576436351046]
+  # Physical wheel torque/momentum limits are inherited from spacecraft above.
+  null_space_desaturation_gain: 0.001  # Existing active allocator gain [1/s]
+  saturation_reallocation_enabled: true # Redistribute torque to unsaturated wheels
+  max_reallocation_passes: 4             # Maximum allocator redistribution iterations
+
+# =============================================================================
+# SIMULATION EXECUTION
+# =============================================================================
+simulation:
+  default_duration_s: 100000.0            # ASSUMPTION: launcher demo duration
+  telemetry_publish_period_s: 0.25         # Viewer/telemetry update period
+  speed: 10.0                              # Simulated seconds per real second; finite and > 0
+  realtime: true                          # Deprecated compatibility field; speed controls pacing
+  attitude_integrator_abs_tolerance: 1.0e-06
+  attitude_integrator_rel_tolerance: 0.0001
+  # Orekit DOP853 adaptive orbit integration. These preserve engine defaults.
+  orbit_output_window_s: 0.5 # Bounded native Orekit dense-output cache; 0.1 restores tick-by-tick propagation
+  orbit_integrator_min_step_s: 0.001
+  orbit_integrator_max_step_s: 600.0
+  orbit_integrator_abs_tolerance: 0.001 # Scalar solver tolerance in native state units
+  orbit_integrator_rel_tolerance: 1.0e-6 # Dimensionless relative tolerance
+  # Telemetry transport; no effect on physical integration or sensor errors.
+  telemetry_url: http://127.0.0.1:5000/update_telemetry
+  telemetry_timeout_s: 0.25          # Maximum wait for the viewer's HTTP endpoint
+
+# =============================================================================
+# SIMULATED GPS RECEIVER ("FakeGPS")
+# =============================================================================
+# The satellite's position/velocity KNOWLEDGE comes from this simulated receiver
+# with bias, wander, noise, latency, dropouts, and quantization. Orbit TRUTH
+# continues to drive the physics. All sigma values are 1-sigma.
+#
+# Historical intensity presets retained by the Python API:
+#   off      - receiver absent
+#   perfect  - receiver enabled with every error channel disabled
+#   nominal  - the values below; representative good LEO GPS
+#   degraded - 2.5x position/velocity errors, more dropouts and latency
+#   stress   - 5x errors, 15% dropouts, 30 s cold start, very stale fixes
+# The YAML values below are the active configuration and currently equal nominal.
+gps_sim:
+  enabled: true                       # Master switch; false means no GPS receipts
+  update_rate_hz: 1.0                 # Receiver output rate; real chips are 1-10 Hz
+
+  # Position/velocity error-channel switches. Each switch gates the same error
+  # type for both position and velocity where applicable.
+  enable_bias: true                   # Constant startup offset
+  enable_wander: true                 # Slowly drifting Gauss-Markov error
+  enable_white_noise: true            # Fresh jitter on every fix
+  enable_steps: true                  # Constellation-geometry change jumps
+  enable_latency: true                # Fix describes a slightly past state
+  enable_dropout: true                # Randomly missing fixes
+  enable_clock_error: true            # Receiver error in reported time
+  enable_quantization: true           # Round lat/lon/altitude/ENU velocity
+  enable_status: true                 # Satellite-count and DOP random walks
+
+  # Position errors [m]. Horizontal values apply independently to East and North;
+  # vertical applies to Up, which is normally less accurate for GPS.
+  pos_bias_sigma_h_m: 0.5             # Constant horizontal offset drawn once
+  pos_bias_sigma_v_m: 1.0             # Constant vertical offset drawn once
+  gm_tau_pos_s: 60.0                  # Position-wander time constant
+  gm_sigma_pos_h_m: 1.4               # Horizontal wander size per E/N axis
+  gm_sigma_pos_v_m: 2.7               # Vertical wander size
+  white_sigma_pos_h_m: 0.5            # Fresh horizontal jitter per fix
+  white_sigma_pos_v_m: 0.8            # Fresh vertical jitter per fix
+  step_mean_interval_s: 600.0         # Mean interval between geometry jumps
+
+  # Velocity errors [m/s]. These draws are independent of position errors.
+  vel_bias_sigma_m_s: 0.01            # Constant velocity offset per axis
+  gm_tau_vel_s: 10.0                  # Velocity-wander time constant
+  gm_sigma_vel_m_s: 0.03              # Velocity-wander size per axis
+  white_sigma_vel_m_s: 0.01           # Fresh velocity jitter per fix/axis
+
+  # Latency: each fix describes where the satellite was approximately 0.08 s ago.
+  latency_mean_s: 0.08                # Mean, clipped to [min, max]
+  latency_sigma_s: 0.02               # Spread of latency draw
+  latency_min_s: 0.04                 # Hard floor
+  latency_max_s: 0.2                  # Hard ceiling
+
+  # Receiver clock error [s]. Values are at nanosecond scale like a real receiver.
+  clock_bias_sigma_s: 5.0e-08         # Constant clock offset drawn once (50 ns)
+  clock_wander_tau_s: 100.0           # Clock-wander time constant
+  clock_wander_sigma_s: 2.0e-08       # Clock wander size (20 ns)
+  clock_white_sigma_s: 1.0e-08        # Fresh clock jitter per fix (10 ns)
+
+  # Availability. outages_s entries are [start_s, end_s] blackout windows.
+  p_dropout: 0.005                    # Probability that a scheduled fix is lost
+  cold_start_s: 0.0                   # Time to first fix after power-on
+  outages_s: []                       # Example: [[100.0, 120.0], [500.0, 510.0]]
+
+  # Receiver-status random walks.
+  num_sv_start: 8                     # Satellites used at startup
+  num_sv_min: 5                       # 3D fix needs >=4; random walk clamps here
+  num_sv_max: 12
+  pdop_start: 2.0                     # Starting geometry-quality figure
+  pdop_step_sigma: 0.1                # Random-walk step per fix
+  pdop_min: 1.2
+  pdop_max: 4.0
+  seed: 42                            # All GPS randomness flows from this seed
+
+# =============================================================================
+# SIMULATED IMU, ATTITUDE ESTIMATOR, AND COARSE SUN SENSOR ARRAY
+# =============================================================================
+# The flight software's attitude-rate and body-magnetic-field KNOWLEDGE comes
+# from these simulated sensors. Scale/misalignment, bias, wander, white noise,
+# hard iron, spacecraft disturbance, latency, and dropouts reproduce real chip
+# behavior. Orbit and attitude TRUTH continue to drive the physics.
+#
+# UNITS
+#   Gyroscope: radians/second. Magnetometer: tesla. Positions: body-frame metres.
+#   Hardware data sheets may quote deg/s or nT; comments include those equivalents.
+#
+# Historical intensity presets retained by the Python API:
+#   off      - no IMU; flight software falls back to perfect truth
+#   perfect  - sensors enabled with error channels disabled
+#   nominal  - values below; representative good MEMS sensors
+#   degraded - roughly 2x errors, stronger misalignment, 2% dropouts
+#   stress   - roughly 10x noise, 1% scale error, 8% dropouts
+# The YAML values below are the active configuration and currently equal nominal.
+imu_sim:
+  enabled: true                       # Master switch; false means no IMU receipts
+  seed: 42                            # Base seed for all IMU randomness
+
+  # Attitude-estimator measurement switches. These control whether each sensor
+  # receipt is accepted by the onboard estimate.
+  enable_attitude_estimator: true
+  enable_gyro_update: true
+  enable_magnetometer_update: true
+  enable_sun_update: true
+  estimator_innovation_gate_chi2: 16.27  # 99.9% chi-square gate for 3-vector updates
+  estimator_max_bias_rad_s: 0.005        # Clamp on estimated gyro bias
+  estimator_initial_attitude_sigma_deg: 20.0
+  estimator_initial_bias_sigma_rad_s: 0.002
+
+  # OPTIONAL INDEPENDENT HARDWARE
+  # Empty lists create one legacy gyro and one legacy magnetometer using the
+  # common values below. Nonempty lists mean exactly the listed units; disabled
+  # units produce no receipts. A unit may contain:
+  #   name, enabled, position_body_m, mount_quaternion, seed, fusion_weight,
+  #   overrides, calibration_matrix, calibration_bias
+  # `overrides` accepts matching gyro_* or mag_* parameter/value pairs.
+  # Response matrices/fixed biases describe the chip frame. Onboard calibration
+  # describes returned BODY-frame vectors. Fusion weights express confidence;
+  # the EKF still estimates one aggregate gyro bias rather than one per chip.
+  #
+  # Example shape for two independent gyros (leave commented unless needed):
+  # gyros:
+  #   - name: "Gyro A"
+  #     position_body_m: [0.01, 0.0, 0.0]
+  #     seed: 1001
+  #     fusion_weight: 1.0
+  #     overrides:
+  #       - [gyro_fixed_bias_rad_s, [0.0001, 0.0, 0.0]]
+  #   - name: "Gyro B"
+  #     position_body_m: [-0.01, 0.0, 0.0]
+  #     seed: 2002
+  # A disabled unit remains described in configuration but emits no receipts.
+  gyros: []
+  magnetometers: []
+  fusion_max_age_s: 0.5              # Reject receipts older than this
+  fusion_max_time_skew_s: 0.02       # Maximum inter-sensor receipt skew
+
+  # Estimator initialization and reference-vector uncertainty.
+  initial_estimate_quaternion:
+    [1.0, 0.0, 0.0, 0.0]
+  estimator_mag_sigma_deg: 0.86      # Model + measurement direction uncertainty
+  estimator_sun_sigma_deg: 1.43      # Includes coarse-sensor reconstruction error
+
+  # Sensor mounting. Positions are body-frame metres. Mount quaternions are
+  # scalar-first rotations. The magnetic gradient has field axes as rows and
+  # body-position axes as columns, with units tesla/metre.
+  gyro_position_body_m:
+    [0.0, 0.0, 0.0]
+  mag_position_body_m:
+    [0.0, 0.0, 0.2]
+  gyro_mount_quaternion:
+    [1.0, 0.0, 0.0, 0.0]
+  mag_mount_quaternion:
+    [1.0, 0.0, 0.0, 0.0]
+  mag_gradient_body_t_per_m:
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
+  # ---------------------------------------------------------------------------
+  # GYROSCOPE: body angular rate [rad/s], vector order [X, Y, Z]
+  # The simulation loop is the clock, so the chip cannot sample faster than
+  # simulation ticks even if update_rate_hz is set higher.
+  enable_gyro: true                         # Gyroscope is physically present
+  gyro_update_rate_hz: 10.0                 # Equals the current 0.1 s ADCS loop
+  gyro_white_noise_sigma_rad_s: 0.00052     # Fresh noise; about 0.03 deg/s
+  gyro_bias_sigma_rad_s: 0.00035            # Startup bias; about 0.02 deg/s
+  gyro_wander_sigma_rad_s: 0.0002           # Slow bias drift; about 0.011 deg/s
+  gyro_wander_tau_s: 100.0                  # Wander memory/time constant
+  gyro_scale_error: 0.001                   # Per-axis relative gain error (0.1%)
+  gyro_misalignment_rad: 0.001              # Cross-axis coupling (0.057 deg)
+  gyro_range_rad_s: 4.36                    # Measurement range: +/-250 deg/s
+  gyro_dropout_probability: 0.0             # Chance a scheduled receipt is absent
+  gyro_latency_mean_s: 0.005                # Typical measurement staleness (5 ms)
+  gyro_latency_sigma_s: 0.001
+  gyro_latency_min_s: 0.001
+  gyro_latency_max_s: 0.02
+  gyro_quantization_rad_s: 0.0              # ADC step; zero disables quantization
+  # Exact deterministic chip response and bias, separate from random errors.
+  gyro_response_matrix:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  gyro_fixed_bias_rad_s:
+    [0.0, 0.0, 0.0]
+  # ---------------------------------------------------------------------------
+  # MAGNETOMETER: body magnetic field [tesla], vector order [X, Y, Z]
+  enable_magnetometer: true                 # Magnetometer is physically present
+  mag_update_rate_hz: 10.0                  # Equals current ADCS loop rate
+  mag_white_noise_sigma_t: 8.0e-08          # Fresh noise: 80 nT
+  mag_hard_iron_bias_sigma_t: 1.5e-07       # Fixed hard-iron offset: 150 nT
+  mag_scale_error: 0.005                    # Per-axis relative gain error (0.5%)
+  mag_misalignment_rad: 0.002               # Cross-axis coupling (0.11 deg)
+  mag_disturbance_t:
+    [1.0e-07, -5.0e-08, 2.5e-08]            # Fixed spacecraft field in body frame
+  mag_disturbance_wander_sigma_t: 2.0e-08   # Slow spacecraft-field variation (20 nT)
+  mag_disturbance_wander_tau_s: 200.0       # Disturbance time constant
+  mag_range_t: 0.001                        # Measurement range: +/-1000 uT
+  mag_dropout_probability: 0.0              # Chance a scheduled receipt is absent
+  mag_latency_mean_s: 0.01                  # Typical staleness (10 ms)
+  mag_latency_sigma_s: 0.002
+  mag_latency_min_s: 0.002
+  mag_latency_max_s: 0.05
+  mag_quantization_t: 0.0                   # ADC step; zero disables quantization
+  # Exact deterministic chip response and bias, separate from random errors.
+  mag_response_matrix:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  mag_fixed_bias_t:
+    [0.0, 0.0, 0.0]
+  # ---------------------------------------------------------------------------
+  # COARSE SUN SENSOR (CSS) ARRAY
+  # Six hull photocells report sunlight as a fraction of full scale [0, 1]
+  # using cosine response and a field-of-view cutoff. Flight software reconstructs
+  # the body-frame Sun direction by least squares over active cells.
+  #
+  # Per-cell errors: mounting misalignment, bias, thermal drift, scale, cubic
+  # nonlinearity, white noise, and ADC quantization. Array physics: eclipse
+  # penumbra, Earth albedo, self-shadowing, dropouts, and latency. Sigmas are
+  # fractions of full scale unless a field explicitly says degrees.
+  #
+  # A magnetometer alone observes only two attitude axes; rotation around the
+  # magnetic-field line is unobservable. The reconstructed Sun vector supplies
+  # the second independent reference direction.
+  enable_sun_sensor: true                    # Array is physically present
+  sun_array:
+    enabled: true                            # Array master switch
+    seed: 42                                 # All CSS randomness flows from this seed
+    update_rate_hz: 10.0                     # Equals current 0.1 s ADCS loop
+
+    # One cell per cube face. Positions lie approximately 0.25 m from the body
+    # center and normals point outward. At 90 deg half-angle, three faces see a
+    # generic Sun direction before thresholding/shadowing. Output is cosine
+    # incidence, not percentage of sky covered. Position offset only affects
+    # ray-based self-shadowing; direction parallax at 1 AU is negligible.
+    #
+    # Every cell uses the same error-field meanings:
+    #   normal_body              outward direction, normalized when used
+    #   position_body_m          origin of its self-shadowing ray
+    #   fov_half_angle_deg       half-angle visibility cutoff
+    #   alignment_error_sigma_deg as-mounted normal error drawn once
+    #   bias_sigma               full-scale bias drawn once
+    #   drift_sigma/tau          Gauss-Markov thermal-proxy drift
+    #   scale_error_sigma        gain error drawn once
+    #   nonlinearity_k3_sigma    cubic response coefficient drawn once
+    #   white_noise_sigma        fresh noise per sample
+    #   adc_bits                 digitizer depth; must match across all cells
+    cells:
+      - name: "+X"
+        normal_body:
+          [1.0, 0.0, 0.0]
+        position_body_m:
+          [0.25, 0.0, 0.0]
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "-X"
+        normal_body:
+          [-1.0, 0.0, 0.0]
+        position_body_m:
+          [-0.25, 0.0, 0.0]
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "+Y"
+        normal_body:
+          [0.0, 1.0, 0.0]
+        position_body_m:
+          [0.0, 0.25, 0.0]
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "-Y"
+        normal_body:
+          [0.0, -1.0, 0.0]
+        position_body_m:
+          [0.0, -0.25, 0.0]
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "+Z"
+        normal_body:
+          [0.0, 0.0, 1.0]
+        position_body_m:
+          [0.0, 0.0, 0.25]
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "-Z"
+        normal_body:
+          [0.0, 0.0, -1.0]
+        position_body_m:
+          [0.0, 0.0, -0.25]
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+    # Axis-aligned body-frame boxes that block direct sunlight when a cell-to-Sun
+    # ray intersects them. The bus box is 0.3 x 0.3 x 0.3 m. Solar-panel plates
+    # can be added with their center and positive half-extents.
+    blockers:
+      - name: "bus-box"
+        center_body_m:
+          [0.0, 0.0, 0.0]
+        half_extents_m:
+          [0.15, 0.15, 0.15]
+    # Error/physics switches. true enables the named channel for the whole array.
+    enable_alignment_error: true
+    enable_bias_drift: true
+    enable_scale_nonlinearity: true
+    enable_white_noise: true
+    enable_saturation: true
+    enable_quantization: true
+    enable_albedo: true
+    enable_penumbra: true
+    enable_self_shadowing: true
+
+    # Reconstruction and array-level behavior.
+    albedo_scale: 0.15                       # Uniform Lambertian Earth reflectivity [0,1]
+    activation_threshold: 0.015              # 1.5% full scale; 5x nominal noise sigma
+    min_cells_for_solution: 3                # Rank requires at least three normals
+    dropout_probability: 0.0                 # Chance the complete array receipt is lost
+    latency_mean_s: 0.01                     # Measurement staleness, about 10 ms
+    latency_sigma_s: 0.002
+    latency_min_s: 0.002
+    latency_max_s: 0.05
+  # ---------------------------------------------------------------------------
+  # WHO STEERS AND WHAT THE VIEWER RENDERS
+  # true means controllers use noisy simulated sensor knowledge as flight software
+  # would. false silently uses perfect truth, which is useful for A/B comparison.
+  use_gyro_for_control: true                 # Controllers damp MEASURED rate
+  use_mag_for_control: true                  # Magnetic laws use MEASURED field
+  render_estimated_attitude: true            # Orient 3D model from ESTIMATED attitude
+  use_attitude_estimate_for_control: true    # Pointing laws use estimated quaternion
+
+# =============================================================================
+# VIEWER LIGHTING — display only; does not change Sun, eclipse or sensor physics
+# =============================================================================
+viewer:
+  earth_day_ambient: 0.12  # Texture multiplier at the daylight terminator
+  earth_day_diffuse: 0.78  # Additional multiplier facing the Sun
+  earth_night_floor: 0.015 # Minimum terrain visibility; keep small for dark nights
+
+# =============================================================================
+# VIEWER-SAVED SENSOR MOUNTING OVERRIDES
+# =============================================================================
+# The mounting editor rewrites only this final mapping. Each entry is keyed by
+# sensor name and may contain position, normal, and fov. Keep this section last
+# so saving mounts never rewrites or removes the documentation above.
+imu_mount_defaults: {}
+

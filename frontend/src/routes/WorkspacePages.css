@@ -1,0 +1,16 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+/* All workspaces remain mounted so canvas contents survive tab changes. */
+
+
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+
+
+.mission-page[hidden] { display:none!important; }
+.mission-page { position:absolute; inset:0; }
+
+
+/* Departing panels retain their last frame; subscriptions stop immediately. */
+.mission-page[data-departing=true] { pointer-events:none; animation:workspace-depart 220ms ease-out both; }
+.mission-page[data-departing=true] * { pointer-events:none!important; }
+@keyframes workspace-depart { to { opacity:0; transform:translate3d(0,6px,0); } }
+@media(prefers-reduced-motion:reduce) { .mission-page[data-departing=true] { animation:none; opacity:0; } }

@@ -1,0 +1,151 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+:root { color-scheme: dark; --ui-line:rgba(123, 157, 190, .42); --ui-accent:#85b9f0; }
+* { box-sizing:border-box; }
+body { background:#090e16; color:#dae3ee; }
+#viewer-layout { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:0; padding:0; }
+#viewer-layout.settings-open { grid-template-columns:minmax(0,1fr) 370px; }
+/* Do not reserve a page-wide header for four small controls. */
+#view-controls { position:fixed; top:16px; left:16px; z-index:30; margin:0; box-shadow:0 6px 18px rgba(0,0,0,.24); border-radius:8px; max-width:calc(100vw - 352px); }
+#threeContainer { grid-column:1; grid-row:1; min-width:0; min-height:0; border-radius:0; position:relative; }
+#threeContainer #clock { bottom:8px; font-size:10px; padding:3px 6px; }
+#threeContainer #attribution { bottom:0; font-size:8px; }
+#threeContainer #fps-meter { bottom:68px; }
+#threeContainer #feed-meter { bottom:48px; font-size:10px; }
+#instrument-dock,#inspector-dock { min-width:0; min-height:0; overflow:auto; scrollbar-width:thin; }
+/* The flight scene owns the full main column. Flight controls float lightly
+   over it instead of reserving a large opaque sidebar. */
+#instrument-dock { grid-column:1; grid-row:1; z-index:11; align-self:start; margin-top:55px; width:214px; max-height:calc(100dvh - 76px); padding:8px; pointer-events:none; overflow:auto; }
+#instrument-dock > * { pointer-events:auto; }
+#inspector-dock { grid-column:1; grid-row:1; justify-self:end; z-index:12; width:370px; padding:8px; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+#inspector-dock > * { pointer-events:auto; }
+#inspector-dock.show-settings { grid-column:2; width:100%; padding:0; }
+#instrument-dock #rw-panel,#instrument-dock #mtr-panel,#instrument-dock .control-panel,
+#inspector-dock #telemetry,#inspector-dock #mode-panel,#inspector-dock #settings-panel {
+ position:static; width:100%; max-width:none; transform:none; margin:0 0 8px; border:0; border-radius:0; box-shadow:none; background:transparent; backdrop-filter:none;
+}
+/* Left actuator telemetry (Magnetorquer / Reaction-Wheel mode panels): give
+   the docked panels a readable card surface instead of transparent floating
+   text, styled like the #view-controls header (same radius, border, shadow). */
+#instrument-dock #rw-panel,#instrument-dock #mtr-panel {
+ padding:12px; background:rgba(10, 17, 27, .78); color:#e4edf7; text-shadow:0 1px 2px #000;
+ border:1px solid var(--ui-line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.24);
+}
+#instrument-dock .rw-row { gap:8px; font-size:12px; }
+/* Readable telemetry needs one plain backing surface, not floating text. */
+#inspector-dock #telemetry { flex:0 1 auto; min-height:0; overflow:auto; padding:0; background:rgba(10, 17, 27, .78); color:#e4edf7; text-shadow:0 1px 2px #000; border:1px solid var(--ui-line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.24); }
+#inspector-dock #mode-panel { padding:10px 14px; background:rgba(10, 17, 27, .78); color:#e4edf7; text-shadow:0 1px 2px #000; border:1px solid var(--ui-line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.24); }
+#inspector-dock .tlm-tabs { background:rgba(255,255,255,.035); border:0; }
+#inspector-dock .tlm-page { background:transparent; border:0; }
+#inspector-dock .tlm-page { max-height:none; overflow:visible; }
+#inspector-dock #settings-panel { display:none; height:100%; opacity:1; pointer-events:auto; padding:18px; overflow:auto; background:rgba(19, 32, 48, .94); }
+#inspector-dock.show-settings #settings-panel { display:block; animation:panel-enter 200ms ease-out; }
+#inspector-dock.show-settings #mode-panel,#inspector-dock.show-settings #telemetry { display:none; }
+#settings-panel .sp-head { border-bottom:1px solid var(--ui-line); padding-bottom:16px; font-size:16px; letter-spacing:.2px; backdrop-filter:none; }
+#settings-panel h3.sec { display:flex; align-items:center; gap:7px; margin:19px 0 8px; padding:7px 9px; color:#edf5fd; font-size:11px; letter-spacing:1.2px; text-transform:uppercase; background:linear-gradient(90deg, color-mix(in srgb, var(--acc, #7fb7ff) 23%, transparent), rgba(255,255,255,.035)); border-left:3px solid var(--acc, #7fb7ff); border-radius:5px; box-shadow:inset 0 1px rgba(255,255,255,.08); }
+#settings-panel .ico { display:inline; font-size:12px; }
+#settings-panel p { font-size:12px; line-height:1.55; color:#93a5ba; }
+.settings-tabs { padding:4px; background:#090f18; border:1px solid var(--ui-line); border-radius:8px; gap:2px; }
+.settings-tabs button { font-size:12px; border-radius:5px; background:transparent; color:#95a8bf; }
+.settings-tabs button[aria-selected="true"] { background:#263a50; color:#edf6ff; }
+#settings-panel .set-row { display:flex; align-items:center; gap:10px; min-height:40px; margin:0; padding:6px 7px; border-bottom:1px solid #ffffff0d; border-radius:5px; }
+#settings-panel .set-row:hover { background:rgba(127,183,255,.08); }
+#settings-panel .set-row label { flex:1; font-size:12px; color:#c4d0df; }
+#settings-panel .set-row select { max-width:195px; }
+#settings-panel input[type=range] { width:110px; accent-color:var(--ui-accent); }
+#settings-panel input[type=checkbox] { appearance:none; width:30px; height:18px; flex:none; border:1px solid #526174; border-radius:12px; background:#283344; cursor:pointer; position:relative; }
+#settings-panel input[type=checkbox]::after { content:''; position:absolute; width:12px; height:12px; border-radius:50%; background:#c3d2e2; top:2px; left:2px; transition:transform 160ms ease,background 160ms ease; }
+#settings-panel input:checked[type=checkbox] { background:#356da5; border-color:#548abe; }
+#settings-panel input:checked[type=checkbox]::after { transform:translateX(12px); background:white; }
+button,input,select,summary,a { transition:background-color 150ms ease,border-color 150ms ease,color 150ms ease,box-shadow 150ms ease,transform 120ms ease; }
+button:hover,select:hover { border-color:var(--ui-accent); }
+button:active { transform:scale(.97); }
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:3px; }
+#settings-panel input[type=number],#settings-panel select { background:#0b121d; color:#dce8f5; border:1px solid #36485f; border-radius:5px; padding:6px; min-width:0; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#settings-panel #mount-apply { width:100%; margin-top:16px; padding:10px; background:#294c70; color:white; border:1px solid #496d92; border-radius:6px; cursor:pointer; }
+#mount-save { width:100%; margin-top:8px; padding:10px; background:transparent; color:#b6cee7; border:1px solid #36485f; border-radius:6px; cursor:pointer; }
+@keyframes panel-enter { from {opacity:0;transform:translateY(6px)} to {opacity:1;transform:translateY(0)} }
+@media(max-width:850px) {
+ html,body { overflow:auto; height:auto; }
+ #viewer-layout,#viewer-layout.settings-open { height:auto; min-height:100dvh; grid-template-columns:1fr; grid-template-rows:auto 50dvh auto auto; }
+ #view-controls { position:static; grid-column:1; grid-row:1; max-width:none; flex-wrap:wrap; }
+ #threeContainer { grid-column:1; grid-row:2; }
+ #inspector-dock,#inspector-dock.show-settings { grid-column:1; grid-row:3; overflow:visible; width:100%; }
+ #instrument-dock { grid-column:1; grid-row:4; margin-top:0; overflow:visible; width:auto; max-height:none; padding:0; pointer-events:auto; }
+ #inspector-dock #settings-panel { height:auto; }
+}
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; } }
+/* Shared glass surfaces, sized in CSS pixels independently of render quality. */
+:root { --ui-font:clamp(13px, .84vw, 20px); --ui-line:rgba(215,235,255,.22); --ui-accent:#9ed9ff; --glass:linear-gradient(145deg,rgba(94,117,145,.34),rgba(16,26,42,.86)); }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; font-size:var(--ui-font); }
+#viewer-layout.settings-open { grid-template-columns:minmax(0,1fr); }
+#view-controls { top:12px; left:12px; max-width:calc(100vw - 28em); padding:8px; gap:6px; }
+#instrument-dock { width:18em; margin-top:68px; padding:12px; max-height:calc(100dvh - 110px); }
+#inspector-dock,#inspector-dock.show-settings { grid-column:1; grid-row:1; width:28em; max-width:38vw; height:auto; max-height:calc(100dvh - 24px); margin:12px; padding:0; gap:10px; align-self:start; overflow:visible; }
+#view-controls,#instrument-dock #rw-panel,#instrument-dock #mtr-panel,#instrument-dock .control-panel,
+#inspector-dock #telemetry,#inspector-dock #mode-panel,#inspector-dock #settings-panel {
+ background:var(--glass); border:1px solid var(--ui-line); border-radius:18px; color:#eff6ff;
+ box-shadow:inset 0 1px 0 #ffffff29,0 12px 40px #0005; backdrop-filter:blur(18px) saturate(135%); -webkit-backdrop-filter:blur(18px) saturate(135%); text-shadow:none;
+}
+#instrument-dock .control-panel { padding:14px; }
+#inspector-dock #settings-panel { height:auto; max-height:calc(100dvh - 100px); padding:16px; overflow:auto; margin:0; }
+#inspector-dock #telemetry { margin:0; overflow:auto; }
+#inspector-dock #mode-panel { margin:0; padding:12px; }
+#settings-panel .sp-head { position:sticky; top:-16px; z-index:2; background:#1b2b3ef2; padding:12px 0; font-size:1.15em; }
+#settings-panel h3.sec { font-size:.85em; letter-spacing:.07em; }
+#settings-panel p,#settings-panel .set-row label,#settings-panel .set-row select,#settings-panel .set-row .val,
+#inspector-dock .tlm-page,#instrument-dock .rw-row { font-size:1em; line-height:1.5; }
+#settings-panel .set-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; padding:8px 0; min-height:42px; }
+#settings-panel .set-row label { min-width:0; }
+#settings-panel .set-row select { max-width:13em; }
+#settings-panel input[type=range] { width:7em; }
+#settings-panel .val { min-width:3em; text-align:right; font-variant-numeric:tabular-nums; }
+#settings-panel p { color:#b6c6d8; }
+#view-controls button,#view-controls select,#mode-panel select,.settings-tabs button,.tlm-tab { font:inherit; min-height:34px; border-radius:10px; }
+#mode-panel { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+#mode-panel select { min-width:0; max-width:100%; flex:1; }
+#inspector-dock .tlm-page { padding:12px; overflow-wrap:anywhere; }
+#inspector-dock .tlm-tabs { display:flex; position:sticky; top:0; z-index:1; background:#162538ed; padding:5px; gap:4px; }
+#inspector-dock .tlm-tab { flex:1; }
+#tlm-page-sensors h4,#tlm-page-sensors .sens-hint,#tlm-page-sensors .sens-row,#tlm-page-sensors .sens-flags,
+#tlm-page-sensors table,#tlm-page-sensors .sens-head3 { font-size:.86em; line-height:1.5; }
+#tlm-page-sensors .sens-head3,#tlm-page-sensors .sens-row { grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr); gap:5px; }
+#tlm-page-sensors .sens-sec { overflow-x:auto; margin-bottom:14px; }
+.rw-row { display:flex; align-items:baseline; justify-content:space-between; gap:10px; font-variant-numeric:tabular-nums; }
+.rw-value { text-align:right; }
+#threeContainer #clock,#threeContainer #feed-meter,#threeContainer #fps-meter { font-size:.9em; background:#101d2dcc; border:1px solid var(--ui-line); border-radius:9px; padding:5px 8px; }
+#threeContainer #attribution { font-size:10px; }
+.settings-tabs { display:flex; flex-wrap:wrap; background:#14203180; border-radius:12px; }
+.settings-tabs button { flex:1; font-size:1em; padding:8px; }
+body[data-quality="low"] #view-controls,body[data-quality="low"] #instrument-dock > *,body[data-quality="low"] #inspector-dock > * { backdrop-filter:none; -webkit-backdrop-filter:none; background:#172335f5; }
+@media(max-width:850px) {
+ #viewer-layout,#viewer-layout.settings-open { grid-template-columns:1fr; }
+ #view-controls { max-width:none; margin:8px; }
+ #inspector-dock,#inspector-dock.show-settings { grid-row:3; width:auto; max-width:none; max-height:none; margin:8px; overflow:visible; }
+ #instrument-dock { grid-row:4; width:auto; margin:8px; padding:0; max-height:none; }
+ #inspector-dock #settings-panel { max-height:70dvh; }
+ #settings-panel .set-row select { max-width:11em; }
+}
+#instrument-dock .card { width:100%; min-width:0; padding:10px; background:#ffffff08; border:1px solid #ffffff14; border-radius:12px; box-shadow:none; }
+#instrument-dock .controls { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:5px; }
+#instrument-dock .controls input { width:100%; min-width:0; }
+#instrument-dock .card h3 { font-size:1em; color:#b7cde1; }
+#instrument-dock .card button { font-size:.8em; }
+@media(max-width:850px) {
+ #viewer-layout,#viewer-layout.settings-open { grid-template-rows:auto 50dvh auto auto; align-content:start; }
+ #inspector-dock,#inspector-dock.show-settings { align-self:start; }
+ #threeContainer #clock { font-size:10px; max-width:95%; white-space:normal; text-align:center; }
+ #threeContainer #attribution { max-width:100%; font-size:8px; }
+}
+#viewer-layout #view-controls,#viewer-layout #telemetry,#viewer-layout #mode-panel,#viewer-layout #rw-panel,#viewer-layout #mtr-panel,#viewer-layout #settings-panel,#viewer-layout .control-panel { font-size:var(--ui-font); }
+#viewer-layout .rw-title,#viewer-layout .rw-label,#viewer-layout .rw-value,#viewer-layout .vc-label { font-size:.92em; }
+#settings-panel .set-row input[type=checkbox] { grid-column:3; }
+@media(max-width:850px) {
+ #viewer-layout,#viewer-layout.settings-open { display:flex; flex-direction:column; min-height:100dvh; }
+ #threeContainer { height:50dvh; flex:none; order:2; }
+ #view-controls { order:1; flex:none; }
+ #inspector-dock,#inspector-dock.show-settings { order:3; align-self:stretch; flex:none; }
+ #instrument-dock { order:4; align-self:stretch; flex:none; }
+}
+
+

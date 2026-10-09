@@ -1,0 +1,22 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-pointing .mission-rail { bottom:230px; }
+#mission-page-pointing .mission-bottom .mission-card { padding:12px; }
+#mission-page-pointing .mission-rail { bottom:calc(var(--foot-height) + var(--plots-height) + 48px); }
+#mission-page-pointing .mission-bottom { bottom:calc(var(--foot-height) + 36px); height:var(--plots-height); grid-template-columns:1.5fr 1fr 1fr; }
+#mission-page-pointing .mission-bottom .live-chart canvas { height:90px; }
+#mission-page-pointing .mission-bottom .live-chart figcaption { font-size:.66em; }
+#mission-page-pointing .mission-bottom .card-heading { margin-bottom:6px; }
+#mission-page-pointing .rail-right .metric-highlight { font-size:.77em; }
+#mission-page-pointing .rail-right .quiet { font-size:.66em; }
+#mission-page-pointing .mission-bottom .live-chart canvas { height:75px; }
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+#mission-page-pointing .mission-bottom .live-chart figcaption { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }
+#mission-page-pointing .mission-rail { scrollbar-width:none;overflow:hidden; }
+#mission-page-pointing .mission-foot .mission-card { overflow:hidden; }
+#mission-page-pointing .position-body .mini-world { min-width:0; }
+#mission-page-pointing .position-body .mini-world canvas { width:100%;max-width:100%; }
+#mission-page-pointing .mode-status { white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+#mission-page-pointing .position-body .mini-world figcaption { display:none; }
+#mission-page-pointing .mission-bottom .live-chart canvas { height:60px; }
+#mission-page-pointing .mission-bottom .live-chart figcaption { display:none; }
+#mission-page-pointing .mission-bottom .mission-card { padding:8px 10px; }

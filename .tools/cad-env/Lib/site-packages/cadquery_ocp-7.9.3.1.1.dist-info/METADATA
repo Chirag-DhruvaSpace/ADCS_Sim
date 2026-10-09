@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: cadquery-ocp
+Version: 7.9.3.1.1
+Summary: Python wrapper for Open CASCADE Technology 3D geometry library based on the official CadQuery/OCP sources
+Author: Bernhard Walter
+License: Apache-2.0
+Classifier: License :: OSI Approved :: Apache Software License
+Requires-Python: <3.15,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: cadquery-ocp-proxy==7.9.3.1.1
+Requires-Dist: vtk==9.6.2
+
+# cadquery-ocp (also known as OCP)
+
+Python wrapper for OCCT generated using pywrap. Typing [stubs](https://pypi.org/project/cadquery-ocp-stubs/) available from pypi.
+
+## Goals of OCP
+* Provide thin bindings to OCCT.
+* Wrap all OCCT modules (if practical).
+* React quickly to new OCCT releases.
+* Cater primarily for the CadQuery project.
+
+## Non-goals
+* Provide additional functionality not present in OCCT

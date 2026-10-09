@@ -1,0 +1,6 @@
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.distance-scale {position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(12px);z-index:16;color:#e5f1fa;text-shadow:0 1px 4px #000;font:12px system-ui;text-align:center;opacity:0;pointer-events:none;transition:opacity .45s ease,transform .45s ease;}
+.distance-scale-line {height:7px;border:solid #dcecf7;border-width:0 1px 1px;margin:8px auto 0;}
+/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
+.overview-scale-visible .distance-scale {opacity:1;transform:translateX(-50%);}
+@media(prefers-reduced-motion:reduce){.distance-scale{transition:none;}}
