@@ -1,23 +1,19 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup + self-diagnosis (v2)
+#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup + self-diagnosis (v3)
 #  Windows PowerShell 5.1+ (the one that ships with Windows 10/11)
 #
-#  v2 fixes vs the version that failed with "viewer never answered 200":
-#   * HTTP probe uses curl.exe --noproxy "*": immune to corporate proxies and
-#     DISTINGUISHES "no server" (000) from "server up, 503 frontend missing"
-#     from "200 OK". PS 5.1 Invoke-WebRequest throws on 503, which made an
-#     answered 503 look identical to a dead port -> blind 120s timeout.
-#   * The booted sim's stdout/stderr are captured to sim-boot.out.log /
-#     sim-boot.err.log and dumped on any failure (real error text, not guesses).
-#   * Early-exit auto-diagnosis: port busy / JVM missing / ModuleNotFoundError.
-#   * "Server up but 503 because frontend/dist missing" = clear PARTIAL success
-#     with exact next steps - not a scary generic failure.
-#   * -BootTimeoutSec <sec> (default 240), -InstallNode (winget auto-install).
-#   * npm build retried once after cleaning node_modules.
-#   * .vscode/settings.json: tolerates JSONC comments, backs up before rewrite
-#     (old version used -AsHashtable, which does not exist in PS 5.1 and made
-#     it overwrite a VALID settings.json on every machine).
-#   * No more double-printed log lines; $VenvPy expands correctly in messages.
+#  v3 vs v2:
+#   * If npm is missing, Step 5 now FIXES IT ITSELF instead of giving up:
+#       1. portable Node zip -> tools\node  (NO admin, NO system install,
+#          nothing in registry/Program Files - corporate-laptop friendly)
+#       2. if download blocked -> winget auto-install as fallback
+#       3. -DistUrl <zip>      -> fetch a PREBUILT frontend/dist, no Node at all
+#     Portable Node is cached: re-runs build offline.
+#   * New flags: -NodeVersion <ver> (default 22.14.0 LTS), -DistUrl <url>,
+#     -InstallNode (force system-wide winget install FIRST).
+#  v2 fixes kept: curl.exe --noproxy probe (000 vs 503 vs 200), sim boot output
+#  captured to sim-boot.*.log + auto-diagnosis, -BootTimeoutSec, JSONC-tolerant
+#  .vscode/settings.json with backup, npm clean-retry, port cleanup.
 # ============================================================================
 param(
   [switch]$ReuseVenv,
@@ -25,11 +21,14 @@ param(
   [switch]$ViewerOnly,
   [switch]$SkipFrontend,
   [switch]$NoSmoke,
-  [switch]$InstallNode,
-  [int]$BootTimeoutSec = 240
+  [switch]$InstallNode,            # prefer system-wide winget install of Node LTS
+  [int]$BootTimeoutSec = 240,
+  [string]$NodeVersion = '22.14.0', # Node LTS used for the portable copy
+  [string]$DistUrl = ''            # optional: URL of a prebuilt frontend-dist .zip
 )
 
  $ErrorActionPreference = 'Stop'
+ $ProgressPreference = 'SilentlyContinue'   # 30MB downloads would crawl otherwise
  $Root       = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
  $LogFile    = Join-Path $Root 'setup.log'
@@ -38,6 +37,8 @@ Set-Location $Root
  $DistIndex  = Join-Path $Root 'frontend\dist\index.html'
  $BootOut    = Join-Path $Root 'sim-boot.out.log'
  $BootErr    = Join-Path $Root 'sim-boot.err.log'
+ $ToolsDir   = Join-Path $Root 'tools'
+ $PortableNodeDir = Join-Path $ToolsDir 'node'
  $StepTotal  = 8; $StepNo = 0
  $FrontendMissing = $false
 
@@ -50,21 +51,14 @@ function Step([string]$t) {
   $script:StepNo++
   Write-Host ''
   Write-Host "===== [$($script:StepNo)/$StepTotal] $t =====" -ForegroundColor Cyan
-  Log "STEP $($scriptNo)/$StepTotal : $t"
+  Log "STEP $($script:StepNo)/$StepTotal : $t"
 }
-
-# Run a native command, stream output to console+log, return exit code.
-# EAP is relaxed inside because PS 5.1 turns native stderr into
-# NativeCommandError records that would otherwise kill the script.
 function Run([string]$exe, [string[]]$argList) {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  try {
-    & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; Write-Host "  $ln" -ForegroundColor DarkGray; Log "  $ln" }
-  } finally { $ErrorActionPreference = $prev }
+  try { & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; Write-Host "  $ln" -ForegroundColor DarkGray; Log "  $ln" } }
+  finally { $ErrorActionPreference = $prev }
   return $LASTEXITCODE
 }
-
-# ---- HTTP probes (curl.exe: proxy-immune, status-code aware) ----
 function Get-HttpCode([int]$Port = 5000) {
   $url = "http://127.0.0.1:$Port/"
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
@@ -73,7 +67,6 @@ function Get-HttpCode([int]$Port = 5000) {
     if ($code -match '^\d{3}$') { return $code }
     return '000'
   }
-  # fallback for ancient Windows without curl.exe: only tell if it listens
   $t = New-Object System.Net.Sockets.TcpClient
   try { $t.Connect('127.0.0.1', $Port); return 'LISTENING' } catch { return '000' }
   finally { $t.Close() }
@@ -96,16 +89,15 @@ function Test-PortFree([int]$Port) {
   catch { return $true }
 }
 function Kill-Port([int]$Port) {
-  try {
-    Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
-      ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
-  } catch {}
+  try { Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+        ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } } catch {}
 }
 function Test-Npm {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { $null = npm.cmd --version 2>&1; return ($LASTEXITCODE -eq 0) }
   catch { return $false } finally { $ErrorActionPreference = $prev }
 }
+function Test-PortableNode { Test-Path (Join-Path $PortableNodeDir 'npm.cmd') }
 function Get-Py312 {
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try {
@@ -120,14 +112,58 @@ function Tail-File([string]$path, [int]$n = 20) {
   if ($path -and (Test-Path $path)) { return (Get-Content $path -Tail $n) -join "`n" }
   return ''
 }
+function Refresh-PathFromMachine {
+  $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+}
+function Install-NodeViaWinget {
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Warn 'winget not available on this machine.'; return $false }
+  Say '  winget install OpenJS.NodeJS.LTS (system-wide, may ask for elevation) ...' DarkCyan
+  $null = Run winget @('install','-e','--id','OpenJS.NodeJS.LTS','--accept-source-agreements','--accept-package-agreements','--silent')
+  Refresh-PathFromMachine
+  if (Test-Npm) { Ok 'Node.js installed via winget and visible now'; return $true }
+  # winget ran but PATH not refreshed in this session -> probe the default location directly
+  $std = 'C:\Program Files\nodejs'
+  if (Test-Path (Join-Path $std 'npm.cmd')) {
+    $env:Path = "$std;$env:Path"
+    Ok "winget installed Node; using it directly from $std"
+    return $true
+  }
+  Warn 'winget reported success but npm is still not usable - will try portable Node next.'
+  return $false
+}
+function Install-PortableNode([string]$Version) {
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  $zipUrl  = "https://nodejs.org/dist/v$Version/node-v$Version-win-x64.zip"
+  $zipPath = Join-Path $ToolsDir "node-v$Version-win-x64.zip"
+  New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+  Say "  downloading portable Node $Version (~30 MB, one-time; cached in tools\node) ..." DarkCyan
+  Log "  url: $zipUrl"
+  try { Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing }
+  catch { Warn "download failed: $($_.Exception.Message) (no internet, or nodejs.org blocked by proxy/IT)"; return $false }
+  Say '  extracting ...' DarkCyan
+  $tmp = Join-Path $ToolsDir 'node-extract'
+  if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+  Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
+  $inner = Get-ChildItem $tmp -Directory | Select-Object -First 1
+  if (-not $inner) { Warn 'Node zip had unexpected layout.'; return $false }
+  if (Test-Path $PortableNodeDir) { Remove-Item -Recurse -Force $PortableNodeDir }
+  Move-Item $inner.FullName $PortableNodeDir
+  Remove-Item -Recurse -Force $tmp
+  Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+  if (-not (Test-PortableNode)) { Warn 'portable Node extraction incomplete.'; return $false }
+  $nv = (& (Join-Path $PortableNodeDir 'node.exe') --version) 2>&1 | Out-String
+  Ok "portable Node ready: $PortableNodeDir ($($nv.Trim())) - nothing was installed system-wide"
+  return $true
+}
 
 # ============================== banner =====================================
 '' | Out-File -FilePath $LogFile -Encoding utf8
 Write-Host '============================================================' -ForegroundColor Cyan
-Write-Host ' LEAP-2 MBD Simulation : one-click setup (v2, self-diagnosing)' -ForegroundColor Cyan
+Write-Host ' LEAP-2 MBD Simulation : one-click setup (v3, self-provisioning)' -ForegroundColor Cyan
 Write-Host " Root : $Root" -ForegroundColor Gray
 Write-Host " Log  : $LogFile" -ForegroundColor Gray
-Write-Host ' Flags: -ReuseVenv -KeepRunning -ViewerOnly -SkipFrontend -NoSmoke -InstallNode -BootTimeoutSec <sec>' -ForegroundColor Gray
+Write-Host ' Flags: -ReuseVenv -KeepRunning -ViewerOnly -SkipFrontend -NoSmoke' -ForegroundColor Gray
+Write-Host '        -InstallNode -BootTimeoutSec <sec> -NodeVersion <ver> -DistUrl <url>' -ForegroundColor Gray
 Write-Host '============================================================' -ForegroundColor Cyan
 
 # ====================== Step 1 : pre-flight ================================
@@ -137,29 +173,15 @@ if (-not $py312) { Fail "Python 3.12 not found. Install python.org 3.12 64-bit W
 Ok "Python 3.12 via: $($py312.Exe) $($py312.Args -join ' ')"
 
  $npmOk = Test-Npm
-if (-not $npmOk -and $InstallNode) {
-  Warn 'npm not found - attempting winget auto-install of Node.js LTS (needs internet; IT must allow winget) ...'
-  if (Get-Command winget -ErrorAction SilentlyContinue) {
-    $null = Run winget @('install','-e','--id','OpenJS.NodeJS.LTS','--accept-source-agreements','--accept-package-agreements','--silent')
-    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-    $npmOk = Test-Npm
-    if ($npmOk) { Ok 'Node.js installed via winget and visible in this session' }
-    else { Warn 'winget ran but npm is still not visible - install Node LTS manually from https://nodejs.org and re-run Setup.bat in a NEW window.' }
-  } else { Warn 'winget not available - install Node LTS manually from https://nodejs.org and re-run Setup.bat in a NEW window.' }
-}
-if ($npmOk) { Ok 'node/npm present' } elseif (-not $InstallNode) { Warn 'node/npm NOT found - the frontend cannot be built on this machine.' }
+if ($npmOk) { Ok 'node/npm present on PATH' }
+elseif (Test-PortableNode) { Ok 'portable Node already cached (tools\node) - frontend can be built offline' }
+elseif (Test-Path $DistIndex) { Say '  [..] frontend/dist shipped - Node will not be needed at all' DarkCyan }
+else { Say '  [..] Node not found - Step 5 will fetch a portable copy automatically (needs internet)' DarkCyan }
 
 if (Test-Path $DistIndex) { Ok "frontend/dist shipped in this copy - no Node needed ($DistIndex)" }
-elseif ($npmOk) { Say '  [..] frontend/dist not present but npm is - it will be built in Step 5' DarkCyan }
-else {
-  $FrontendMissing = $true
-  Warn 'frontend/dist/index.html MISSING and Node.js missing -> after setup the server WILL answer 503 "Build the frontend first" (UI missing). Backend will still be installed and proven. Finish later with: install Node LTS -> Setup.bat -ReuseVenv (new window), or copy frontend\dist from the dev machine.'
-}
-
  $od = Join-Path $Root 'orekit-data'
 if (Test-Path (Join-Path $od 'Potential')) { Ok "orekit-data shipped OK ($od)" }
 else { Fail "orekit-data/ folder missing or incomplete. Re-extract the zip, or download https://gitlab.orekit.org/orekit/orekit-data/-/archive/main/orekit-data-main.zip and rename the folder to orekit-data at repo root." }
-
 if (Test-PortFree 5000) { Ok 'port 5000 free' } else { Warn 'port 5000 is BUSY (an old sim is running?). Setup continues, but the boot check may attach to the OLD server. Close it first if results look odd.' }
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force } catch {}
 
@@ -175,7 +197,6 @@ if ((Test-Path $VenvDir) -and (-not $ReuseVenv)) {
     Ok 'old .venv deleted'
   } catch { Fail "Could not delete old .venv (a python.exe inside it is probably still running - close VS Code/terminals using it). Detail: $_" }
 } elseif (Test-Path $VenvDir) { Ok 'reusing existing .venv (-ReuseVenv)' }
-
 if (-not (Test-Path $VenvPy)) {
   Log "  creating venv: $($py312.Exe) $($py312.Args -join ' ') -m venv .venv ..."
   $null = Run $py312.Exe ($py312.Args + @('-m','venv','.venv'))
@@ -207,19 +228,11 @@ Step 'Java 21 via jdk4py (fixes "No JVM shared library file (jvm.dll) found")'
 if ($jdkHome) { $jdkHome = $jdkHome.Trim() }
 if (-not $jdkHome -or -not (Test-Path $jdkHome)) { Fail "jdk4py did not return a valid JAVA_HOME (got '$jdkHome'). Fix: $VenvPy -m pip install --force-reinstall jdk4py, then re-run." }
 if (-not (Test-Path (Join-Path $jdkHome 'bin\server\jvm.dll'))) { Fail "jvm.dll not found under $jdkHome\bin\server - jdk4py install is corrupt. Re-run Setup.bat (fresh venv)." }
- $env:Path      = "$jdkHome\bin;$env:Path"
+ $env:Path = "$jdkHome\bin;$env:Path"
  $env:JAVA_HOME = $jdkHome
 Log "  JAVA_HOME=$env:JAVA_HOME"
 Ok "jvm.dll present: $jdkHome\bin\server\jvm.dll"
 
- $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
- $jvmPath = (& $VenvPy -c "import jpype; print(jpype.getDefaultJVMPath())" 2>&1 | Out-String).Trim()
- $ErrorActionPreference = $prev
- $jvmPath = ($jvmPath -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
-if ($jvmPath -and ($jvmPath.Trim() -notlike '*jdk4py*')) { Warn "JPype resolved to a NON-jdk4py JVM: $($jvmPath.Trim()) - a stale system JDK may shadow jdk4py. Step 6 smoke test is the real verdict." }
-elseif ($jvmPath) { Ok "JPype resolves JVM: $($jvmPath.Trim())" }
-
-# Persist for VS Code terminals
  $actSim = Join-Path $VenvDir 'Scripts\Activate-sim.ps1'
 @"
 # auto-generated by setup.ps1 - use this instead of plain Activate.ps1
@@ -242,7 +255,6 @@ if (Test-Path $settingsPath) {
   $parsed = $null
   try { $parsed = $raw | ConvertFrom-Json } catch {}
   if (-not $parsed) {
-    # VS Code allows comments + trailing commas (JSONC); PowerShell does not.
     $stripped = ($raw -replace '/\*[\s\S]*?\*/','') -replace '(?m)^\s*//.*$',''
     $stripped = $stripped -replace ',\s*([\]}])', '$1'
     try { $parsed = $stripped | ConvertFrom-Json } catch {}
@@ -260,30 +272,80 @@ if (Test-Path $settingsPath) {
 "JAVA_HOME=$jdkHome`nOREKIT_DATA=$od" | Out-File -FilePath (Join-Path $Root '.env') -Encoding utf8
 Ok 'VS Code pinned to .venv + JAVA_HOME persisted (.vscode/settings.json, .env)'
 
-# ====================== Step 5 : frontend ===================================
-Step 'Frontend build (frontend/dist/index.html)'
+# ============ Step 5 : frontend (now self-provisioning Node) ================
+Step 'Frontend build (auto-gets Node if missing -> frontend/dist/index.html)'
 if ($SkipFrontend) { Warn 'skipped via -SkipFrontend (viewer will 503 until you build).' }
-elseif (Test-Path $DistIndex) { Ok "dist already built: $DistIndex" }
-elseif (-not $npmOk) {
-  $FrontendMissing = $true
-  Warn "npm not found and dist not shipped - frontend CANNOT be built here. Server will return 503 'Build the frontend first...'. Install Node LTS from https://nodejs.org (or re-run with -InstallNode), then Setup.bat -ReuseVenv in a NEW window."
-}
+elseif (Test-Path $DistIndex) { Ok "dist already present: $DistIndex" }
 else {
-  Push-Location (Join-Path $Root 'frontend')
-  try {
-    Say '  npm.cmd install ...' DarkCyan
-    $ec = Run npm.cmd @('install')
-    if ($ec -ne 0) {
-      Warn 'npm install failed - cleaning node_modules + package-lock and retrying once ...'
-      Remove-Item -Recurse -Force '.\node_modules' -ErrorAction SilentlyContinue
-      Remove-Item -Force '.\package-lock.json' -ErrorAction SilentlyContinue
-      $ec = Run npm.cmd @('install')
+  # ---- acquire a Node toolset: system npm > cached portable > winget > download portable ----
+  $npmCmd = $null
+  if (Test-Npm) { $npmCmd = 'npm.cmd'; Ok 'using system npm' }
+  elseif (Test-PortableNode) {
+    $env:Path = "$PortableNodeDir;$env:Path"
+    $npmCmd = Join-Path $PortableNodeDir 'npm.cmd'
+    Ok "using cached portable Node: $PortableNodeDir (no download needed)"
+  }
+  if (-not $npmCmd -and $InstallNode) { if (Install-NodeViaWinget) { $npmCmd = 'npm.cmd' } }
+  if (-not $npmCmd) {
+    if (-not (Install-PortableNode $NodeVersion)) {
+      Warn 'portable Node download failed - trying winget as fallback ...'
+      if (Install-NodeViaWinget) { $npmCmd = 'npm.cmd' }
+    } else {
+      $env:Path = "$PortableNodeDir;$env:Path"
+      $npmCmd = Join-Path $PortableNodeDir 'npm.cmd'
     }
-    Say '  npm.cmd run build ...' DarkCyan
-    $ec = Run npm.cmd @('run','build')
-  } finally { Pop-Location }
-  if (Test-Path $DistIndex) { Ok "frontend built: $DistIndex" }
-  else { Fail "frontend build finished but frontend/dist/index.html is still missing. Open setup.log, search 'npm ERR!'. Usual fix: delete frontend/node_modules + frontend/package-lock.json and re-run." }
+  }
+  if ($npmCmd) {
+    Push-Location (Join-Path $Root 'frontend')
+    try {
+      Say '  npm install ...' DarkCyan
+      $ec = Run $npmCmd @('install')
+      if ($ec -ne 0) {
+        Warn 'npm install failed - cleaning node_modules + package-lock and retrying once ...'
+        Remove-Item -Recurse -Force '.\node_modules' -ErrorAction SilentlyContinue
+        Remove-Item -Force '.\package-lock.json' -ErrorAction SilentlyContinue
+        $ec = Run $npmCmd @('install')
+      }
+      Say '  npm run build ...' DarkCyan
+      $ec = Run $npmCmd @('run','build')
+    } finally { Pop-Location }
+    if (Test-Path $DistIndex) { Ok "frontend built: $DistIndex" }
+    else {
+      $FrontendMissing = $true
+      Warn "npm build did not produce frontend/dist/index.html. Open setup.log, search 'npm ERR!'. If it is a network/proxy error, re-run once more; else build on the dev machine and copy frontend\dist."
+    }
+  }
+  elseif ($DistUrl) {
+    # ---- no Node at all: fetch a prebuilt dist bundle ----
+    Warn "no Node available - fetching prebuilt frontend from -DistUrl ..."
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    $dz = Join-Path $ToolsDir 'frontend-dist.zip'
+    try { Invoke-WebRequest -Uri $DistUrl -OutFile $dz -UseBasicParsing }
+    catch { $FrontendMissing = $true; Warn "dist download failed: $($_.Exception.Message)" }
+    if (-not $FrontendMissing) {
+      $tmp = Join-Path $ToolsDir 'dist-extract'
+      if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+      Expand-Archive -Path $dz -DestinationPath $tmp -Force
+      $src = $null
+      if     (Test-Path (Join-Path $tmp 'dist\index.html')) { $src = Join-Path $tmp 'dist' }
+      elseif (Test-Path (Join-Path $tmp 'index.html'))      { $src = $tmp }
+      if ($src) {
+        $dest = Join-Path $Root 'frontend\dist'
+        if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+        New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+        Move-Item $src $dest
+        Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        Remove-Item $dz -Force -ErrorAction SilentlyContinue
+        Ok "prebuilt frontend installed: $DistIndex"
+      } else { $FrontendMissing = $true; Warn 'the -DistUrl zip did not contain dist/index.html or index.html at its root.' }
+    }
+  }
+  else {
+    $FrontendMissing = $true
+    Warn 'NO Node and NO internet path succeeded - frontend cannot be built here.'
+    Warn 'Fix (pick one): 1) re-run with internet, 2) re-run with -DistUrl <url-to-prebuilt-dist.zip>, 3) copy frontend\dist from the dev machine. Backend setup continues and is fully usable otherwise.'
+  }
 }
 
 # ====================== Step 6 : smoke test =================================
@@ -299,11 +361,9 @@ else {
     else { Fail "Orekit smoke import failed. Tail of setup.log:`n$tail" }
   }
   Ok 'JVM + orekit-data load cleanly'
-
   $ec = Run $VenvPy @('-c',"import app; print('viewer-import-ok')")
   if ($ec -ne 0) { Fail 'import app failed (viewer-only, no Java needed) - a python dep is broken. See setup.log.' }
   Ok 'viewer imports cleanly (no JVM needed)'
-
   $ec = Run $VenvPy @('-c',"from astropy.time import Time; print('astropy-ok')")
   if ($ec -ne 0) {
     Warn 'astropy import failed - attempting repair (force-reinstall astropy+numpy) ...'
@@ -323,7 +383,6 @@ Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
  $simProc = Start-Process -FilePath $VenvPy -ArgumentList "`"$targetPath`"" -WorkingDirectory $Root `
                -PassThru -WindowStyle Hidden -RedirectStandardOutput $BootOut -RedirectStandardError $BootErr
 Ok "sim process started (pid $($simProc.Id)); output -> sim-boot.out.log / sim-boot.err.log"
-
  $up = $false; $partial = $false; $sawCode = ''; $bootStart = Get-Date
  $deadline = $bootStart.AddSeconds($BootTimeoutSec)
 while ((Get-Date) -lt $deadline) {
@@ -357,7 +416,6 @@ while ((Get-Date) -lt $deadline) {
   elseif ($code -eq '000') { Say "  [${elapsed}s] no listener yet (JVM/physics warming up) ..." DarkCyan }
   else { Say "  [${elapsed}s] HTTP $code - server up ..." DarkCyan }
 }
-
 if ($up) {
   Ok "LIVE - viewer answered HTTP 200 ($mode)"
   $api = Get-ApiCode '/api/latest'
@@ -365,7 +423,7 @@ if ($up) {
   else { Warn "/api/latest not 2xx yet (physics warming up - normal in the first seconds): $api" }
 }
 elseif ($partial) {
-  Warn 'SERVER IS UP but returns 503 - frontend/dist is missing (Node.js not installed on this machine).'
+  Warn 'SERVER IS UP but returns 503 - frontend/dist is missing on this machine.'
   Warn 'This is NOT a python/java failure - the backend stack is proven.'
   $api = Get-ApiCode '/api/latest'
   if ($api -match '^2\d\d$') { Ok "backend + telemetry PROVEN (/api/latest answers $api) - only the web UI files are missing" }
@@ -398,10 +456,9 @@ if ($up) {
   Write-Host ' SETUP 90% COMPLETE - backend fully proven, UI files missing' -ForegroundColor Yellow
   Write-Host '============================================================' -ForegroundColor Yellow
   Write-Host ' To get the web UI, pick ONE:' -ForegroundColor Cyan
-  Write-Host '   A) Install Node.js LTS (https://nodejs.org, default options),' -ForegroundColor White
-  Write-Host '      close this window, open a NEW one, run:  Setup.bat -ReuseVenv' -ForegroundColor White
-  Write-Host '   B) Node installed? Just build:  cd frontend && npm.cmd install && npm.cmd run build' -ForegroundColor White
-  Write-Host '   C) Or copy frontend\dist from the dev machine into this folder.' -ForegroundColor White
+  Write-Host '   A) With internet:  Setup.bat -ReuseVenv   (auto-downloads portable Node and builds)' -ForegroundColor White
+  Write-Host '   B) Prebuilt UI:    Setup.bat -ReuseVenv -DistUrl <url-to-dist.zip>' -ForegroundColor White
+  Write-Host '   C) Manual copy:    copy frontend\dist from the dev machine into this folder' -ForegroundColor White
   Write-Host ' Until then run_simulator.py serves 503 "Build the frontend first".' -ForegroundColor Gray
 }
 Write-Host ''
