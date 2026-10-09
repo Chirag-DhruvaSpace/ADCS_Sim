@@ -1,31 +1,24 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v7)
-#  Flow: git clone repo -> double-click Setup.bat -> sim starts itself.
-#  Only prerequisite on the machine: Python 3.12 (py launcher).
+#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v8)
+#  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
 #
-#  v7 vs v6 - fixes "Could not delete old .venv ... The directory is not empty":
-#   * .venv deletion is now bulletproof:
-#       - kills ONLY processes whose executable lives inside .venv (no more
-#         killing every python.exe on the machine by name), plus the
-#         Run-Sim.bat / run-sim.ps1 wrapper windows (so no auto-restart races)
-#         and whatever serves port 5000
-#       - deletes with cmd's rmdir /s /q (immune to the PowerShell
-#         Remove-Item -Recurse "directory not empty" race), with retries and
-#         a rename-then-delete fallback
-#   * re-running Setup while last time's sim is still running is now SAFE -
-#     setup stops the sim itself before rebuilding the venv.
-#  v6 kept: run_simulator.py auto-patch (boot shield), auto-launch at the end,
-#  orekit-data auto-download, portable-Node auto-fetch, proxy-immune
-#  000/503/200 boot probe, boot-log capture + auto-diagnosis.
+#  v8 vs v7 - per user request:
+#   * NO separate launcher files (no Run-Sim.bat / run-sim.ps1 / opener)
+#   * NO auto-launch at the end. Setup downloads, builds, verifies (HTTP 200),
+#     then STOPS everything and leaves the machine clean for VS Code.
+#   * Setup always stops any running sim first (safe to re-run anytime).
+#   * run_simulator.py patched/upgraded to shield v2: friendly "already
+#     running" guard (no more WinError 10048 tracebacks on double-runs).
+#  Kept from v7: bulletproof .venv teardown (kill only venv processes, cmd
+#  rmdir with retries), orekit-data auto-download, portable-Node auto-fetch,
+#  proxy-immune 000/503/200 boot probe, boot-log capture + diagnosis.
 # ============================================================================
 param(
   [switch]$ReuseVenv,
-  [switch]$KeepRunning,
   [switch]$ViewerOnly,
   [switch]$SkipFrontend,
   [switch]$NoSmoke,
   [switch]$InstallNode,
-  [switch]$NoAutoRun,
   [switch]$NoPatchRunSim,
   [int]$BootTimeoutSec = 300,
   [string]$NodeVersion = '22.14.0',
@@ -120,11 +113,11 @@ function Refresh-PathFromMachine {
   $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
 }
 
-# ---------- v7: bulletproof venv teardown -----------------------------------
-# Kills ONLY what actually runs from inside the venv (plus the launcher
-# wrappers and the port-5000 server). Never kills unrelated python.exe by name.
+# ---------- stop everything that runs from inside .venv --------------------
+# Kills ONLY: processes whose executable lives inside .venv, leftover
+# run-sim/Run-Sim wrappers from older setups, and the port-5000 owner.
 function Stop-VenvProcesses([string]$venvDir) {
-  Say '  stopping the sim + anything running from inside .venv ...' DarkCyan
+  Say '  stopping any running sim + processes from inside .venv ...' DarkCyan
   try {
     $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
       ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($venvDir, [StringComparison]::OrdinalIgnoreCase)) -or
@@ -132,7 +125,7 @@ function Stop-VenvProcesses([string]$venvDir) {
     }
     foreach ($p in $procs) {
       Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-      Log "  stopped pid $($p.ProcessId): $($_ = $p.ExecutablePath; if (-not $_) { $p.CommandLine } else { $_ })"
+      Log "  stopped pid $($p.ProcessId): $(if ($p.ExecutablePath) { $p.ExecutablePath } else { $p.CommandLine })"
     }
   } catch { Log "  process scan failed: $($_.Exception.Message)" }
   try {
@@ -141,8 +134,7 @@ function Stop-VenvProcesses([string]$venvDir) {
   } catch {}
   Start-Sleep -Seconds 2
 }
-# cmd's rmdir /s /q does not have the PowerShell Remove-Item -Recurse race
-# ("The directory is not empty"). Retries + rename-then-delete as fallback.
+# cmd rmdir /s /q: immune to the PowerShell "directory is not empty" race.
 function Remove-Tree([string]$path) {
   if (-not (Test-Path -LiteralPath $path)) { return $true }
   for ($i = 1; $i -le 4; $i++) {
@@ -221,27 +213,28 @@ function Install-OrekitData {
   return $true
 }
 
-# --- patches run_simulator.py if the clone has the fragile version ---------
+# --- upgrades run_simulator.py to shield v2 (double-run guard) -------------
 function Ensure-RunSimShield {
   $rs = Join-Path $Root 'run_simulator.py'
   if (-not (Test-Path $rs)) { Warn 'run_simulator.py not found - skipping patch step.'; return }
   $raw = Get-Content $rs -Raw
-  if ($raw -match 'LEAP2_BOOT_SHIELD') { Ok 'run_simulator.py is self-sufficient already (boot shield present)'; return }
-  if (($raw -notmatch 'Run physics and the viewer with shared command state') -or
-      ($raw -notmatch 'from satellite_flight_visualisation import run_simulation, _telemetry_publisher') -or
-      ($raw -notmatch 'run_simulation\(\)')) {
-    Warn 'run_simulator.py not recognized as the known original - NOT patching. Commit the shielded run_simulator.py.'
-    return
-  }
-  if ($NoPatchRunSim) { Warn 'run_simulator.py lacks the boot shield (-NoPatchRunSim given).'; return }
-  Copy-Item $rs "$rs.orig" -Force
+  if ($raw -match 'LEAP2_BOOT_SHIELD v2') { Ok 'run_simulator.py is the shielded v2 (self-set JAVA_HOME, boot immunity, double-run guard)'; return }
+  $known = ($raw -match 'Run physics and the viewer with shared command state') -and
+           ($raw -match 'from satellite_flight_visualisation import run_simulation, _telemetry_publisher') -and
+           ($raw -match 'run_simulation\(\)')
+  if (-not $known) { Warn 'run_simulator.py not recognized - NOT patching. Commit the shielded v2 file from the README/setup source.'; return }
+  if ($NoPatchRunSim) { Warn 'run_simulator.py patch skipped via -NoPatchRunSim.'; return }
+  if (-not (Test-Path "$rs.orig")) { Copy-Item $rs "$rs.orig" -Force }
   $new = @'
 """Run physics and the viewer with shared command state; no Flask reloader."""
-# LEAP2_BOOT_SHIELD v1 -- marker checked by setup.ps1; do not remove.
+# LEAP2_BOOT_SHIELD v2 -- marker checked by setup.ps1; do not remove.
 import os
 import signal
+import socket
 import threading
 from threading import Thread
+
+VIEWER_PORT = 5000
 
 
 def _ensure_java():
@@ -260,6 +253,12 @@ def _ensure_java():
         pass
 
 
+def _already_running():
+    """True if another sim instance is already serving the viewer port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('127.0.0.1', VIEWER_PORT)) == 0
+
+
 _stop_heartbeat = threading.Event()
 
 
@@ -267,11 +266,19 @@ def _heartbeat():
     n = 0
     while not _stop_heartbeat.wait(10):
         n += 10
-        print(f'  ... still starting up ({n}s) - normal, do not close this window',
-              flush=True)
+        print(f'  ... still starting up ({n}s) - normal, wait for the '
+              f'"Viewer:" line', flush=True)
 
 
 def main():
+    if _already_running():
+        print(f'LEAP-2 sim: ALREADY RUNNING in another window '
+              f'(port {VIEWER_PORT} answers).', flush=True)
+        print(f'  -> open http://127.0.0.1:{VIEWER_PORT} in your browser, or',
+              flush=True)
+        print('     close the other sim window/terminal and run this again.',
+              flush=True)
+        raise SystemExit(0)
     print('LEAP-2 sim booting: importing the physics stack (heartbeat below; '
           'can take 1-3 min on corporate laptops). Ctrl+C is ignored until '
           'the sim is up.', flush=True)
@@ -295,148 +302,42 @@ def main():
     _telemetry_publisher.set_sink(accept_telemetry_snapshot)
     try:
         from waitress import serve
-        server = lambda: serve(app, host='127.0.0.1', port=5000, threads=4)
+        server = lambda: serve(app, host='127.0.0.1', port=VIEWER_PORT,
+                               threads=4)
     except ImportError:
-        server = lambda: app.run(host='127.0.0.1', port=5000, threaded=True,
-                                 debug=False, use_reloader=False)
+        server = lambda: app.run(host='127.0.0.1', port=VIEWER_PORT,
+                                 threaded=True, debug=False, use_reloader=False)
     Thread(target=server, name='viewer-http', daemon=True).start()
-    print('Viewer: http://127.0.0.1:5000', flush=True)
-    run_simulation()
+    print(f'Viewer: http://127.0.0.1:{VIEWER_PORT}', flush=True)
+    try:
+        run_simulation()
+    except OSError as e:
+        # WinError 10048: another instance already bound the firmware/SITL port
+        if getattr(e, 'winerror', None) == 10048 or e.errno in (48, 98, 10048):
+            print('\nAnother LEAP-2 sim instance is already running (its port '
+                  'is already bound).', flush=True)
+            print('Close the other sim window/terminal and run this again.',
+                  flush=True)
+            raise SystemExit(1)
+        raise
 
 
 if __name__ == '__main__':
     main()
 '@
   $new | Out-File -FilePath $rs -Encoding utf8
-  Ok 'run_simulator.py PATCHED (backup: run_simulator.py.orig). COMMIT the shielded file once.'
-}
-
-# ---- writes the everyday launcher (Run-Sim.bat + run-sim.ps1 + opener) ----
-function Write-Launchers {
-  New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-  $runSimBat = @'
-@echo off
-REM ============================================================
-REM  LEAP-2 MBD Simulation : DOUBLE-CLICK ME TO RUN THE SIM
-REM  (auto-created by Setup.bat - run Setup.bat once first)
-REM
-REM  Run-Sim.bat               full sim (physics + viewer)
-REM  Run-Sim.bat -ViewerOnly   viewer only (no physics / no Java)
-REM
-REM  Needs NO environment setup: JAVA_HOME is resolved from the
-REM  venv itself. Auto-restarts if the sim dies while booting.
-REM  Browser opens automatically.
-REM ============================================================
-cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-  echo [!] Virtual environment not found. Run Setup.bat first.
-  pause
-  exit /b 1
-)
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-sim.ps1" %*
-echo.
-pause
-'@
-  $runSimPs1 = @'
-# run-sim.ps1 - LEAP-2 everyday launcher (auto-created by setup.ps1)
-param([switch]$ViewerOnly)
- $ErrorActionPreference = 'Continue'
- $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $Root
- $VenvPy = Join-Path $Root '.venv\Scripts\python.exe'
-if (-not (Test-Path $VenvPy)) { Write-Host '[!] .venv missing - run Setup.bat first.' -ForegroundColor Red; exit 1 }
-
- $ToolsDir = Join-Path $Root 'tools'
- $flag = Join-Path $ToolsDir 'sim-was-up.flag'
-
-# already running? -> just open the browser
- $busy = $false
-try { Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction Stop | Out-Null; $busy = $true } catch {}
-if ($busy) {
-  Write-Host '[!] Port 5000 already serving - the sim looks ALREADY RUNNING.' -ForegroundColor Yellow
-  Write-Host '    Opening http://127.0.0.1:5000 . Close the other sim window to restart it.' -ForegroundColor Yellow
-  Start-Process 'http://127.0.0.1:5000'
-  exit 0
-}
-
-# belt-and-suspenders env (run_simulator.py also does this itself now)
- $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
- $jdk = (& $VenvPy -c "import jdk4py; print(jdk4py.JAVA_HOME)" 2>$null | Out-String).Trim()
- $ErrorActionPreference = $prev
- $jdk = ($jdk -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
-if ($jdk) { $jdk = $jdk.Trim() }
-if ($jdk -and (Test-Path $jdk)) { $env:JAVA_HOME = $jdk; $env:Path = "$jdk\bin;$env:Path" }
- $env:OREKIT_DATA = Join-Path $Root 'orekit-data'
-
- $sim = if ($ViewerOnly) { Join-Path $Root 'app.py' } else { Join-Path $Root 'run_simulator.py' }
-Remove-Item $flag -Force -ErrorAction SilentlyContinue
- $opener = Join-Path $ToolsDir 'open-when-ready.ps1'
-if (Test-Path $opener) {
-  Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$opener`"") -WindowStyle Hidden
-}
-
-Write-Host ''
-Write-Host '============================================================' -ForegroundColor Cyan
-if ($ViewerOnly) { Write-Host ' LEAP-2 sim : VIEWER-ONLY (no physics, no Java)' -ForegroundColor Cyan }
-else             { Write-Host ' LEAP-2 sim : FULL SIM (physics + viewer)' -ForegroundColor Cyan }
-Write-Host '============================================================' -ForegroundColor Cyan
-Write-Host ' Startup prints a heartbeat every 10 s. Browser opens by itself' -ForegroundColor Gray
-Write-Host ' at http://127.0.0.1:5000 . If the sim dies while booting it' -ForegroundColor Gray
-Write-Host ' AUTO-RESTARTS (up to 3 tries). To stop it later: Ctrl+C once.' -ForegroundColor Gray
-Write-Host '============================================================' -ForegroundColor Cyan
-
-for ($a = 1; $a -le 3; $a++) {
-  & $VenvPy -u $sim 2>&1 | Tee-Object -FilePath (Join-Path $Root 'sim-run.log')
-  $ec = $LASTEXITCODE
-  if ($ec -eq 0)       { Write-Host 'sim stopped.' -ForegroundColor Gray; exit 0 }
-  if (Test-Path $flag) { Write-Host 'sim stopped (it had been running).' -ForegroundColor Gray; exit 0 }
-  if ($a -lt 3) {
-    Write-Host "[!] sim died during startup (exit code $ec) - restarting automatically (attempt $a/3)..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 2
-  } else {
-    Write-Host "[!] sim died during startup 3 times in a row (last exit code $ec)." -ForegroundColor Red
-    Write-Host '    Scroll up / open sim-run.log for the traceback.' -ForegroundColor Red
-  }
-}
-'@
-  $openerPs1 = @'
-# waits for the sim on 127.0.0.1:5000, then opens the browser once and
-# drops a marker so run-sim.ps1 knows the sim DID come up.
- $deadline = (Get-Date).AddMinutes(8)
- $flag = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'sim-was-up.flag'
-while ((Get-Date) -lt $deadline) {
-  Start-Sleep -Seconds 2
-  $c = '000'
-  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    $c = (& curl.exe -s -o NUL -w '%{http_code}' --noproxy '*' --max-time 3 'http://127.0.0.1:5000/' 2>$null)
-    $c = ("$c").Trim()
-    if ($c -notmatch '^\d{3}$') { $c = '000' }
-  } else {
-    try { $t = New-Object System.Net.Sockets.TcpClient; $t.Connect('127.0.0.1', 5000); $c = 'LISTENING'; $t.Close() } catch { $c = '000' }
-  }
-  if ($c -eq '200' -or $c -eq '503' -or $c -eq 'LISTENING') {
-    Set-Content -Path $flag -Value (Get-Date -Format 'HH:mm:ss')
-    Start-Process 'http://127.0.0.1:5000'
-    break
-  }
-}
-'@
-  $runSimBat | Out-File -FilePath (Join-Path $Root 'Run-Sim.bat') -Encoding ascii
-  $runSimPs1 | Out-File -FilePath (Join-Path $Root 'run-sim.ps1') -Encoding ascii
-  $openerPs1 | Out-File -FilePath (Join-Path $ToolsDir 'open-when-ready.ps1') -Encoding ascii
-  Ok 'everyday launcher written: Run-Sim.bat (no env needed, auto-restart, auto-browser)'
+  Ok 'run_simulator.py upgraded to shield v2 (backup: run_simulator.py.orig). COMMIT the v2 file once - then this step is a no-op.'
 }
 
 # ============================== banner =====================================
 '' | Out-File -FilePath $LogFile -Encoding utf8
 Write-Host '============================================================' -ForegroundColor Cyan
-Write-Host ' LEAP-2 MBD Simulation : one-click setup (v7)' -ForegroundColor Cyan
+Write-Host ' LEAP-2 MBD Simulation : one-click setup (v8)' -ForegroundColor Cyan
 Write-Host " Root : $Root" -ForegroundColor Gray
 Write-Host " Log  : $LogFile" -ForegroundColor Gray
-Write-Host ' NOTE: safe to re-run anytime - Setup stops a running sim itself.' -ForegroundColor Gray
-Write-Host ' Flags: -ReuseVenv -KeepRunning -ViewerOnly -SkipFrontend -NoSmoke' -ForegroundColor Gray
-Write-Host '        -InstallNode -NoAutoRun -NoPatchRunSim -BootTimeoutSec <sec>' -ForegroundColor Gray
-Write-Host '        -NodeVersion <ver> -DistUrl <url>' -ForegroundColor Gray
+Write-Host ' Setup ONLY installs + verifies, then stops everything.' -ForegroundColor Gray
+Write-Host ' Running the sim afterwards = VS Code, as usual (see end).' -ForegroundColor Gray
+Write-Host ' Safe to re-run anytime - Setup stops a running sim itself.' -ForegroundColor Gray
 Write-Host '============================================================' -ForegroundColor Cyan
 
 # ====================== Step 1 : pre-flight + shield =======================
@@ -465,19 +366,19 @@ else {
 if ($Root -match '(?i)(Downloads|OneDrive|Dropbox)') {
   Warn "project sits in a Downloads/OneDrive-synced location ($Root) - synced+scanned folders stall imports and slow file deletion. Recommended: move to C:\Projects\ADCS_Sim and re-run Setup.bat."
 }
-if (Test-PortFree 5000) { Ok 'port 5000 free' } else { Warn 'port 5000 is BUSY (the sim from last time is running) - Setup will stop it automatically in Step 2.' }
+if (Test-PortFree 5000) { Ok 'port 5000 free' } else { Warn 'port 5000 busy (a sim is running) - Setup stops it automatically in Step 2.' }
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force } catch {}
 Ensure-RunSimShield
 
 # ====================== Step 2 : fresh venv ================================
 Step 'Fresh virtual environment (.venv)'
+Stop-VenvProcesses $VenvDir      # always - makes re-runs safe
 if ((Test-Path $VenvDir) -and (-not $ReuseVenv)) {
-  Log '  removing old .venv (stopping its processes first) ...'
-  Stop-VenvProcesses $VenvDir
+  Log '  removing old .venv ...'
   if (Remove-Tree $VenvDir) { Ok 'old .venv deleted cleanly' }
   else {
-    Fail ("old .venv could not be fully deleted - OneDrive/antivirus/VS Code are still holding files inside it. Do this, then re-run Setup.bat:`n" +
-          "   1) close VS Code COMPLETELY (File > Exit, not just the window) and every sim/console window`n" +
+    Fail ("old .venv could not be fully deleted - OneDrive/antivirus/VS Code are holding files inside it. Do this, then re-run Setup.bat:`n" +
+          "   1) close VS Code COMPLETELY (File > Exit) and every sim/console window`n" +
           "   2) open cmd in the project folder and run:   rmdir /s /q .venv`n" +
           "   3) re-run Setup.bat`n" +
           "   (if it still refuses: pause OneDrive sync / reboot once, then rmdir again)")
@@ -517,19 +418,7 @@ if (-not (Test-Path (Join-Path $jdkHome 'bin\server\jvm.dll'))) { Fail "jvm.dll 
  $env:Path = "$jdkHome\bin;$env:Path"
  $env:JAVA_HOME = $jdkHome
 Log "  JAVA_HOME=$env:JAVA_HOME"
-Ok "jvm.dll present: $jdkHome\bin\server\jvm.dll"
-
- $actSim = Join-Path $VenvDir 'Scripts\Activate-sim.ps1'
-@"
-# auto-generated by setup.ps1 - optional; run_simulator.py now sets JAVA_HOME itself
-& "$VenvDir\Scripts\Activate.ps1"
-`$env:JAVA_HOME = "$jdkHome"
-`$env:Path = "`$env:JAVA_HOME\bin;`$env:Path"
-`$env:OREKIT_DATA = "$od"
-Write-Host "sim env ready | JAVA_HOME=`$env:JAVA_HOME" -ForegroundColor Green
-Write-Host 'run:  python run_simulator.py   (full physics + viewer http://127.0.0.1:5000)' -ForegroundColor Cyan
-"@ | Out-File -FilePath $actSim -Encoding utf8
-Ok "VS Code helper written: $actSim (not strictly needed anymore - the sim is env-independent now)"
+Ok "jvm.dll present: $jdkHome\bin\server\jvm.dll (run_simulator.py sets this itself too - no terminal setup needed)"
 
  $vsDir = Join-Path $Root '.vscode'; New-Item -ItemType Directory -Force -Path $vsDir | Out-Null
  $settingsPath = Join-Path $vsDir 'settings.json'
@@ -550,10 +439,10 @@ if (Test-Path $settingsPath) {
  $settings['python.defaultInterpreterPath'] = $VenvPy
  $settings['python.terminal.activateEnvironment'] = $true
 ($settings | ConvertTo-Json -Depth 6) | Out-File -FilePath $settingsPath -Encoding utf8
-Ok 'VS Code pinned to .venv (python.defaultInterpreterPath)'
+Ok 'VS Code pinned: opening a terminal there auto-activates this .venv'
 
  $gi = Join-Path $Root '.gitignore'
- $want = @('tools/','Run-Sim.bat','run-sim.ps1','setup.log','sim-boot.*.log','sim-run.log','.env','run_simulator.py.orig')
+ $want = @('tools/','setup.log','sim-boot.*.log','sim-run.log','.env','run_simulator.py.orig')
  $cur = if (Test-Path $gi) { Get-Content $gi } else { @() }
  $add = $want | Where-Object { $cur -notcontains $_ }
 if ($add) { Add-Content -Path $gi -Value ''; Add-Content -Path $gi -Value '# auto-added by setup.ps1'; $add | ForEach-Object { Add-Content -Path $gi -Value $_ }; Ok ".gitignore updated (added: $($add -join ', '))" }
@@ -632,10 +521,9 @@ Step 'Smoke test + timed warm-up (JVM / orekit-data / full physics import)'
 if ($NoSmoke) { Warn 'skipped via -NoSmoke (including the warm-up import).' }
 else {
   $ec = Run $VenvPy @('-m','py_compile',(Join-Path $Root 'run_simulator.py'))
-  if ($ec -ne 0) { Fail 'run_simulator.py failed to compile - if setup patched it, restore run_simulator.py.orig and commit the shielded version by hand. See setup.log.' }
+  if ($ec -ne 0) { Fail 'run_simulator.py failed to compile - if setup patched it, restore run_simulator.py.orig and commit the v2 file by hand. See setup.log.' }
   Ok 'run_simulator.py compiles'
 
-  $env:OREKIT_DATA = $od
   $ec = Run $VenvPy @('-c',"from engine.orekit_runtime import ensure_initialized; print('orekit-smoke-ok')")
   if ($ec -ne 0) {
     $tail = Tail-File $LogFile 25
@@ -649,7 +537,7 @@ else {
   if ($ec -ne 0) { Fail 'import app failed (viewer-only, no Java needed) - a python dep is broken. See setup.log.' }
   Ok 'viewer imports cleanly (no JVM needed)'
 
-  Say '  warm-up: importing the FULL physics chain once, with timing (silent 1-3 min is NORMAL) ...' DarkCyan
+  Say '  warm-up: importing the FULL physics chain once, with timing ...' DarkCyan
   $t0 = Get-Date
   $ec = Run $VenvPy @('-c',"import time; t=time.time(); import satellite_flight_visualisation; print('physics-import-ok %.1fs' % (time.time()-t))")
   if ($ec -ne 0) {
@@ -664,16 +552,15 @@ else {
   }
 }
 
-# ============ Step 7 : live boot proof (status-code aware) ==================
-Step "Live boot proof (start sim, wait up to ${BootTimeoutSec}s, then stop)"
-Write-Launchers
+# ============ Step 7 : live boot proof (then STOP) ==========================
+Step "Live boot proof (start sim hidden, wait up to ${BootTimeoutSec}s for 200, then stop)"
  $targetPath = if ($ViewerOnly) { Join-Path $Root 'app.py' } else { Join-Path $Root 'run_simulator.py' }
  $mode = if ($ViewerOnly) { 'VIEWER-ONLY (app.py, no physics/Java)' } else { 'FULL SIM (run_simulator.py, physics + viewer)' }
 Log "  mode: $mode"
 Remove-Item $BootOut, $BootErr -Force -ErrorAction SilentlyContinue
  $simProc = Start-Process -FilePath $VenvPy -ArgumentList @('-u', "`"$targetPath`"") -WorkingDirectory $Root `
                -PassThru -WindowStyle Hidden -RedirectStandardOutput $BootOut -RedirectStandardError $BootErr
-Ok "sim process started (pid $($simProc.Id)); output -> sim-boot.out.log / sim-boot.err.log"
+Ok "sim process started hidden (pid $($simProc.Id)); output -> sim-boot.out.log / sim-boot.err.log"
  $up = $false; $partial = $false; $sawCode = ''; $bootStart = Get-Date
  $deadline = $bootStart.AddSeconds($BootTimeoutSec)
 while ((Get-Date) -lt $deadline) {
@@ -684,7 +571,7 @@ while ((Get-Date) -lt $deadline) {
     $tail = Tail-File $BootErr 20; if (-not $tail) { $tail = Tail-File $BootOut 20 }
     if ($ViewerOnly) { Fail "viewer-only process exited early (code $code). Last output:`n$tail" }
     Warn "physics process exited early (code $code) - last output:`n$tail"
-    if     ($tail -match 'Address already in use|Only one usage of each socket|10048') { Say '  -> diagnosis: PORT 5000 BUSY. Close the old python.exe (Task Manager) or reboot, then re-run.' Yellow }
+    if     ($tail -match 'Address already in use|Only one usage of each socket|10048') { Say '  -> diagnosis: PORT already bound - another sim was running. Setup stops those automatically; re-run Setup.bat.' Yellow }
     elseif ($tail -match 'jvm\.dll|JVMNotFound|No JVM') { Say '  -> diagnosis: JVM missing. Re-run Setup.bat (reinstalls jdk4py).' Yellow }
     elseif ($tail -match 'ModuleNotFoundError') { Say '  -> diagnosis: missing python module. Re-run Setup.bat without -ReuseVenv.' Yellow }
     Warn 'auto-fallback: retrying in VIEWER-ONLY mode to at least prove the frontend/server ...'
@@ -724,39 +611,19 @@ else {
   Fail "no HTTP 200 within ${BootTimeoutSec}s (last probe: $sawCode). Boot log tail:`n$tail`nIf physics needs longer on this machine, re-run with:  Setup.bat -BootTimeoutSec 600"
 }
 
-# ====================== Step 8 : stop + LAUNCH for the user ================
-Step 'Stop proof-process + launch the sim for you'
-if ($KeepRunning) {
-  Warn "keeping proof sim alive per -KeepRunning (pid $($simProc.Id)) - open http://127.0.0.1:5000 now."
-} else {
-  try { Stop-Process -Id $simProc.Id -Force -ErrorAction Stop; Ok "proof-process stopped (pid $($simProc.Id))" }
-  catch { Warn "could not kill pid $($simProc.Id) - close it via Task Manager." }
-  Start-Sleep -Seconds 2
-  if (-not (Test-PortFree 5000)) { Kill-Port 5000; Start-Sleep -Seconds 1 }
-  if (Test-PortFree 5000) { Ok 'port 5000 free again' } else { Warn 'port 5000 still busy - kill leftover python.exe via Task Manager.' }
-}
-
- $autoStarted = $false
-if ($up -and -not $KeepRunning -and -not $NoAutoRun) {
-  $runBat = Join-Path $Root 'Run-Sim.bat'
-  if (Test-Path $runBat) {
-    Start-Sleep -Seconds 2
-    Say 'launching the sim for you in its own window - browser opens automatically. You can close THIS Setup window.' Cyan
-    if ($ViewerOnly) { Start-Process -FilePath $runBat -ArgumentList '-ViewerOnly' -WorkingDirectory $Root }
-    else             { Start-Process -FilePath $runBat -WorkingDirectory $Root }
-    $autoStarted = $true
-  }
-}
+# ====================== Step 8 : stop + clean handover ======================
+Step 'Stop everything + clean handover to VS Code'
+try { Stop-Process -Id $simProc.Id -Force -ErrorAction Stop; Ok "proof-process stopped (pid $($simProc.Id))" }
+catch { Warn "could not kill pid $($simProc.Id) - closing via port owner instead." }
+Start-Sleep -Seconds 2
+if (-not (Test-PortFree 5000)) { Kill-Port 5000; Start-Sleep -Seconds 1 }
+if (Test-PortFree 5000) { Ok 'port 5000 free - machine is clean for VS Code' } else { Warn 'port 5000 still busy - kill leftover python.exe via Task Manager before starting the sim.' }
 
 Write-Host ''
 if ($up) {
   Write-Host '============================================================' -ForegroundColor Green
-  Write-Host ' SETUP COMPLETE - everything proven working end-to-end.' -ForegroundColor Green
+  Write-Host ' SETUP COMPLETE - everything installed AND proven working.' -ForegroundColor Green
   Write-Host '============================================================' -ForegroundColor Green
-  if ($autoStarted) {
-    Write-Host ' THE SIM IS ALREADY STARTING in its own window.' -ForegroundColor Cyan
-    Write-Host ' Browser opens by itself at http://127.0.0.1:5000 .' -ForegroundColor White
-  }
 } else {
   Write-Host '============================================================' -ForegroundColor Yellow
   Write-Host ' SETUP ~90% COMPLETE - backend proven, UI files missing' -ForegroundColor Yellow
@@ -764,8 +631,13 @@ if ($up) {
   Write-Host ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
 }
 Write-Host ''
-Write-Host ' FROM NOW ON, to run the sim:  double-click  Run-Sim.bat' -ForegroundColor Cyan
-Write-Host ' Re-running Setup.bat later is safe - it stops the sim itself first.' -ForegroundColor Gray
-Write-Host ' VS Code also works with ZERO setup:  python run_simulator.py' -ForegroundColor Gray
-Write-Host ' Viewer-only:  Run-Sim.bat -ViewerOnly   (or python app.py)' -ForegroundColor Gray
+Write-Host ' HOW EVERYONE RUNS THE SIM FROM NOW ON (VS Code, as usual):' -ForegroundColor Cyan
+Write-Host '   1. Open VS Code > File > Open Folder > this folder' -ForegroundColor White
+Write-Host '      (if it asks to use the existing virtual environment -> Yes)' -ForegroundColor Gray
+Write-Host '   2. Open a NEW terminal (Ctrl+`)  - the .venv activates itself' -ForegroundColor White
+Write-Host '   3. python run_simulator.py' -ForegroundColor White
+Write-Host '   4. open http://127.0.0.1:5000   (Ctrl+C in the terminal stops it)' -ForegroundColor White
+Write-Host ' ONE instance at a time - starting a second prints a friendly' -ForegroundColor Gray
+Write-Host ' message instead of a port error (shield v2 handles it).' -ForegroundColor Gray
+Write-Host ' Viewer-only, no Java:  python app.py' -ForegroundColor Gray
 Write-Host " Full log: $LogFile   Boot log: $BootOut / $BootErr" -ForegroundColor Gray
