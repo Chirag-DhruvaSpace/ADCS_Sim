@@ -48,6 +48,7 @@ using System;
 using System.Text;
 using System.Diagnostics;
 using System.Threading;
+using System.Runtime.InteropServices;
 public static class AdcsSetupConsole {
   static readonly object Gate=new object();
   static Thread worker; static volatile bool stopping;
@@ -94,7 +95,69 @@ public static class AdcsSetupConsole {
   static readonly System.Collections.Generic.List<System.Collections.Generic.List<Span>> History = new System.Collections.Generic.List<System.Collections.Generic.List<Span>>();
   static System.Collections.Generic.List<Span> pending=new System.Collections.Generic.List<Span>();
   static bool busy; static string phase="PREPARING",detail="Initializing setup";
-  static int phaseNo,total=8;
+  static int phaseNo,total=8,completed,scrollOffset,maxScroll,lastRowCount;
+  static IntPtr inputHandle;
+  static uint originalInputMode;
+  static bool inputModeChanged;
+  [StructLayout(LayoutKind.Explicit,Size=20)]
+  struct InputRecord {
+    [FieldOffset(0)] public ushort Type;
+    [FieldOffset(4)] public int KeyDown;
+    [FieldOffset(8)] public ushort Repeat;
+    [FieldOffset(10)] public ushort Key;
+    [FieldOffset(6)] public short MouseY;
+    [FieldOffset(8)] public uint Buttons;
+    [FieldOffset(16)] public uint Flags;
+  }
+  [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int value);
+  [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr handle,out uint mode);
+  [DllImport("kernel32.dll")] static extern bool SetConsoleMode(IntPtr handle,uint mode);
+  [DllImport("kernel32.dll",EntryPoint="PeekConsoleInputW")] static extern bool PeekInput(IntPtr handle,out InputRecord record,uint length,out uint read);
+  [DllImport("kernel32.dll",EntryPoint="ReadConsoleInputW")] static extern bool ReadInput(IntPtr handle,out InputRecord record,uint length,out uint read);
+  static void EnablePaneInput() {
+    inputHandle=GetStdHandle(-10);
+    if(GetConsoleMode(inputHandle,out originalInputMode)) {
+      // Preserve processed input (including Ctrl+C); disable selection freeze
+      // and request mouse events for the output pane. Restore on exit.
+      inputModeChanged=SetConsoleMode(inputHandle,(originalInputMode|0x0010u|0x0080u)&~0x0040u);
+    }
+  }
+  static void RestorePaneInput() {
+    if(inputModeChanged) { SetConsoleMode(inputHandle,originalInputMode); inputModeChanged=false; }
+  }
+  static void PollPaneInput() {
+    if(!inputModeChanged) return;
+    for(int i=0;i<32;i++) {
+      InputRecord record; uint count;
+      if(!PeekInput(inputHandle,out record,1,out count) || count==0) break;
+      bool nav=record.Type==1 && (record.Key==33 || record.Key==34 || record.Key==35 || record.Key==36 || record.Key==38 || record.Key==40);
+      bool mouse=record.Type==2,other=record.Type==4 || record.Type==16;
+      if(!nav && !mouse && !other) break; // Leave ordinary keys for the native command.
+      if(!ReadInput(inputHandle,out record,1,out count) || count==0) break;
+      if(nav && record.KeyDown!=0) {
+        int page=Math.Max(1,Console.WindowHeight-HeaderHeight-2);
+        int repeat=Math.Max(1,(int)record.Repeat);
+        if(record.Key==33) MoveScroll(page*repeat);
+        else if(record.Key==34) MoveScroll(-page*repeat);
+        else if(record.Key==38) MoveScroll(repeat);
+        else if(record.Key==40) MoveScroll(-repeat);
+        else if(record.Key==36) MoveScroll(Int32.MaxValue);
+        else if(record.Key==35) MoveScroll(-Int32.MaxValue);
+      } else if(mouse && (record.Flags&4)!=0 && record.MouseY>=Console.WindowTop+HeaderHeight) {
+        short delta=(short)(record.Buttons>>16);
+        MoveScroll(delta>0?3:-3);
+      }
+    }
+  }
+  static void MoveScroll(int lines) {
+    scrollOffset=(int)Math.Max(0,Math.Min((long)maxScroll,(long)scrollOffset+lines));
+  }
+  public static int ScrollOffset { get { return scrollOffset; } }
+  public static int MaxScroll { get { return maxScroll; } }
+  public static void Scroll(int lines) {
+    lock(Gate) { if(!active) return; Logs(); MoveScroll(lines); Logs(); }
+  }
+
   public static bool IsPinned { get { return active; } }
   public static int FrameCount { get { return tick; } }
   public static void BannerPlanet() {
@@ -106,7 +169,7 @@ public static class AdcsSetupConsole {
     } Console.ForegroundColor=old;
   }
   static int PlanetHeight { get { return Math.Min(13,Math.Min(Math.Max(3,Console.WindowHeight-11),Math.Max(3,(Console.WindowWidth-5)*13/64))); } }
-  static int HeaderHeight { get { return PlanetHeight+4; } }
+  static int HeaderHeight { get { return PlanetHeight+5; } }
   static void Row(int row,string text,ConsoleColor color) {
     int width=Console.WindowWidth-1;
     if(text.Length>width) text=text.Substring(0,width);
@@ -128,6 +191,9 @@ public static class AdcsSetupConsole {
     string elapsed=String.Format("{0:00}:{1:00}",seconds/60,seconds%60);
     Row(0,"  A D C S   S I M U L A T O R",ConsoleColor.White);
     Row(1,String.Format("  MISSION CONTROL   /   PHASE {0:00} OF {1:00}   /   {2}",phaseNo,total,phase),ConsoleColor.Magenta);
+    int barWidth=Console.WindowWidth>=60?28:14;
+    int filled=completed*barWidth/Math.Max(1,total);
+    Row(2,"  ["+new string('=',filled)+new string('-',barWidth-filled)+"]  "+completed+"/"+total+" phases complete",ConsoleColor.Cyan);
     {
       string[] planet=Planet(tick*0.08);
       int planetHeight=PlanetHeight,planetWidth=Math.Min(Console.WindowWidth-5,64*planetHeight/13);
@@ -143,18 +209,18 @@ public static class AdcsSetupConsole {
           while(end<line.Length && Shade(line[end])==color) end++;
           spans.Add(new Span(line.Substring(begin,end-begin),color)); begin=end;
         }
-        ColoredRow(i+2,spans);
+        ColoredRow(i+3,spans);
       }
     }
     string state=busy?"ACTIVE":"SETUP";
     Row(h-2,"  [ "+Orbit[tick%6]+" ]  "+state+" / "+elapsed+" / "+(busy?label:detail),ConsoleColor.Cyan);
-    Row(h-1,"  "+new string('\u2501',Math.Max(0,Console.WindowWidth-5)),ConsoleColor.Blue);
+    Row(h-1,"  "+new string('=',Math.Max(0,Console.WindowWidth-5)),ConsoleColor.Blue);
     Console.Title="ADCS Simulator | "+phase+" | "+elapsed;
   }
   static void Logs() {
     int width=Console.WindowWidth-1,start=HeaderHeight,room=Console.WindowHeight-start-1;
     var rows=new System.Collections.Generic.List<System.Collections.Generic.List<Span>>();
-    int first=Math.Max(0,History.Count-80);
+    int first=0;
     for(int n=first;n<=History.Count;n++) {
       var logical=n==History.Count?pending:History[n];
       if(n==History.Count && logical.Count==0) break;
@@ -169,11 +235,15 @@ public static class AdcsSetupConsole {
       }
       if(used>0 || logical.Count==0) rows.Add(current);
     }
-    int skip=Math.Max(0,rows.Count-room);
+    maxScroll=Math.Max(0,rows.Count-room);
+    if(scrollOffset>0 && rows.Count>lastRowCount) scrollOffset+=rows.Count-lastRowCount;
+    scrollOffset=Math.Min(scrollOffset,maxScroll); lastRowCount=rows.Count;
+    int skip=Math.Max(0,rows.Count-room-scrollOffset);
     for(int i=0;i<room;i++) {
       if(skip+i<rows.Count) ColoredRow(start+i,rows[skip+i]); else Row(start+i,"",ConsoleColor.Gray);
     }
-    Row(Console.WindowHeight-1,"  "+new string('\u2501',Math.Max(0,Console.WindowWidth-32))+"  FULL OUTPUT: setup.log",ConsoleColor.DarkCyan);
+    string view=scrollOffset==0?"LIVE":"HISTORY +"+scrollOffset;
+    Row(Console.WindowHeight-1,"  - PgUp/PgDn | Wheel | End: live | "+view+" | setup.log",ConsoleColor.DarkCyan);
   }
   static void Draw() {
     ConsoleColor old=Console.ForegroundColor;
@@ -185,13 +255,14 @@ public static class AdcsSetupConsole {
       if(active) return true;
       if(Console.WindowWidth<40 || Console.WindowHeight<10) return false;
       visible=Console.CursorVisible; originalColor=Console.ForegroundColor; Console.CursorVisible=false;
-      Console.Clear(); History.Clear(); pending.Clear();
+      Console.Clear(); History.Clear(); pending.Clear(); scrollOffset=0; maxScroll=0; lastRowCount=0;
+      EnablePaneInput();
       clock=Stopwatch.StartNew(); tick=0; stopping=false; active=true; Draw();
       worker=new Thread(Animate); worker.IsBackground=true; worker.Start(); return true;
-    } catch { active=false; try { Console.CursorVisible=visible; } catch {} return false; } }
+    } catch { active=false; RestorePaneInput(); try { Console.CursorVisible=visible; } catch {} return false; } }
   }
   public static void Phase(int number,int count,string name,string description) {
-    lock(Gate) { phaseNo=number; total=count; phase=name; detail=description;
+    lock(Gate) { phaseNo=number; total=count; completed=Math.Max(0,number-1); phase=name; detail=description;
       if(active) { try { Header(); } catch {} } }
   }
   public static bool Start(string task) {
@@ -199,7 +270,7 @@ public static class AdcsSetupConsole {
   }
   static void Animate() {
     while(!stopping) {
-      lock(Gate) { if(!active) return; try { tick++; Draw(); }
+      lock(Gate) { if(!active) return; try { PollPaneInput(); tick++; Draw(); }
         catch {} }
       Thread.Sleep(140);
     }
@@ -215,7 +286,7 @@ public static class AdcsSetupConsole {
             History.Add(pending); pending=new System.Collections.Generic.List<Span>();
           }
         }
-        if(History.Count>400) History.RemoveRange(0,History.Count-400);
+        if(History.Count>2000) History.RemoveRange(0,History.Count-2000);
         Logs(); return true;
       } catch { return true; } // A resize can interrupt a frame; retry on the next animation tick.
     }
@@ -235,7 +306,7 @@ public static class AdcsSetupConsole {
   public static void Complete(bool success) {
     lock(Gate) {
       phase=success?"READY FOR FLIGHT":"ACTION REQUIRED"; detail=success?"Setup verified / simulator stopped":"Backend ready / frontend needs attention";
-      busy=false;
+      busy=false; completed=total; scrollOffset=0;
     }
     if(!active) return;
     Write(success?"  [+] Setup complete. Start your simulation in VS Code.":"  [!] UI missing: re-run Setup.bat -ReuseVenv with internet.",success?ConsoleColor.Green:ConsoleColor.Yellow,true);
@@ -249,7 +320,7 @@ public static class AdcsSetupConsole {
     lock(Gate) { try {
       if(active) { Draw(); Console.SetCursorPosition(Console.WindowLeft,Console.WindowTop+Console.WindowHeight-1); }
     } catch {} finally {
-      active=false; try { Console.CursorVisible=visible; Console.ForegroundColor=originalColor; } catch {}
+      active=false; RestorePaneInput(); try { Console.CursorVisible=visible; Console.ForegroundColor=originalColor; } catch {}
     } }
   }
 
@@ -267,7 +338,10 @@ function Say([string]$m, [string]$c = 'Gray') { Write-MissionText $m -Foreground
 function Ok([string]$m) { Say "  [+] $m" Green }
 function Warn([string]$m) { Say "  [!] $m" Yellow }
 function Fail([string]$m) { Say "  [X] $m" Red; throw $m }
-function MissionRule([string]$color = 'Blue') { Write-MissionText ('  ' + (([string][char]0x2501) * 68)) -ForegroundColor $color }
+function MissionRule([string]$color = 'Blue', [switch]$Thin) {
+  $line = if ($Thin) { '-' } else { '=' }
+  Write-MissionText ('  ' + ($line * 68)) -ForegroundColor $color
+}
 function MissionBanner {
   try { Initialize-MissionConsole } catch { $script:ConsoleUiUnavailable = $true }
   try { $Host.UI.RawUI.WindowTitle = 'ADCS Simulator | Setup' } catch {}
@@ -300,7 +374,7 @@ function Step([string]$t) {
   Write-MissionText ('=' * $done) -NoNewline -ForegroundColor Cyan
   Write-MissionText (' ' * (24 - $done)) -NoNewline -ForegroundColor DarkGray
   Write-MissionText "]  $($script:StepNo - 1) / $StepTotal complete" -ForegroundColor Gray
-  MissionRule
+  MissionRule -Thin
   Log "STEP $($script:StepNo)/$StepTotal : $t"
 }
 function Run([string]$exe, [string[]]$argList) {

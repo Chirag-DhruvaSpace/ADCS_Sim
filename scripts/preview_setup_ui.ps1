@@ -1,5 +1,5 @@
 # Safe display preview: loads only named presentation helpers, never setup steps.
-param([switch]$Check)
+param([switch]$Check, [ValidateRange(12,120)][int]$DurationSec = 12)
 $ErrorActionPreference = 'Stop'
 $setup = Join-Path (Split-Path -Parent $PSScriptRoot) 'setup.ps1'
 $tokens = $null; $errors = $null
@@ -30,17 +30,25 @@ if ($Check) {
     1..35 | ForEach-Object { [void][AdcsSetupConsole]::Output("Scroll check / line $_") }
     Start-Sleep -Milliseconds 350
     if ([AdcsSetupConsole]::FrameCount -le $before) { throw 'Animation stopped between commands' }
+    [AdcsSetupConsole]::Scroll(5)
+    if ([AdcsSetupConsole]::ScrollOffset -ne 5) { throw 'Output pane did not scroll' }
+    [void][AdcsSetupConsole]::Output('New output while reading history')
+    if ([AdcsSetupConsole]::ScrollOffset -lt 6) { throw 'New output moved the history view' }
+    [AdcsSetupConsole]::Scroll([int]::MaxValue)
+    if ([AdcsSetupConsole]::ScrollOffset -ne [AdcsSetupConsole]::MaxScroll) { throw 'History start not reached' }
+    [AdcsSetupConsole]::Scroll(-[int]::MaxValue)
+    if ([AdcsSetupConsole]::ScrollOffset -ne 0) { throw 'Live view not restored' }
     Step 'Second phase / persistent header check'
     if ([Console]::WindowTop -ne $initialTop) { throw 'Header moved when output scrolled' }
     if (-not [AdcsSetupConsole]::IsPinned) { throw 'Header disappeared at phase transition' }
   }
-  Write-MissionText 'PASS: syntax, renderer compilation, pinned header, output scrolling, idle animation, stdout/stderr and exit code.' -ForegroundColor Green
+  Write-MissionText 'PASS: syntax, renderer compilation, pinned header, independent history scrolling, idle animation, stdout/stderr and exit code.' -ForegroundColor Green
 } else {
   MissionBanner
   Step 'DISPLAY PREVIEW / no packages installed / no setup operations run'
   $activity = [AdcsSetupConsole]::Start('Preview / installing Python packages')
   try {
-    for ($i = 0; $i -lt 12; $i++) {
+    for ($i = 0; $i -lt $DurationSec; $i++) {
       if ($i -in @(0,3,6,10)) {
         $line = @('Collecting dependencies (sample output)', 'Downloading package (sample output)', 'Installing collected packages (sample output)', 'Finishing installation (sample output)')[@(0,3,6,10).IndexOf($i)]
         if (-not $activity -or -not [AdcsSetupConsole]::Output($line)) { Write-MissionText "  $line" -ForegroundColor Gray }
