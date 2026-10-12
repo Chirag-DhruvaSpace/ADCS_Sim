@@ -40,21 +40,119 @@ Set-Location $Root
  $StepTotal  = 8; $StepNo = 0
  $FrontendMissing = $false
 
-function Log([string]$m)  { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
+# Console presentation only; setup commands and decision paths are unchanged.
+function Log([string]$m) { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
 function Say([string]$m, [string]$c = 'Gray') { Write-Host $m -ForegroundColor $c; Log $m }
-function Ok([string]$m)   { Say "  [OK] $m" Green }
-function Warn([string]$m) { Say "  [!!] $m" Yellow }
-function Fail([string]$m) { Say "  [FAIL] $m" Red; throw $m }
+function Ok([string]$m) { Say "  [+] $m" Green }
+function Warn([string]$m) { Say "  [!] $m" Yellow }
+function Fail([string]$m) { Say "  [X] $m" Red; throw $m }
+function MissionRule([string]$color = 'DarkCyan') { Write-Host ('  ' + ('-' * 72)) -ForegroundColor $color }
+function MissionBanner {
+  try { $Host.UI.RawUI.WindowTitle = 'LEAP-2 | Mission preparation' } catch {}
+  Write-Host ''
+  Write-Host '       .                 *                           .             *' -ForegroundColor DarkGray
+  $saturn = @(
+    '                                                   _.oo.',
+    '                      _.u[[/;:,.               .odMMMMMM',
+    '                   .o888uu[[[/;::- .        .o@P^   MMM^',
+    '                 oN88888uu[[[/;:::-.              dP^',
+    '                dNNMMM888uu[[[/;::--.        .o@P^',
+    '               MMMMMM888uu[[[/;::-.     .o@^',
+    '               NNMMMNN888uu[[[/~.o@P^',
+    '               888888888uu[[[/o@^-..',
+    '              oI8888uu[[[/o@P^:--..',
+    '           .@^  YUU[[[/o@^;:::---..',
+    '         oMP      ^/o@P^;::::---..',
+    '      .dMMM    .o@^ ^;::----...',
+    '    dMMMMMMM@^           ^^^^',
+    '   YMMMP^',
+    '    ^^'
+  )
+  foreach ($line in $saturn) {
+    foreach ($ch in $line.ToCharArray()) {
+      $shade = 'DarkGray'
+      if ('MN8'.Contains([string]$ch)) { $shade = 'Yellow' }
+      elseif ('oudIY'.Contains([string]$ch)) { $shade = 'DarkYellow' }
+      elseif ('@P^'.Contains([string]$ch)) { $shade = 'White' }
+      elseif ('[/'.Contains([string]$ch)) { $shade = 'Gray' }
+      Write-Host ([string]$ch) -NoNewline -ForegroundColor $shade
+    }
+    Write-Host ''
+  }
+  Write-Host '          *                         .                        *' -ForegroundColor DarkGray
+  Write-Host ''
+  MissionRule
+  Write-Host '  L E A P - 2   /   M B D   S I M U L A T I O N' -ForegroundColor Cyan
+  Write-Host '  MISSION CONTROL                                    SETUP SEQUENCE / v8' -ForegroundColor White
+  MissionRule
+  Write-Host '  Install > build > verify > stop > ready for VS Code' -ForegroundColor Gray
+  Write-Host '  Safe to re-run: setup stops any running sim first.' -ForegroundColor DarkGray
+  Write-Host "  Base : $Root" -ForegroundColor DarkGray
+  Write-Host "  Log  : $LogFile" -ForegroundColor DarkGray
+}
 function Step([string]$t) {
   $script:StepNo++
   Write-Host ''
-  Write-Host "===== [$($script:StepNo)/$StepTotal] $t =====" -ForegroundColor Cyan
+  MissionRule
+  Write-Host ("  MISSION PHASE {0:00} / {1:00}" -f $script:StepNo, $StepTotal) -ForegroundColor Cyan
+  Write-Host "  $t" -ForegroundColor White
+  Write-Host '  [' -NoNewline -ForegroundColor DarkGray
+  Write-Host ('=' * ($script:StepNo - 1)) -NoNewline -ForegroundColor Cyan
+  Write-Host '>' -NoNewline -ForegroundColor Yellow
+  Write-Host ('.' * ($StepTotal - $script:StepNo)) -NoNewline -ForegroundColor DarkGray
+  Write-Host "]  $($script:StepNo - 1) of $StepTotal phases completed" -ForegroundColor DarkGray
+  MissionRule
   Log "STEP $($script:StepNo)/$StepTotal : $t"
 }
+function Start-MissionActivity([string]$label) {
+  if ([Console]::IsOutputRedirected) { return $null }
+  $state = [hashtable]::Synchronized(@{ Stop = $false })
+  $worker = $null
+  try {
+    $worker = [PowerShell]::Create()
+    $null = $worker.AddScript({
+      param($state, $label)
+      $frames = @('[o . . .]', '[. o . .]', '[. . o .]', '[. . . o]', '[. . o .]', '[. o . .]')
+        $i = 0
+      while (-not $state.Stop) {
+        try {
+          $frame = $frames[$i % $frames.Count]
+          [Console]::Title = "LEAP-2 | $frame $label"
+        } catch {}
+        $i++
+        Start-Sleep -Milliseconds 180
+      }
+    }).AddArgument($state).AddArgument($label)
+    $handle = $worker.BeginInvoke()
+    return @{ State = $state; Worker = $worker; Handle = $handle; Label = $label }
+  } catch {
+    if ($worker) { $worker.Dispose() }
+    return $null
+  }
+}
+function Stop-MissionActivity($activity) {
+  if (-not $activity) { return }
+  try {
+    $activity.State.Stop = $true
+    $null = $activity.Worker.EndInvoke($activity.Handle)
+  } catch {} finally {
+    try { $activity.Worker.Dispose() } catch {}
+    try {
+      $Host.UI.RawUI.WindowTitle = "LEAP-2 | Mission phase $script:StepNo / $StepTotal"
+    } catch {}
+  }
+}
 function Run([string]$exe, [string[]]$argList) {
+  $label = Split-Path -Leaf $exe
+  if ($argList -contains 'pip') { $label = 'Python packages / pip' }
+  elseif ($label -eq 'npm.cmd') { $label = "Frontend / npm $($argList -join ' ')" }
+  elseif ($argList -contains 'venv') { $label = 'Preparing virtual environment' }
+  else { $label = "Engine checks / $label" }
+  Write-Host "  [~] $label" -ForegroundColor Cyan
+  $activity = Start-MissionActivity $label
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try { & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; Write-Host "  $ln" -ForegroundColor DarkGray; Log "  $ln" } }
-  finally { $ErrorActionPreference = $prev }
+  finally { $ErrorActionPreference = $prev; Stop-MissionActivity $activity }
   return $LASTEXITCODE
 }
 function Get-HttpCode([int]$Port = 5000) {
@@ -331,14 +429,7 @@ if __name__ == '__main__':
 
 # ============================== banner =====================================
 '' | Out-File -FilePath $LogFile -Encoding utf8
-Write-Host '============================================================' -ForegroundColor Cyan
-Write-Host ' LEAP-2 MBD Simulation : one-click setup (v8)' -ForegroundColor Cyan
-Write-Host " Root : $Root" -ForegroundColor Gray
-Write-Host " Log  : $LogFile" -ForegroundColor Gray
-Write-Host ' Setup ONLY installs + verifies, then stops everything.' -ForegroundColor Gray
-Write-Host ' Running the sim afterwards = VS Code, as usual (see end).' -ForegroundColor Gray
-Write-Host ' Safe to re-run anytime - Setup stops a running sim itself.' -ForegroundColor Gray
-Write-Host '============================================================' -ForegroundColor Cyan
+MissionBanner
 
 # ====================== Step 1 : pre-flight + shield =======================
 Step 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'
@@ -621,13 +712,16 @@ if (Test-PortFree 5000) { Ok 'port 5000 free - machine is clean for VS Code' } e
 
 Write-Host ''
 if ($up) {
-  Write-Host '============================================================' -ForegroundColor Green
-  Write-Host ' SETUP COMPLETE - everything installed AND proven working.' -ForegroundColor Green
-  Write-Host '============================================================' -ForegroundColor Green
+  MissionRule Green
+  Write-Host '  MISSION READY / SETUP COMPLETE' -ForegroundColor Green
+  Write-Host '  Everything installed AND proven working.' -ForegroundColor White
+  Write-Host '  [========]  8 of 8 phases completed' -ForegroundColor Cyan
+  MissionRule Green
 } else {
-  Write-Host '============================================================' -ForegroundColor Yellow
-  Write-Host ' SETUP ~90% COMPLETE - backend proven, UI files missing' -ForegroundColor Yellow
-  Write-Host '============================================================' -ForegroundColor Yellow
+  MissionRule Yellow
+  Write-Host '  MISSION HOLD / SETUP ~90% COMPLETE' -ForegroundColor Yellow
+  Write-Host '  Backend proven; UI files missing.' -ForegroundColor White
+  MissionRule Yellow
   Write-Host ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
 }
 Write-Host ''
