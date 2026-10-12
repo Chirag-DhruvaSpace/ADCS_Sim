@@ -48,7 +48,6 @@ using System;
 using System.Text;
 using System.Diagnostics;
 using System.Threading;
-using System.Runtime.InteropServices;
 public static class AdcsSetupConsole {
   static readonly object Gate=new object();
   static Thread worker; static volatile bool stopping;
@@ -95,69 +94,22 @@ public static class AdcsSetupConsole {
   static readonly System.Collections.Generic.List<System.Collections.Generic.List<Span>> History = new System.Collections.Generic.List<System.Collections.Generic.List<Span>>();
   static System.Collections.Generic.List<Span> pending=new System.Collections.Generic.List<Span>();
   static bool busy; static string phase="PREPARING",detail="Initializing setup";
-  static int phaseNo,total=8,completed,scrollOffset,maxScroll,lastRowCount;
-  static IntPtr inputHandle;
-  static uint originalInputMode;
-  static bool inputModeChanged;
-  [StructLayout(LayoutKind.Explicit,Size=20)]
-  struct InputRecord {
-    [FieldOffset(0)] public ushort Type;
-    [FieldOffset(4)] public int KeyDown;
-    [FieldOffset(8)] public ushort Repeat;
-    [FieldOffset(10)] public ushort Key;
-    [FieldOffset(6)] public short MouseY;
-    [FieldOffset(8)] public uint Buttons;
-    [FieldOffset(16)] public uint Flags;
-  }
-  [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int value);
-  [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr handle,out uint mode);
-  [DllImport("kernel32.dll")] static extern bool SetConsoleMode(IntPtr handle,uint mode);
-  [DllImport("kernel32.dll",EntryPoint="PeekConsoleInputW")] static extern bool PeekInput(IntPtr handle,out InputRecord record,uint length,out uint read);
-  [DllImport("kernel32.dll",EntryPoint="ReadConsoleInputW")] static extern bool ReadInput(IntPtr handle,out InputRecord record,uint length,out uint read);
-  static void EnablePaneInput() {
-    inputHandle=GetStdHandle(-10);
-    if(GetConsoleMode(inputHandle,out originalInputMode)) {
-      // Preserve processed input (including Ctrl+C); disable selection freeze
-      // and request mouse events for the output pane. Restore on exit.
-      inputModeChanged=SetConsoleMode(inputHandle,(originalInputMode|0x0010u|0x0080u)&~0x0040u);
-    }
-  }
-  static void RestorePaneInput() {
-    if(inputModeChanged) { SetConsoleMode(inputHandle,originalInputMode); inputModeChanged=false; }
-  }
-  static void PollPaneInput() {
-    if(!inputModeChanged) return;
-    for(int i=0;i<32;i++) {
-      InputRecord record; uint count;
-      if(!PeekInput(inputHandle,out record,1,out count) || count==0) break;
-      bool nav=record.Type==1 && (record.Key==33 || record.Key==34 || record.Key==35 || record.Key==36 || record.Key==38 || record.Key==40);
-      bool mouse=record.Type==2,other=record.Type==4 || record.Type==16;
-      if(!nav && !mouse && !other) break; // Leave ordinary keys for the native command.
-      if(!ReadInput(inputHandle,out record,1,out count) || count==0) break;
-      if(nav && record.KeyDown!=0) {
-        int page=Math.Max(1,Console.WindowHeight-HeaderHeight-2);
-        int repeat=Math.Max(1,(int)record.Repeat);
-        if(record.Key==33) MoveScroll(page*repeat);
-        else if(record.Key==34) MoveScroll(-page*repeat);
-        else if(record.Key==38) MoveScroll(repeat);
-        else if(record.Key==40) MoveScroll(-repeat);
-        else if(record.Key==36) MoveScroll(Int32.MaxValue);
-        else if(record.Key==35) MoveScroll(-Int32.MaxValue);
-      } else if(mouse && (record.Flags&4)!=0 && record.MouseY>=Console.WindowTop+HeaderHeight) {
-        short delta=(short)(record.Buttons>>16);
-        MoveScroll(delta>0?3:-3);
+  static int phaseNo,total=8,completed;
+  static int originalBufferWidth,originalBufferHeight;
+  static bool bufferAdjusted;
+  static void PinViewport() {
+    try {
+      if(Console.WindowTop!=0 || Console.WindowLeft!=0) Console.SetWindowPosition(0,0);
+      if(Console.BufferHeight!=Console.WindowHeight || Console.BufferWidth!=Console.WindowWidth) {
+        Console.SetBufferSize(Console.WindowWidth,Console.WindowHeight); bufferAdjusted=true;
       }
-    }
+    } catch {} // Terminal hosts that manage their own buffer need no resizing.
   }
-  static void MoveScroll(int lines) {
-    scrollOffset=(int)Math.Max(0,Math.Min((long)maxScroll,(long)scrollOffset+lines));
+  static void RestoreBuffer() {
+    if(!bufferAdjusted) return;
+    try { Console.SetBufferSize(Math.Max(originalBufferWidth,Console.WindowWidth),Math.Max(originalBufferHeight,Console.WindowHeight)); } catch {}
+    bufferAdjusted=false;
   }
-  public static int ScrollOffset { get { return scrollOffset; } }
-  public static int MaxScroll { get { return maxScroll; } }
-  public static void Scroll(int lines) {
-    lock(Gate) { if(!active) return; Logs(); MoveScroll(lines); Logs(); }
-  }
-
   public static bool IsPinned { get { return active; } }
   public static int FrameCount { get { return tick; } }
   public static void BannerPlanet() {
@@ -214,7 +166,7 @@ public static class AdcsSetupConsole {
     }
     string state=busy?"ACTIVE":"SETUP";
     Row(h-2,"  [ "+Orbit[tick%6]+" ]  "+state+" / "+elapsed+" / "+(busy?label:detail),ConsoleColor.Cyan);
-    Row(h-1,"  "+new string('=',Math.Max(0,Console.WindowWidth-5)),ConsoleColor.Blue);
+    Row(h-1,"  "+new string('=',Math.Max(0,Console.WindowWidth-5)),ConsoleColor.Magenta);
     Console.Title="ADCS Simulator | "+phase+" | "+elapsed;
   }
   static void Logs() {
@@ -235,19 +187,15 @@ public static class AdcsSetupConsole {
       }
       if(used>0 || logical.Count==0) rows.Add(current);
     }
-    maxScroll=Math.Max(0,rows.Count-room);
-    if(scrollOffset>0 && rows.Count>lastRowCount) scrollOffset+=rows.Count-lastRowCount;
-    scrollOffset=Math.Min(scrollOffset,maxScroll); lastRowCount=rows.Count;
-    int skip=Math.Max(0,rows.Count-room-scrollOffset);
+    int skip=Math.Max(0,rows.Count-room);
     for(int i=0;i<room;i++) {
       if(skip+i<rows.Count) ColoredRow(start+i,rows[skip+i]); else Row(start+i,"",ConsoleColor.Gray);
     }
-    string view=scrollOffset==0?"LIVE":"HISTORY +"+scrollOffset;
-    Row(Console.WindowHeight-1,"  - PgUp/PgDn | Wheel | End: live | "+view+" | setup.log",ConsoleColor.DarkCyan);
+    Row(Console.WindowHeight-1,"  - LIVE OUTPUT | Full details: setup.log",ConsoleColor.DarkCyan);
   }
   static void Draw() {
     ConsoleColor old=Console.ForegroundColor;
-    try { Header(); Logs(); } finally { Console.ForegroundColor=old; }
+    try { PinViewport(); Header(); Logs(); } finally { Console.ForegroundColor=old; }
   }
   public static bool Open() {
     if(Console.IsOutputRedirected) return false;
@@ -255,11 +203,11 @@ public static class AdcsSetupConsole {
       if(active) return true;
       if(Console.WindowWidth<40 || Console.WindowHeight<10) return false;
       visible=Console.CursorVisible; originalColor=Console.ForegroundColor; Console.CursorVisible=false;
-      Console.Clear(); History.Clear(); pending.Clear(); scrollOffset=0; maxScroll=0; lastRowCount=0;
-      EnablePaneInput();
+      originalBufferWidth=Console.BufferWidth; originalBufferHeight=Console.BufferHeight;
+      Console.Clear(); History.Clear(); pending.Clear(); PinViewport();
       clock=Stopwatch.StartNew(); tick=0; stopping=false; active=true; Draw();
       worker=new Thread(Animate); worker.IsBackground=true; worker.Start(); return true;
-    } catch { active=false; RestorePaneInput(); try { Console.CursorVisible=visible; } catch {} return false; } }
+    } catch { active=false; RestoreBuffer(); try { Console.CursorVisible=visible; } catch {} return false; } }
   }
   public static void Phase(int number,int count,string name,string description) {
     lock(Gate) { phaseNo=number; total=count; completed=Math.Max(0,number-1); phase=name; detail=description;
@@ -270,7 +218,7 @@ public static class AdcsSetupConsole {
   }
   static void Animate() {
     while(!stopping) {
-      lock(Gate) { if(!active) return; try { PollPaneInput(); tick++; Draw(); }
+      lock(Gate) { if(!active) return; try { tick++; Draw(); }
         catch {} }
       Thread.Sleep(140);
     }
@@ -306,7 +254,7 @@ public static class AdcsSetupConsole {
   public static void Complete(bool success) {
     lock(Gate) {
       phase=success?"READY FOR FLIGHT":"ACTION REQUIRED"; detail=success?"Setup verified / simulator stopped":"Backend ready / frontend needs attention";
-      busy=false; completed=total; scrollOffset=0;
+      busy=false; completed=total;
     }
     if(!active) return;
     Write(success?"  [+] Setup complete. Start your simulation in VS Code.":"  [!] UI missing: re-run Setup.bat -ReuseVenv with internet.",success?ConsoleColor.Green:ConsoleColor.Yellow,true);
@@ -320,7 +268,7 @@ public static class AdcsSetupConsole {
     lock(Gate) { try {
       if(active) { Draw(); Console.SetCursorPosition(Console.WindowLeft,Console.WindowTop+Console.WindowHeight-1); }
     } catch {} finally {
-      active=false; RestorePaneInput(); try { Console.CursorVisible=visible; Console.ForegroundColor=originalColor; } catch {}
+      active=false; RestoreBuffer(); try { Console.CursorVisible=visible; Console.ForegroundColor=originalColor; } catch {}
     } }
   }
 

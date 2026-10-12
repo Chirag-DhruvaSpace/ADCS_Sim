@@ -27,22 +27,14 @@ if ($Check) {
   if ($pinned) {
     if (-not [AdcsSetupConsole]::IsPinned) { throw 'Header disappeared after command' }
     $before = [AdcsSetupConsole]::FrameCount
-    1..35 | ForEach-Object { [void][AdcsSetupConsole]::Output("Scroll check / line $_") }
+    1..35 | ForEach-Object { [void][AdcsSetupConsole]::Output("Live output check / line $_") }
     Start-Sleep -Milliseconds 350
     if ([AdcsSetupConsole]::FrameCount -le $before) { throw 'Animation stopped between commands' }
-    [AdcsSetupConsole]::Scroll(5)
-    if ([AdcsSetupConsole]::ScrollOffset -ne 5) { throw 'Output pane did not scroll' }
-    [void][AdcsSetupConsole]::Output('New output while reading history')
-    if ([AdcsSetupConsole]::ScrollOffset -lt 6) { throw 'New output moved the history view' }
-    [AdcsSetupConsole]::Scroll([int]::MaxValue)
-    if ([AdcsSetupConsole]::ScrollOffset -ne [AdcsSetupConsole]::MaxScroll) { throw 'History start not reached' }
-    [AdcsSetupConsole]::Scroll(-[int]::MaxValue)
-    if ([AdcsSetupConsole]::ScrollOffset -ne 0) { throw 'Live view not restored' }
     Step 'Second phase / persistent header check'
     if ([Console]::WindowTop -ne $initialTop) { throw 'Header moved when output scrolled' }
     if (-not [AdcsSetupConsole]::IsPinned) { throw 'Header disappeared at phase transition' }
   }
-  Write-MissionText 'PASS: syntax, renderer compilation, pinned header, independent history scrolling, idle animation, stdout/stderr and exit code.' -ForegroundColor Green
+  Write-MissionText 'PASS: syntax, renderer compilation, pinned header, live output, idle animation, stdout/stderr and exit code.' -ForegroundColor Green
 } else {
   MissionBanner
   Step 'DISPLAY PREVIEW / no packages installed / no setup operations run'
