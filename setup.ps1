@@ -51,7 +51,7 @@ using System.Threading;
 public static class AdcsSetupConsole {
   static readonly object Gate=new object();
   static Thread worker; static volatile bool stopping;
-  static bool active,visible; static int anchor,height,tick;
+  static bool active,visible; static int tick; static ConsoleColor originalColor;
   static string label; static Stopwatch clock;
   static readonly string[] Orbit={"o . . .",". o . .",". . o .",". . . o",". . o .",". o . ."};
   public static string[] Planet(double phase) {
@@ -87,6 +87,16 @@ public static class AdcsSetupConsole {
     if("52AXsr=-".IndexOf(c)>=0) return ConsoleColor.DarkYellow;
     return ConsoleColor.DarkGray;
   }
+  sealed class Span {
+    public string Text; public ConsoleColor Color;
+    public Span(string text,ConsoleColor color) { Text=text; Color=color; }
+  }
+  static readonly System.Collections.Generic.List<System.Collections.Generic.List<Span>> History = new System.Collections.Generic.List<System.Collections.Generic.List<Span>>();
+  static System.Collections.Generic.List<Span> pending=new System.Collections.Generic.List<Span>();
+  static bool busy; static string phase="PREPARING",detail="Initializing setup";
+  static int phaseNo,total=8;
+  public static bool IsPinned { get { return active; } }
+  public static int FrameCount { get { return tick; } }
   public static void BannerPlanet() {
     ConsoleColor old=Console.ForegroundColor;
     foreach(string row in Planet(0)) {
@@ -95,115 +105,201 @@ public static class AdcsSetupConsole {
       Console.WriteLine();
     } Console.ForegroundColor=old;
   }
-  static void Reserve() {
-    for(int i=0;i<height;i++) Console.WriteLine();
-    anchor=Console.CursorTop-height;
-  }
-  static void Clear() {
-    for(int i=0;i<height;i++) {
-      Console.SetCursorPosition(0,anchor+i); Console.Write(new string(' ',Console.BufferWidth-1));
-    } Console.SetCursorPosition(0,anchor);
-  }
+  static int PlanetHeight { get { return Math.Min(13,Math.Min(Math.Max(3,Console.WindowHeight-11),Math.Max(3,(Console.WindowWidth-5)*13/64))); } }
+  static int HeaderHeight { get { return PlanetHeight+4; } }
   static void Row(int row,string text,ConsoleColor color) {
-    int width=Console.BufferWidth-1;
+    int width=Console.WindowWidth-1;
     if(text.Length>width) text=text.Substring(0,width);
-    Console.SetCursorPosition(0,anchor+row); Console.ForegroundColor=color;
-    Console.Write(text.PadRight(width));
+    Console.SetCursorPosition(Console.WindowLeft,Console.WindowTop+row);
+    Console.ForegroundColor=color; Console.Write(text.PadRight(width));
+  }
+  static void ColoredRow(int row,System.Collections.Generic.List<Span> spans) {
+    int width=Console.WindowWidth-1,count=0;
+    Console.SetCursorPosition(Console.WindowLeft,Console.WindowTop+row);
+    foreach(Span span in spans) {
+      int size=Math.Min(span.Text.Length,width-count);
+      if(size<=0) break;
+      Console.ForegroundColor=span.Color; Console.Write(span.Text.Substring(0,size)); count+=size;
+    }
+    Console.Write(new string(' ',Math.Max(0,width-count)));
+  }
+  static void Header() {
+    int h=HeaderHeight,seconds=(int)clock.Elapsed.TotalSeconds;
+    string elapsed=String.Format("{0:00}:{1:00}",seconds/60,seconds%60);
+    Row(0,"  A D C S   S I M U L A T O R",ConsoleColor.White);
+    Row(1,String.Format("  MISSION CONTROL   /   PHASE {0:00} OF {1:00}   /   {2}",phaseNo,total,phase),ConsoleColor.Magenta);
+    {
+      string[] planet=Planet(tick*0.08);
+      int planetHeight=PlanetHeight,planetWidth=Math.Min(Console.WindowWidth-5,64*planetHeight/13);
+      for(int i=0;i<planetHeight;i++) {
+        StringBuilder sampled=new StringBuilder("    ");
+        string source=planet[1+i*13/planetHeight];
+        for(int x=0;x<planetWidth;x++) sampled.Append(source[x*64/planetWidth]);
+        string line=sampled.ToString();
+        var spans=new System.Collections.Generic.List<Span>();
+        int begin=0;
+        while(begin<line.Length) {
+          ConsoleColor color=Shade(line[begin]); int end=begin+1;
+          while(end<line.Length && Shade(line[end])==color) end++;
+          spans.Add(new Span(line.Substring(begin,end-begin),color)); begin=end;
+        }
+        ColoredRow(i+2,spans);
+      }
+    }
+    string state=busy?"ACTIVE":"SETUP";
+    Row(h-2,"  [ "+Orbit[tick%6]+" ]  "+state+" / "+elapsed+" / "+(busy?label:detail),ConsoleColor.Cyan);
+    Row(h-1,"  "+new string('\u2501',Math.Max(0,Console.WindowWidth-5)),ConsoleColor.Blue);
+    Console.Title="ADCS Simulator | "+phase+" | "+elapsed;
+  }
+  static void Logs() {
+    int width=Console.WindowWidth-1,start=HeaderHeight,room=Console.WindowHeight-start-1;
+    var rows=new System.Collections.Generic.List<System.Collections.Generic.List<Span>>();
+    int first=Math.Max(0,History.Count-80);
+    for(int n=first;n<=History.Count;n++) {
+      var logical=n==History.Count?pending:History[n];
+      if(n==History.Count && logical.Count==0) break;
+      var current=new System.Collections.Generic.List<Span>(); int used=0;
+      foreach(Span span in logical) {
+        int offset=0;
+        while(offset<span.Text.Length) {
+          int size=Math.Min(width-used,span.Text.Length-offset);
+          current.Add(new Span(span.Text.Substring(offset,size),span.Color)); used+=size; offset+=size;
+          if(used==width) { rows.Add(current); current=new System.Collections.Generic.List<Span>(); used=0; }
+        }
+      }
+      if(used>0 || logical.Count==0) rows.Add(current);
+    }
+    int skip=Math.Max(0,rows.Count-room);
+    for(int i=0;i<room;i++) {
+      if(skip+i<rows.Count) ColoredRow(start+i,rows[skip+i]); else Row(start+i,"",ConsoleColor.Gray);
+    }
+    Row(Console.WindowHeight-1,"  "+new string('\u2501',Math.Max(0,Console.WindowWidth-32))+"  FULL OUTPUT: setup.log",ConsoleColor.DarkCyan);
   }
   static void Draw() {
-    ConsoleColor old=Console.ForegroundColor; int first=0;
-    if(height==19) {
-      string[] planet=Planet(tick*0.08);
-      for(int i=0;i<15;i++) {
-        Console.SetCursorPosition(0,anchor+i); Console.Write("    ");
-        int limit=Math.Min(64,Console.BufferWidth-5),begin=0;
-        while(begin<limit) {
-          ConsoleColor color=Shade(planet[i][begin]); int end=begin+1;
-          while(end<limit && Shade(planet[i][end])==color) end++;
-          Console.ForegroundColor=color; Console.Write(planet[i].Substring(begin,end-begin)); begin=end;
-        }
-        Console.Write(new string(' ',Math.Max(0,Console.BufferWidth-5-limit)));
-      } first=15;
-    }
-    int seconds=(int)clock.Elapsed.TotalSeconds;
-    string elapsed=String.Format("{0:00}:{1:00}",seconds/60,seconds%60);
-    Row(first,"  "+new string('-',Math.Min(68,Console.BufferWidth-4)),ConsoleColor.DarkCyan);
-    Row(first+1,"  [ "+Orbit[tick%6]+" ]  "+label,ConsoleColor.Cyan);
-    Row(first+2,"  ACTIVE / "+elapsed+" elapsed / waiting for command to finish",ConsoleColor.White);
-    Row(first+3,"  Live output above | Full details in setup.log",ConsoleColor.DarkGray);
-    Console.ForegroundColor=old; Console.Title="ADCS Simulator | "+elapsed+" | "+label;
+    ConsoleColor old=Console.ForegroundColor;
+    try { Header(); Logs(); } finally { Console.ForegroundColor=old; }
   }
-  public static bool Start(string task) {
+  public static bool Open() {
     if(Console.IsOutputRedirected) return false;
     lock(Gate) { try {
-      if(Console.BufferWidth<40 || Console.WindowHeight<8) return false;
-      label=task; clock=Stopwatch.StartNew(); tick=0; stopping=false;
-      visible=Console.CursorVisible; Console.CursorVisible=false;
-      height=Console.BufferWidth>=74 && Console.WindowHeight>=24?19:4;
-      Reserve(); active=true; Draw(); worker=new Thread(Animate); worker.IsBackground=true;
-      worker.Start(); return true;
+      if(active) return true;
+      if(Console.WindowWidth<40 || Console.WindowHeight<10) return false;
+      visible=Console.CursorVisible; originalColor=Console.ForegroundColor; Console.CursorVisible=false;
+      Console.Clear(); History.Clear(); pending.Clear();
+      clock=Stopwatch.StartNew(); tick=0; stopping=false; active=true; Draw();
+      worker=new Thread(Animate); worker.IsBackground=true; worker.Start(); return true;
     } catch { active=false; try { Console.CursorVisible=visible; } catch {} return false; } }
+  }
+  public static void Phase(int number,int count,string name,string description) {
+    lock(Gate) { phaseNo=number; total=count; phase=name; detail=description;
+      if(active) { try { Header(); } catch {} } }
+  }
+  public static bool Start(string task) {
+    lock(Gate) { label=task; busy=true; return active; }
   }
   static void Animate() {
     while(!stopping) {
       lock(Gate) { if(!active) return; try { tick++; Draw(); }
-        catch { active=false; try { Console.CursorVisible=visible; } catch {} return; } }
-      Thread.Sleep(120);
+        catch {} }
+      Thread.Sleep(140);
+    }
+  }
+  public static bool Write(string text,ConsoleColor color,bool newline) {
+    lock(Gate) {
+      if(!active) return false;
+      try {
+        string[] parts=text.Replace("\r\n","\n").Replace("\r","\n").Replace("\t","    ").Split('\n');
+        for(int i=0;i<parts.Length;i++) {
+          if(parts[i].Length>0) pending.Add(new Span(parts[i],color));
+          if(i<parts.Length-1 || newline) {
+            History.Add(pending); pending=new System.Collections.Generic.List<Span>();
+          }
+        }
+        if(History.Count>400) History.RemoveRange(0,History.Count-400);
+        Logs(); return true;
+      } catch { return true; } // A resize can interrupt a frame; retry on the next animation tick.
     }
   }
   public static bool Output(string text) {
+    ConsoleColor color=ConsoleColor.Gray;
+    string lower=text.ToLowerInvariant();
+    if(lower.Contains("error") || lower.Contains("failed")) color=ConsoleColor.Red;
+    else if(lower.Contains("warning")) color=ConsoleColor.Yellow;
+    else if(lower.Contains("successfully") || lower.Contains("requirement already satisfied")) color=ConsoleColor.Green;
+    else if(lower.Contains("downloading") || lower.Contains("fetch")) color=ConsoleColor.Blue;
+    else if(lower.Contains("collecting") || lower.Contains("installing") || lower.Contains("building")) color=ConsoleColor.Cyan;
+    return Write("  "+text,color,true);
+  }
+  // Finishing one command leaves the shared Saturn running between phases.
+  public static void Stop() { lock(Gate) { busy=false; } }
+  public static void Complete(bool success) {
     lock(Gate) {
-      if(!active) return false;
-      ConsoleColor old=Console.ForegroundColor;
-      try { Clear(); Console.ForegroundColor=ConsoleColor.DarkGray;
-        Console.WriteLine("  "+text); Reserve(); Draw(); return true;
-      } catch { active=false; try { Console.CursorVisible=visible; } catch {} return false; }
-      finally { Console.ForegroundColor=old; }
+      phase=success?"READY FOR FLIGHT":"ACTION REQUIRED"; detail=success?"Setup verified / simulator stopped":"Backend ready / frontend needs attention";
+      busy=false;
     }
+    if(!active) return;
+    Write(success?"  [+] Setup complete. Start your simulation in VS Code.":"  [!] UI missing: re-run Setup.bat -ReuseVenv with internet.",success?ConsoleColor.Green:ConsoleColor.Yellow,true);
+    Write("  1. Open this folder in VS Code.",ConsoleColor.White,true);
+    Write("  2. Open a new terminal (the .venv activates).",ConsoleColor.Gray,true);
+    Write("  3. python run_simulator.py",ConsoleColor.Cyan,true);
+    Write("  4. http://127.0.0.1:5000 / Ctrl+C to stop",ConsoleColor.Magenta,true);
   }
-  public static void Stop() {
+  public static void Shutdown() {
     stopping=true; if(worker!=null) { worker.Join(1500); worker=null; }
-    lock(Gate) { try { if(active) Clear(); } catch {}
-      finally { active=false; try { Console.CursorVisible=visible; Console.Title="ADCS Simulator | Setup"; } catch {} } }
+    lock(Gate) { try {
+      if(active) { Draw(); Console.SetCursorPosition(Console.WindowLeft,Console.WindowTop+Console.WindowHeight-1); }
+    } catch {} finally {
+      active=false; try { Console.CursorVisible=visible; Console.ForegroundColor=originalColor; } catch {}
+    } }
   }
+
 }
 "@
 }
+function Write-MissionText {
+  param([Parameter(Position=0)][AllowEmptyString()][string]$Object = '',
+        [ConsoleColor]$ForegroundColor = 'Gray', [switch]$NoNewline)
+  if (('AdcsSetupConsole' -as [type]) -and [AdcsSetupConsole]::Write($Object, $ForegroundColor, (-not $NoNewline))) { return }
+  Write-Host $Object -ForegroundColor $ForegroundColor -NoNewline:$NoNewline
+}
 function Log([string]$m) { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
-function Say([string]$m, [string]$c = 'Gray') { Write-Host $m -ForegroundColor $c; Log $m }
+function Say([string]$m, [string]$c = 'Gray') { Write-MissionText $m -ForegroundColor $c; Log $m }
 function Ok([string]$m) { Say "  [+] $m" Green }
 function Warn([string]$m) { Say "  [!] $m" Yellow }
 function Fail([string]$m) { Say "  [X] $m" Red; throw $m }
-function MissionRule([string]$color = 'DarkCyan') { Write-Host ('  ' + ('-' * 68)) -ForegroundColor $color }
+function MissionRule([string]$color = 'Blue') { Write-MissionText ('  ' + (([string][char]0x2501) * 68)) -ForegroundColor $color }
 function MissionBanner {
   try { Initialize-MissionConsole } catch { $script:ConsoleUiUnavailable = $true }
   try { $Host.UI.RawUI.WindowTitle = 'ADCS Simulator | Setup' } catch {}
-  Write-Host ''
-  Write-Host '  A D C S   S I M U L A T O R' -ForegroundColor White
-  Write-Host '  ATTITUDE DETERMINATION & CONTROL SYSTEM' -ForegroundColor DarkCyan
-  Write-Host ''
-  if (-not $script:ConsoleUiUnavailable) { [AdcsSetupConsole]::BannerPlanet() }
+  $pinned = $false
+  if (-not $script:ConsoleUiUnavailable) { $pinned = [AdcsSetupConsole]::Open() }
+  Write-MissionText ''
+  Write-MissionText '  A D C S   S I M U L A T O R' -ForegroundColor White
+  Write-MissionText '  ATTITUDE DETERMINATION & CONTROL SYSTEM' -ForegroundColor Magenta
+  Write-MissionText ''
+  if (-not $script:ConsoleUiUnavailable -and -not $pinned) { [AdcsSetupConsole]::BannerPlanet() }
   MissionRule
-  Write-Host '  M I S S I O N   P R E P A R A T I O N' -ForegroundColor Cyan
-  Write-Host '  01 PREFLIGHT   02 ENVIRONMENT   03 PACKAGES   04 JAVA' -ForegroundColor Gray
-  Write-Host '  05 FRONTEND    06 VALIDATION    07 BOOT       08 HANDOVER' -ForegroundColor Gray
+  Write-MissionText '  M I S S I O N   P R E P A R A T I O N' -ForegroundColor Cyan
+  Write-MissionText '  01 PREFLIGHT   02 ENVIRONMENT   03 PACKAGES   04 JAVA' -ForegroundColor Cyan
+  Write-MissionText '  05 FRONTEND    06 VALIDATION    07 BOOT       08 HANDOVER' -ForegroundColor Magenta
   MissionRule
-  Write-Host '  Install, verify, then stop. Ready for your next simulation.' -ForegroundColor White
-  Write-Host "  Workspace  $Root" -ForegroundColor DarkGray
-  Write-Host "  Full log   $LogFile" -ForegroundColor DarkGray
+  Write-MissionText '  Install, verify, then stop. Ready for your next simulation.' -ForegroundColor White
+  Write-MissionText "  Workspace  $Root" -ForegroundColor DarkGray
+  Write-MissionText "  Full log   $LogFile" -ForegroundColor DarkGray
 }
 function Step([string]$t) {
   $script:StepNo++
   $names = @('PREFLIGHT', 'ENVIRONMENT', 'PACKAGES', 'JAVA RUNTIME', 'FRONTEND', 'VALIDATION', 'LIVE BOOT', 'HANDOVER')
-  Write-Host ''
+  Write-MissionText ''
+  if ('AdcsSetupConsole' -as [type]) { [AdcsSetupConsole]::Phase($script:StepNo, $StepTotal, $names[$script:StepNo - 1], $t) }
   MissionRule
-  Write-Host ("  {0:00} / {1:00}   {2}" -f $script:StepNo, $StepTotal, $names[$script:StepNo - 1]) -ForegroundColor Cyan
-  Write-Host "  $t" -ForegroundColor White
+  Write-MissionText ("  {0:00} / {1:00}   {2}" -f $script:StepNo, $StepTotal, $names[$script:StepNo - 1]) -ForegroundColor Cyan
+  Write-MissionText "  $t" -ForegroundColor White
   $done = ($script:StepNo - 1) * 3
-  Write-Host '  [' -NoNewline -ForegroundColor DarkGray
-  Write-Host ('=' * $done) -NoNewline -ForegroundColor Cyan
-  Write-Host (' ' * (24 - $done)) -NoNewline -ForegroundColor DarkGray
-  Write-Host "]  $($script:StepNo - 1) / $StepTotal complete" -ForegroundColor Gray
+  Write-MissionText '  [' -NoNewline -ForegroundColor DarkGray
+  Write-MissionText ('=' * $done) -NoNewline -ForegroundColor Cyan
+  Write-MissionText (' ' * (24 - $done)) -NoNewline -ForegroundColor DarkGray
+  Write-MissionText "]  $($script:StepNo - 1) / $StepTotal complete" -ForegroundColor Gray
   MissionRule
   Log "STEP $($script:StepNo)/$StepTotal : $t"
 }
@@ -213,7 +309,7 @@ function Run([string]$exe, [string[]]$argList) {
   elseif ($label -eq 'npm.cmd') { $label = "Frontend / npm $($argList -join ' ')" }
   elseif ($argList -contains 'venv') { $label = 'Preparing Python environment' }
   else { $label = "Validating / $label" }
-  Write-Host "  [>] $label" -ForegroundColor Cyan
+  Write-MissionText "  [>] $label" -ForegroundColor Cyan
   $animated = $false
   if (-not $script:ConsoleUiUnavailable -and ('AdcsSetupConsole' -as [type])) {
     $animated = [AdcsSetupConsole]::Start($label)
@@ -223,7 +319,7 @@ function Run([string]$exe, [string[]]$argList) {
   try {
     & $exe @argList 2>&1 | ForEach-Object {
       $ln = "$_"
-      if (-not $animated -or -not [AdcsSetupConsole]::Output($ln)) { Write-Host "  $ln" -ForegroundColor DarkGray }
+      if (-not $animated -or -not [AdcsSetupConsole]::Output($ln)) { Write-MissionText "  $ln" -ForegroundColor DarkGray }
       Log "  $ln"
     }
     $exitCode = $LASTEXITCODE
@@ -233,7 +329,7 @@ function Run([string]$exe, [string[]]$argList) {
   }
   $clock.Stop()
   $color = if ($exitCode -eq 0) { 'Green' } else { 'Yellow' }
-  Write-Host ("  [<] Command finished in {0:0.0}s / exit {1}" -f $clock.Elapsed.TotalSeconds, $exitCode) -ForegroundColor $color
+  Write-MissionText ("  [<] Command finished in {0:0.0}s / exit {1}" -f $clock.Elapsed.TotalSeconds, $exitCode) -ForegroundColor $color
   return $exitCode
 }
 function Get-HttpCode([int]$Port = 5000) {
@@ -511,6 +607,7 @@ if __name__ == '__main__':
 # ============================== banner =====================================
 '' | Out-File -FilePath $LogFile -Encoding utf8
 MissionBanner
+try {
 
 # ====================== Step 1 : pre-flight + shield =======================
 Step 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'
@@ -791,28 +888,32 @@ Start-Sleep -Seconds 2
 if (-not (Test-PortFree 5000)) { Kill-Port 5000; Start-Sleep -Seconds 1 }
 if (Test-PortFree 5000) { Ok 'port 5000 free - machine is clean for VS Code' } else { Warn 'port 5000 still busy - kill leftover python.exe via Task Manager before starting the sim.' }
 
-Write-Host ''
+Write-MissionText ''
 if ($up) {
   MissionRule Green
-  Write-Host '  ADCS SIMULATOR / READY FOR FLIGHT' -ForegroundColor Green
-  Write-Host '  Everything installed AND proven working.' -ForegroundColor White
-  Write-Host '  [========================]  8 / 8 complete' -ForegroundColor Cyan
+  Write-MissionText '  ADCS SIMULATOR / READY FOR FLIGHT' -ForegroundColor Green
+  Write-MissionText '  Everything installed AND proven working.' -ForegroundColor White
+  Write-MissionText '  [========================]  8 / 8 complete' -ForegroundColor Cyan
   MissionRule Green
 } else {
   MissionRule Yellow
-  Write-Host '  ADCS SIMULATOR / ACTION REQUIRED' -ForegroundColor Yellow
-  Write-Host '  Backend proven; UI files missing.' -ForegroundColor White
+  Write-MissionText '  ADCS SIMULATOR / ACTION REQUIRED' -ForegroundColor Yellow
+  Write-MissionText '  Backend proven; UI files missing.' -ForegroundColor White
   MissionRule Yellow
-  Write-Host ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
+  Write-MissionText ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
 }
-Write-Host ''
-Write-Host ' HOW EVERYONE RUNS THE SIM FROM NOW ON (VS Code, as usual):' -ForegroundColor Cyan
-Write-Host '   1. Open VS Code > File > Open Folder > this folder' -ForegroundColor White
-Write-Host '      (if it asks to use the existing virtual environment -> Yes)' -ForegroundColor Gray
-Write-Host '   2. Open a NEW terminal (Ctrl+`)  - the .venv activates itself' -ForegroundColor White
-Write-Host '   3. python run_simulator.py' -ForegroundColor White
-Write-Host '   4. open http://127.0.0.1:5000   (Ctrl+C in the terminal stops it)' -ForegroundColor White
-Write-Host ' ONE instance at a time - starting a second prints a friendly' -ForegroundColor Gray
-Write-Host ' message instead of a port error (shield v2 handles it).' -ForegroundColor Gray
-Write-Host ' Viewer-only, no Java:  python app.py' -ForegroundColor Gray
-Write-Host " Full log: $LogFile   Boot log: $BootOut / $BootErr" -ForegroundColor Gray
+Write-MissionText ''
+Write-MissionText ' HOW EVERYONE RUNS THE SIM FROM NOW ON (VS Code, as usual):' -ForegroundColor Cyan
+Write-MissionText '   1. Open VS Code > File > Open Folder > this folder' -ForegroundColor White
+Write-MissionText '      (if it asks to use the existing virtual environment -> Yes)' -ForegroundColor Gray
+Write-MissionText '   2. Open a NEW terminal (Ctrl+`)  - the .venv activates itself' -ForegroundColor White
+Write-MissionText '   3. python run_simulator.py' -ForegroundColor White
+Write-MissionText '   4. open http://127.0.0.1:5000   (Ctrl+C in the terminal stops it)' -ForegroundColor White
+Write-MissionText ' ONE instance at a time - starting a second prints a friendly' -ForegroundColor Gray
+Write-MissionText ' message instead of a port error (shield v2 handles it).' -ForegroundColor Gray
+Write-MissionText ' Viewer-only, no Java:  python app.py' -ForegroundColor Gray
+Write-MissionText " Full log: $LogFile   Boot log: $BootOut / $BootErr" -ForegroundColor Gray
+if ('AdcsSetupConsole' -as [type]) { [AdcsSetupConsole]::Complete([bool]$up) }
+} finally {
+  if ('AdcsSetupConsole' -as [type]) { [AdcsSetupConsole]::Shutdown() }
+}
