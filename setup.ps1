@@ -1,5 +1,5 @@
 # ============================================================================
-#  setup.ps1 - LEAP-2 MBD Simulation - one-click setup (v8)
+#  setup.ps1 - ADCS Simulator - one-click setup (v8)
 #  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
 #
 #  v8 vs v7 - per user request:
@@ -40,120 +40,201 @@ Set-Location $Root
  $StepTotal  = 8; $StepNo = 0
  $FrontendMissing = $false
 
-# Console presentation only; setup commands and decision paths are unchanged.
+# Presentation only: native commands still run synchronously in this shell.
+function Initialize-MissionConsole {
+  if ('AdcsSetupConsole' -as [type]) { return }
+  Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Diagnostics;
+using System.Threading;
+public static class AdcsSetupConsole {
+  static readonly object Gate=new object();
+  static Thread worker; static volatile bool stopping;
+  static bool active,visible; static int anchor,height,tick;
+  static string label; static Stopwatch clock;
+  static readonly string[] Orbit={"o . . .",". o . .",". . o .",". . . o",". . o .",". o . ."};
+  public static string[] Planet(double phase) {
+    string[] rows=new string[15]; string ramp=".,:;irsXA253hMHGS#9B&@";
+    double ca=Math.Cos(-0.32),sa=Math.Sin(-0.32);
+    for(int row=0;row<15;row++) {
+      StringBuilder line=new StringBuilder();
+      for(int col=0;col<64;col++) {
+        double x=(col-31.5)/2,y=7-row,sphere=35-x*x-y*y;
+        double z=sphere>=0?Math.Sqrt(sphere):-100;
+        double u=ca*x+sa*y,v=(-sa*x+ca*y)/0.34,r=Math.Sqrt(u*u+v*v);
+        bool ring=r>7.8 && r<15.3 && !(r>11.6 && r<12.1);
+        char pixel=' ';
+        if(ring && (sphere<0 || -v*Math.Sqrt(1-0.34*0.34)>z)) {
+          double bands=0.5+0.5*Math.Sin(r*4.5);
+          double glint=Math.Pow(0.5+0.5*Math.Cos(Math.Atan2(v,u)-phase),10);
+          double shade=Math.Min(1,0.38+0.12*bands+0.32*glint);
+          if(r<8.05 || r>15.05 || (r>11.35 && r<12.35)) shade=Math.Min(1,shade+0.18);
+          pixel=" .:-=+*#%@"[(int)(shade*9)];
+        } else if(sphere>=0) {
+          double light=Math.Max(0,(-0.55*x+0.4*y+0.73*z)/Math.Sqrt(35));
+          double bands=0.91+0.09*Math.Sin(y*3.2+0.35*Math.Sin(Math.Atan2(x,z)*4-phase*0.45));
+          pixel=ramp[(int)(Math.Min(1,(0.08+0.92*light)*bands)*(ramp.Length-1))];
+        } else if((row==1 && col==7)||(row==12 && col==57)) pixel='.';
+        else if((row==3 && col==58)||(row==11 && col==4)) pixel='+';
+        line.Append(pixel);
+      } rows[row]=line.ToString();
+    } return rows;
+  }
+  static ConsoleColor Shade(char c) {
+    if("@&B9#%".IndexOf(c)>=0) return ConsoleColor.White;
+    if("GSHMh3*+".IndexOf(c)>=0) return ConsoleColor.Yellow;
+    if("52AXsr=-".IndexOf(c)>=0) return ConsoleColor.DarkYellow;
+    return ConsoleColor.DarkGray;
+  }
+  public static void BannerPlanet() {
+    ConsoleColor old=Console.ForegroundColor;
+    foreach(string row in Planet(0)) {
+      Console.Write("    ");
+      foreach(char c in row) { Console.ForegroundColor=Shade(c); Console.Write(c); }
+      Console.WriteLine();
+    } Console.ForegroundColor=old;
+  }
+  static void Reserve() {
+    for(int i=0;i<height;i++) Console.WriteLine();
+    anchor=Console.CursorTop-height;
+  }
+  static void Clear() {
+    for(int i=0;i<height;i++) {
+      Console.SetCursorPosition(0,anchor+i); Console.Write(new string(' ',Console.BufferWidth-1));
+    } Console.SetCursorPosition(0,anchor);
+  }
+  static void Row(int row,string text,ConsoleColor color) {
+    int width=Console.BufferWidth-1;
+    if(text.Length>width) text=text.Substring(0,width);
+    Console.SetCursorPosition(0,anchor+row); Console.ForegroundColor=color;
+    Console.Write(text.PadRight(width));
+  }
+  static void Draw() {
+    ConsoleColor old=Console.ForegroundColor; int first=0;
+    if(height==19) {
+      string[] planet=Planet(tick*0.08);
+      for(int i=0;i<15;i++) {
+        Console.SetCursorPosition(0,anchor+i); Console.Write("    ");
+        int limit=Math.Min(64,Console.BufferWidth-5),begin=0;
+        while(begin<limit) {
+          ConsoleColor color=Shade(planet[i][begin]); int end=begin+1;
+          while(end<limit && Shade(planet[i][end])==color) end++;
+          Console.ForegroundColor=color; Console.Write(planet[i].Substring(begin,end-begin)); begin=end;
+        }
+        Console.Write(new string(' ',Math.Max(0,Console.BufferWidth-5-limit)));
+      } first=15;
+    }
+    int seconds=(int)clock.Elapsed.TotalSeconds;
+    string elapsed=String.Format("{0:00}:{1:00}",seconds/60,seconds%60);
+    Row(first,"  "+new string('-',Math.Min(68,Console.BufferWidth-4)),ConsoleColor.DarkCyan);
+    Row(first+1,"  [ "+Orbit[tick%6]+" ]  "+label,ConsoleColor.Cyan);
+    Row(first+2,"  ACTIVE / "+elapsed+" elapsed / waiting for command to finish",ConsoleColor.White);
+    Row(first+3,"  Live output above | Full details in setup.log",ConsoleColor.DarkGray);
+    Console.ForegroundColor=old; Console.Title="ADCS Simulator | "+elapsed+" | "+label;
+  }
+  public static bool Start(string task) {
+    if(Console.IsOutputRedirected) return false;
+    lock(Gate) { try {
+      if(Console.BufferWidth<40 || Console.WindowHeight<8) return false;
+      label=task; clock=Stopwatch.StartNew(); tick=0; stopping=false;
+      visible=Console.CursorVisible; Console.CursorVisible=false;
+      height=Console.BufferWidth>=74 && Console.WindowHeight>=24?19:4;
+      Reserve(); active=true; Draw(); worker=new Thread(Animate); worker.IsBackground=true;
+      worker.Start(); return true;
+    } catch { active=false; try { Console.CursorVisible=visible; } catch {} return false; } }
+  }
+  static void Animate() {
+    while(!stopping) {
+      lock(Gate) { if(!active) return; try { tick++; Draw(); }
+        catch { active=false; try { Console.CursorVisible=visible; } catch {} return; } }
+      Thread.Sleep(120);
+    }
+  }
+  public static bool Output(string text) {
+    lock(Gate) {
+      if(!active) return false;
+      ConsoleColor old=Console.ForegroundColor;
+      try { Clear(); Console.ForegroundColor=ConsoleColor.DarkGray;
+        Console.WriteLine("  "+text); Reserve(); Draw(); return true;
+      } catch { active=false; try { Console.CursorVisible=visible; } catch {} return false; }
+      finally { Console.ForegroundColor=old; }
+    }
+  }
+  public static void Stop() {
+    stopping=true; if(worker!=null) { worker.Join(1500); worker=null; }
+    lock(Gate) { try { if(active) Clear(); } catch {}
+      finally { active=false; try { Console.CursorVisible=visible; Console.Title="ADCS Simulator | Setup"; } catch {} } }
+  }
+}
+"@
+}
 function Log([string]$m) { Add-Content -Path $LogFile -Value $m -Encoding UTF8 }
 function Say([string]$m, [string]$c = 'Gray') { Write-Host $m -ForegroundColor $c; Log $m }
 function Ok([string]$m) { Say "  [+] $m" Green }
 function Warn([string]$m) { Say "  [!] $m" Yellow }
 function Fail([string]$m) { Say "  [X] $m" Red; throw $m }
-function MissionRule([string]$color = 'DarkCyan') { Write-Host ('  ' + ('-' * 72)) -ForegroundColor $color }
+function MissionRule([string]$color = 'DarkCyan') { Write-Host ('  ' + ('-' * 68)) -ForegroundColor $color }
 function MissionBanner {
-  try { $Host.UI.RawUI.WindowTitle = 'LEAP-2 | Mission preparation' } catch {}
+  try { Initialize-MissionConsole } catch { $script:ConsoleUiUnavailable = $true }
+  try { $Host.UI.RawUI.WindowTitle = 'ADCS Simulator | Setup' } catch {}
   Write-Host ''
-  Write-Host '       .                 *                           .             *' -ForegroundColor DarkGray
-  $saturn = @(
-    '                                                   _.oo.',
-    '                      _.u[[/;:,.               .odMMMMMM',
-    '                   .o888uu[[[/;::- .        .o@P^   MMM^',
-    '                 oN88888uu[[[/;:::-.              dP^',
-    '                dNNMMM888uu[[[/;::--.        .o@P^',
-    '               MMMMMM888uu[[[/;::-.     .o@^',
-    '               NNMMMNN888uu[[[/~.o@P^',
-    '               888888888uu[[[/o@^-..',
-    '              oI8888uu[[[/o@P^:--..',
-    '           .@^  YUU[[[/o@^;:::---..',
-    '         oMP      ^/o@P^;::::---..',
-    '      .dMMM    .o@^ ^;::----...',
-    '    dMMMMMMM@^           ^^^^',
-    '   YMMMP^',
-    '    ^^'
-  )
-  foreach ($line in $saturn) {
-    foreach ($ch in $line.ToCharArray()) {
-      $shade = 'DarkGray'
-      if ('MN8'.Contains([string]$ch)) { $shade = 'Yellow' }
-      elseif ('oudIY'.Contains([string]$ch)) { $shade = 'DarkYellow' }
-      elseif ('@P^'.Contains([string]$ch)) { $shade = 'White' }
-      elseif ('[/'.Contains([string]$ch)) { $shade = 'Gray' }
-      Write-Host ([string]$ch) -NoNewline -ForegroundColor $shade
-    }
-    Write-Host ''
-  }
-  Write-Host '          *                         .                        *' -ForegroundColor DarkGray
+  Write-Host '  A D C S   S I M U L A T O R' -ForegroundColor White
+  Write-Host '  ATTITUDE DETERMINATION & CONTROL SYSTEM' -ForegroundColor DarkCyan
   Write-Host ''
+  if (-not $script:ConsoleUiUnavailable) { [AdcsSetupConsole]::BannerPlanet() }
   MissionRule
-  Write-Host '  L E A P - 2   /   M B D   S I M U L A T I O N' -ForegroundColor Cyan
-  Write-Host '  MISSION CONTROL                                    SETUP SEQUENCE / v8' -ForegroundColor White
+  Write-Host '  M I S S I O N   P R E P A R A T I O N' -ForegroundColor Cyan
+  Write-Host '  01 PREFLIGHT   02 ENVIRONMENT   03 PACKAGES   04 JAVA' -ForegroundColor Gray
+  Write-Host '  05 FRONTEND    06 VALIDATION    07 BOOT       08 HANDOVER' -ForegroundColor Gray
   MissionRule
-  Write-Host '  Install > build > verify > stop > ready for VS Code' -ForegroundColor Gray
-  Write-Host '  Safe to re-run: setup stops any running sim first.' -ForegroundColor DarkGray
-  Write-Host "  Base : $Root" -ForegroundColor DarkGray
-  Write-Host "  Log  : $LogFile" -ForegroundColor DarkGray
+  Write-Host '  Install, verify, then stop. Ready for your next simulation.' -ForegroundColor White
+  Write-Host "  Workspace  $Root" -ForegroundColor DarkGray
+  Write-Host "  Full log   $LogFile" -ForegroundColor DarkGray
 }
 function Step([string]$t) {
   $script:StepNo++
+  $names = @('PREFLIGHT', 'ENVIRONMENT', 'PACKAGES', 'JAVA RUNTIME', 'FRONTEND', 'VALIDATION', 'LIVE BOOT', 'HANDOVER')
   Write-Host ''
   MissionRule
-  Write-Host ("  MISSION PHASE {0:00} / {1:00}" -f $script:StepNo, $StepTotal) -ForegroundColor Cyan
+  Write-Host ("  {0:00} / {1:00}   {2}" -f $script:StepNo, $StepTotal, $names[$script:StepNo - 1]) -ForegroundColor Cyan
   Write-Host "  $t" -ForegroundColor White
+  $done = ($script:StepNo - 1) * 3
   Write-Host '  [' -NoNewline -ForegroundColor DarkGray
-  Write-Host ('=' * ($script:StepNo - 1)) -NoNewline -ForegroundColor Cyan
-  Write-Host '>' -NoNewline -ForegroundColor Yellow
-  Write-Host ('.' * ($StepTotal - $script:StepNo)) -NoNewline -ForegroundColor DarkGray
-  Write-Host "]  $($script:StepNo - 1) of $StepTotal phases completed" -ForegroundColor DarkGray
+  Write-Host ('=' * $done) -NoNewline -ForegroundColor Cyan
+  Write-Host (' ' * (24 - $done)) -NoNewline -ForegroundColor DarkGray
+  Write-Host "]  $($script:StepNo - 1) / $StepTotal complete" -ForegroundColor Gray
   MissionRule
   Log "STEP $($script:StepNo)/$StepTotal : $t"
 }
-function Start-MissionActivity([string]$label) {
-  if ([Console]::IsOutputRedirected) { return $null }
-  $state = [hashtable]::Synchronized(@{ Stop = $false })
-  $worker = $null
-  try {
-    $worker = [PowerShell]::Create()
-    $null = $worker.AddScript({
-      param($state, $label)
-      $frames = @('[o . . .]', '[. o . .]', '[. . o .]', '[. . . o]', '[. . o .]', '[. o . .]')
-        $i = 0
-      while (-not $state.Stop) {
-        try {
-          $frame = $frames[$i % $frames.Count]
-          [Console]::Title = "LEAP-2 | $frame $label"
-        } catch {}
-        $i++
-        Start-Sleep -Milliseconds 180
-      }
-    }).AddArgument($state).AddArgument($label)
-    $handle = $worker.BeginInvoke()
-    return @{ State = $state; Worker = $worker; Handle = $handle; Label = $label }
-  } catch {
-    if ($worker) { $worker.Dispose() }
-    return $null
-  }
-}
-function Stop-MissionActivity($activity) {
-  if (-not $activity) { return }
-  try {
-    $activity.State.Stop = $true
-    $null = $activity.Worker.EndInvoke($activity.Handle)
-  } catch {} finally {
-    try { $activity.Worker.Dispose() } catch {}
-    try {
-      $Host.UI.RawUI.WindowTitle = "LEAP-2 | Mission phase $script:StepNo / $StepTotal"
-    } catch {}
-  }
-}
 function Run([string]$exe, [string[]]$argList) {
   $label = Split-Path -Leaf $exe
-  if ($argList -contains 'pip') { $label = 'Python packages / pip' }
+  if ($argList -contains 'pip') { $label = 'Installing Python packages' }
   elseif ($label -eq 'npm.cmd') { $label = "Frontend / npm $($argList -join ' ')" }
-  elseif ($argList -contains 'venv') { $label = 'Preparing virtual environment' }
-  else { $label = "Engine checks / $label" }
-  Write-Host "  [~] $label" -ForegroundColor Cyan
-  $activity = Start-MissionActivity $label
+  elseif ($argList -contains 'venv') { $label = 'Preparing Python environment' }
+  else { $label = "Validating / $label" }
+  Write-Host "  [>] $label" -ForegroundColor Cyan
+  $animated = $false
+  if (-not $script:ConsoleUiUnavailable -and ('AdcsSetupConsole' -as [type])) {
+    $animated = [AdcsSetupConsole]::Start($label)
+  }
+  $clock = [Diagnostics.Stopwatch]::StartNew()
   $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  try { & $exe @argList 2>&1 | ForEach-Object { $ln = "$_"; Write-Host "  $ln" -ForegroundColor DarkGray; Log "  $ln" } }
-  finally { $ErrorActionPreference = $prev; Stop-MissionActivity $activity }
-  return $LASTEXITCODE
+  try {
+    & $exe @argList 2>&1 | ForEach-Object {
+      $ln = "$_"
+      if (-not $animated -or -not [AdcsSetupConsole]::Output($ln)) { Write-Host "  $ln" -ForegroundColor DarkGray }
+      Log "  $ln"
+    }
+    $exitCode = $LASTEXITCODE
+  } finally {
+    if ($animated) { [AdcsSetupConsole]::Stop() }
+    $ErrorActionPreference = $prev
+  }
+  $clock.Stop()
+  $color = if ($exitCode -eq 0) { 'Green' } else { 'Yellow' }
+  Write-Host ("  [<] Command finished in {0:0.0}s / exit {1}" -f $clock.Elapsed.TotalSeconds, $exitCode) -ForegroundColor $color
+  return $exitCode
 }
 function Get-HttpCode([int]$Port = 5000) {
   if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
@@ -713,13 +794,13 @@ if (Test-PortFree 5000) { Ok 'port 5000 free - machine is clean for VS Code' } e
 Write-Host ''
 if ($up) {
   MissionRule Green
-  Write-Host '  MISSION READY / SETUP COMPLETE' -ForegroundColor Green
+  Write-Host '  ADCS SIMULATOR / READY FOR FLIGHT' -ForegroundColor Green
   Write-Host '  Everything installed AND proven working.' -ForegroundColor White
-  Write-Host '  [========]  8 of 8 phases completed' -ForegroundColor Cyan
+  Write-Host '  [========================]  8 / 8 complete' -ForegroundColor Cyan
   MissionRule Green
 } else {
   MissionRule Yellow
-  Write-Host '  MISSION HOLD / SETUP ~90% COMPLETE' -ForegroundColor Yellow
+  Write-Host '  ADCS SIMULATOR / ACTION REQUIRED' -ForegroundColor Yellow
   Write-Host '  Backend proven; UI files missing.' -ForegroundColor White
   MissionRule Yellow
   Write-Host ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White

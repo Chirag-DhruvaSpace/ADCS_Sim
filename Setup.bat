@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  LEAP-2 MBD Simulation : double-click me after git clone
+REM  ADCS Simulator : double-click me after git clone
 REM
 REM  Only prerequisite: Python 3.12 (py launcher) + internet once.
 REM  Setup downloads/builds EVERYTHING itself (venv + deps, Java
