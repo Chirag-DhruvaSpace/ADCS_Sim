@@ -6,6 +6,18 @@ Truth comparisons belong to operator telemetry, never filter updates.
 from __future__ import annotations
 
 import numpy as np
+from dataclasses import dataclass
+
+
+@dataclass
+class DecodedVector:
+    """Onboard SI measurement; no simulator error realization attached."""
+    t_meas_s: float
+    t_arrival_s: float
+    valid: bool
+    saturated: bool
+    omega_body_rad_s: object = None
+    magnetic_field_body_t: object = None
 
 
 def reconstruct_sun(outputs, normals, activation_threshold, min_cells=3):
@@ -116,6 +128,64 @@ class ImuNav:
                 self._sun_t_meas = float(sun.t_meas_s)
             else:
                 self._sun_valid = False              # dropout: keep last receipt
+
+    def process_raw_data(self, t_seconds, gyro, mag, sun, config):
+        """Decode chip registers, then apply existing fusion and navigation.
+
+        This input can come from simulated hardware or an external process;
+        neither truth nor the sensor's applied-error diagnostics are required.
+        """
+        from simulatesunsensor import SunArrayMeasurement, SunCellSample
+
+        def decode(sample, kind, cfg):
+            if sample is None:
+                return None
+            if sample.kind != kind:
+                raise ValueError('Unexpected raw vector sensor kind')
+            prefix = 'gyro' if kind == 'gyro' else 'mag'
+            bits = getattr(cfg, prefix + '_adc_bits')
+            limit = 2**(bits - 1) - 1
+            counts = np.asarray(sample.counts)
+            if counts.shape != (3,) or not np.all(np.isfinite(counts)) or np.any(counts != np.rint(counts)) or np.any(np.abs(counts) > limit):
+                raise ValueError('Invalid sensor register counts')
+            full_scale = cfg.gyro_range_rad_s if kind == 'gyro' else cfg.mag_range_t
+            mount = getattr(cfg, prefix + '_mount_quaternion')
+            body = _dcm_bi_from_q(mount) @ (counts * (full_scale / limit))
+            field = 'omega_body_rad_s' if kind == 'gyro' else 'magnetic_field_body_t'
+            return DecodedVector(sample.t_meas_s, sample.t_arrival_s,
+                                 sample.valid, sample.saturated, **{field: body})
+
+        def units(incoming, kind):
+            if isinstance(incoming, list):
+                return [(unit, decode(sample, kind, config.unit_config(kind, unit, i)))
+                        for i, (unit, sample) in enumerate(incoming)]
+            return decode(incoming, kind, config)
+
+        decoded_sun = None
+        if sun is not None:
+            cfg = config.sun_array
+            if sun.adc_bits != cfg.cells[0].adc_bits or tuple(c.name for c in sun.cells) != tuple(c.name for c in cfg.cells):
+                raise ValueError('Sun packet does not match configured photocells')
+            maximum = 2**sun.adc_bits - 1
+            cells = []
+            for cell in sun.cells:
+                if not 0 <= cell.adc_counts <= maximum:
+                    raise ValueError('Invalid photocell ADC count')
+                fraction = cell.adc_counts / maximum
+                cells.append(SunCellSample(cell.name, fraction, fraction*100,
+                    cell.adc_counts, None if fraction <= 0 else float(np.degrees(np.arccos(fraction))),
+                    False, None, None, cell.saturated, None, None))
+            decoded_sun = SunArrayMeasurement(sun.t_meas_s, sun.t_arrival_s,
+                cells, None, False, 'not_processed', sun.valid)
+            self.sun_config = cfg
+        self.update(t_seconds, units(gyro, 'gyro'), units(mag, 'mag'), decoded_sun)
+
+    def get_processed_data(self):
+        """Replaceable satellite input: SI body vectors and estimated attitude."""
+        return dict(omega_body_rad_s=self.omega_body(),
+                    magnetic_field_body_t=self.B_body(),
+                    quaternion_eci=self.estimator.q_eci,
+                    sun_body=self.sun_body())
 
     def omega_body(self) -> np.ndarray:
         """Best-known body rate [X, Y, Z] (rad/s) -- SENSOR belief, not truth."""

@@ -27,6 +27,21 @@ import numpy as np
 from simulategps import GpsMeasurement
 
 
+def decode_gps_data(raw, epoch_utc, inertial_frame, earth_fixed_frame):
+    """Receiver ECEF fix -> onboard ECI belief, with no truth input.
+
+    t_meas_s is the transport's sampling epoch. The receiver week/TOW stays
+    available for clock processing; the full rotating-frame PV transform is
+    used so velocity includes Earth's rotation.
+    """
+    from dataclasses import asdict
+    from simulategps import absolute_date, ecef_to_eci_pv
+    position, velocity = ecef_to_eci_pv(raw.pos_ecef_m, raw.vel_ecef_m_s,
+        inertial_frame, earth_fixed_frame, absolute_date(epoch_utc, raw.t_meas_s))
+    return GpsMeasurement(**asdict(raw), clock_error_s=0.0,
+                          nav_pos_eci_m=position, nav_vel_eci_mps=velocity)
+
+
 class GpsNav:
     """The satellite's onboard POSITION/VELOCITY KNOWLEDGE holder."""
 
@@ -49,6 +64,17 @@ class GpsNav:
         """A 1 Hz boundary passed with no fix (dropout/cold start): the
         belief is kept, but gps_fix goes False for the telemetry."""
         self.gps_fix = False
+
+    def process_raw_data(self, raw, epoch_utc, inertial_frame, earth_fixed_frame):
+        """Replaceable onboard input: decode and accept one raw receiver fix."""
+        if raw is None:
+            self.register_boundary_no_fix()
+            return
+        self.register_fix(decode_gps_data(raw, epoch_utc, inertial_frame, earth_fixed_frame))
+
+    def get_processed_data(self, t_seconds):
+        """Position/velocity input for the simulation, independent of producer."""
+        return self.extrapolate(t_seconds)
 
     def extrapolate(self, t_seconds):
         """Belief at sim time t: last fix + velocity x elapsed time (never a

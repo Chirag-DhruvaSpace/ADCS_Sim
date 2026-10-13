@@ -1,0 +1,10 @@
+{
+    "version": "2.0.0",
+    "tasks": [{
+        "label": "Build sensor TCP receiver",
+        "type": "shell",
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/run_sensor_receiver.ps1", "-BuildOnly"],
+        "problemMatcher": "$msCompile"
+    }]
+}

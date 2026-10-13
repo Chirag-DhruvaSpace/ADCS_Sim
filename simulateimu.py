@@ -1,5 +1,9 @@
 """simulateimu.py -- the simulated IMU (gyroscope + magnetometer), all in one file.
 
+Public hardware interface: get_raw_data() returns sensor-axis signed register
+counts; navigation decodes them. update() below is the legacy physical-unit
+interface described by the historical notes. See SENSOR_INTERFACES.md.
+
 WHAT THIS IS (plain language): a stand-in for the real gyroscope and
 magnetometer chips the satellite will carry. A gyroscope does NOT measure
 attitude -- it measures HOW FAST the spacecraft is spinning (body angular
@@ -69,6 +73,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from simulatesunsensor import SimulatedSunSensorArray
+from sensor_packets import RawVectorSample
 
 def _dcm_bi_from_q(q):
     """Attitude matrix dcm body->ECI (v_eci = C_bi @ v_body) from a
@@ -216,6 +221,7 @@ class SimulatedIMU:
 
         # ---- scheduling / bookkeeping ---------------------------------------
         self._last_t = None
+        self._raw_receipts = (None, None, None)
         self._gyro_last_k = -1
         self._mag_last_k = -1
         # ---- the coarse-sun-sensor ARRAY (simulatesunsensor.py) -------------
@@ -296,7 +302,8 @@ class SimulatedIMU:
 
     # ---- the heartbeat -------------------------------------------------------
     def update(self, t_seconds, q_truth, omega_truth, B_eci_truth,
-               sun_eci_truth=None, eclipse_fraction=1.0, position_eci=None):
+               sun_eci_truth=None, eclipse_fraction=1.0, position_eci=None,
+               raw_output=False):
         """Feed ONE loop tick of TRUE state. Returns
         (gyro, mag, sun) where each is a Measurement or None (that sensor did
         not tick this update) and a returned measurement with valid=False
@@ -333,14 +340,14 @@ class SimulatedIMU:
             for gm in self._mag_disturb_wander:
                 gm.advance(dt, self.rng)
 
-        gyro = self._produce_gyro(t) if cfg.enable_gyro and not cfg.gyros else None
-        mag = self._produce_mag(t) if cfg.enable_magnetometer and not cfg.magnetometers else None
+        gyro = self._produce_gyro(t, raw_output) if cfg.enable_gyro and not cfg.gyros else None
+        mag = self._produce_mag(t, raw_output) if cfg.enable_magnetometer and not cfg.magnetometers else None
         for kind, enabled in (('gyro', cfg.enable_gyro), ('mag', cfg.enable_magnetometer)):
             if kind in self._units:
                 receipts = []
                 if enabled:
                     for unit, hardware in self._units[kind]:
-                        g, m, _ = hardware.update(t, q, omega, B_eci)
+                        g, m, _ = hardware.update(t, q, omega, B_eci, raw_output=raw_output)
                         receipt = g if kind == 'gyro' else m
                         receipts.append((unit, receipt))
                 if kind == 'gyro':
@@ -352,11 +359,42 @@ class SimulatedIMU:
         # returned receipt is a SunArrayMeasurement (or None off-grid).
         sun = None
         if self._sun_array is not None and sun_eci_truth is not None:
-            sun = self._sun_array.update(t, q, sun_eci_truth, eclipse_fraction,
-                                         position_eci)
+            if raw_output:
+                sun = self._sun_array.get_raw_data(t, q, sun_eci_truth,
+                                                   eclipse_fraction, position_eci)
+            else:
+                sun = self._sun_array.update(t, q, sun_eci_truth, eclipse_fraction,
+                                             position_eci)
             if sun is not None:
                 self.sun_samples += 1
         return gyro, mag, sun
+
+    def get_raw_data(self, t_seconds=None, q_truth=None, omega_truth=None,
+                     B_eci_truth=None, sun_eci_truth=None, eclipse_fraction=1.0,
+                     position_eci=None):
+        """Sample digital sensors once per tick, or read that tick again.
+
+        No arguments returns the cached tick's packets without advancing time,
+        drawing noise, or running navigation. Off-grid sensors return None.
+        """
+        if not self.cfg.enabled:
+            return (None, None, None)
+        if t_seconds is None or t_seconds == getattr(self, '_raw_tick', None):
+            return self._raw_receipts
+        self._raw_receipts = self.update(t_seconds, q_truth, omega_truth,
+            B_eci_truth, sun_eci_truth, eclipse_fraction, position_eci, raw_output=True)
+        self._raw_tick = float(t_seconds)
+        return self._raw_receipts
+
+    def get_gyroscope_raw_data(self, *args, **kwargs):
+        """The gyro packet(s) from the same sampling function/cache."""
+        return self.get_raw_data(*args, **kwargs)[0]
+
+    def get_magnetometer_raw_data(self, *args, **kwargs):
+        return self.get_raw_data(*args, **kwargs)[1]
+
+    def get_sun_sensor_raw_data(self, *args, **kwargs):
+        return self.get_raw_data(*args, **kwargs)[2]
 
     def _on_grid(self, t, period, last_k):
         """1 Hz-style grid check for one sensor: returns (k, t_grid) on a new
@@ -367,7 +405,7 @@ class SimulatedIMU:
             return None
         return k, k * period
 
-    def _produce_gyro(self, t):
+    def _produce_gyro(self, t, raw_output=False):
         """Build one gyro sample on the gyro's own grid (None off-grid)."""
         cfg = self.cfg
         period = 1.0 / cfg.gyro_update_rate_hz
@@ -397,6 +435,11 @@ class SimulatedIMU:
         valid = not (cfg.gyro_dropout_probability > 0.0
                      and self.rng.random() < cfg.gyro_dropout_probability)
 
+        if raw_output:
+            limit = 2**(cfg.gyro_adc_bits - 1) - 1
+            counts = np.clip(np.rint(omega_meas / cfg.gyro_range_rad_s * limit), -limit, limit).astype(int)
+            return RawVectorSample('gyro', t_meas, t_grid, tuple(map(int, counts)), valid, saturated)
+
         omega_meas = self._gyro_mount @ omega_meas
         meas = GyroMeasurement(
             t_meas_s=t_meas, t_arrival_s=t_grid, omega_body_rad_s=omega_meas,
@@ -410,7 +453,7 @@ class SimulatedIMU:
         self.records.append(("gyro", self._last_gyro_rec))
         return meas
 
-    def _produce_mag(self, t):
+    def _produce_mag(self, t, raw_output=False):
         """Build one magnetometer sample on the magnetometer's own grid."""
         cfg = self.cfg
         period = 1.0 / cfg.mag_update_rate_hz
@@ -444,6 +487,11 @@ class SimulatedIMU:
             B_meas = np.round(B_meas / cfg.mag_quantization_t) * cfg.mag_quantization_t
         valid = not (cfg.mag_dropout_probability > 0.0
                      and self.rng.random() < cfg.mag_dropout_probability)
+
+        if raw_output:
+            limit = 2**(cfg.mag_adc_bits - 1) - 1
+            counts = np.clip(np.rint(B_meas / cfg.mag_range_t * limit), -limit, limit).astype(int)
+            return RawVectorSample('mag', t_meas, t_grid, tuple(map(int, counts)), valid, saturated)
 
         B_meas = self._mag_mount @ B_meas
         meas = MagnetometerMeasurement(

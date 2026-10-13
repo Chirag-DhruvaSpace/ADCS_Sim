@@ -141,6 +141,9 @@ state0 = np.concatenate((r0, v0))          # [x, y, z, vx, vy, vz]
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
     global _imu_sim, _telemetry_sequence
 
+    from send_simulated_sensor_data import SensorDataSender, get_raw_sensor_data
+    sensor_sender = SensorDataSender()
+
     firmware = None
     if config.POINTING['strategy'] == 'firmware_sitl':
         from firmware_sitl_adapter import FirmwareLink
@@ -183,14 +186,17 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # metrics and rendering keep using the TRUE r_vec/v_vec -- those are
         # physical environment measured by their own sensors; only position/
         # velocity knowledge comes from GPS.
+        _msg = None
+        _gyro_msg = _mag_msg = _sun_msg = None
         if _gps_sim is not None:
-            _msg = _gps_sim.update(t, r_vec, v_vec)
+            _msg = _gps_sim.get_raw_data(t, r_vec, v_vec)
             _boundary_had_fix = _msg is not None
             if _msg is not None:
-                _gps_nav.register_fix(_msg, _boundary_had_fix)
+                _gps_nav.process_raw_data(_msg, _gps_sim.epoch_utc,
+                    _gps_sim.inertial_frame, _gps_sim.itrf)
             else:
                 _gps_nav.register_boundary_no_fix()   # dropout second: keep last fix
-            r_vec_nav, v_vec_nav = _gps_nav.extrapolate(t)
+            r_vec_nav, v_vec_nav = _gps_nav.get_processed_data(t)
         else:
             r_vec_nav, v_vec_nav = r_vec, v_vec       # GPS disabled: unchanged behavior
 
@@ -238,11 +244,13 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             _imu_nav._unit_receipts = {'gyro': {}, 'mag': {}}
             _imu_sim = SimulatedIMU(mount_config, record_history=False) if mount_config.enabled else None
         if _imu_sim is not None:
-            _gyro_msg, _mag_msg, _sun_msg = _imu_sim.update(
+            _gyro_msg, _mag_msg, _sun_msg = _imu_sim.get_raw_data(
                 t, X_rot[:4], X_rot[4:7], B_eci, sun_eci,
                 eclipse_fraction=srp_result.eclipse_fraction,
                 position_eci=r_vec)
-            _imu_nav.update(t, _gyro_msg, _mag_msg, _sun_msg)
+            sensor_sender.send_simulated_sensor_data(
+                lambda: get_raw_sensor_data(t, _msg, _gyro_msg, _mag_msg, _sun_msg))
+            _imu_nav.process_raw_data(t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM)
             # use_mag_for_control switch: the magnetic laws (B-dot detumble,
             # MTR cross-product) see the SENSOR's field only when True; False
             # keeps them on the true field (A/B test the magnetometer alone).
@@ -257,6 +265,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # truth channel, it is a model + the sensor's own reading).
             B_model_eci = _orbit_provider.magnetic_field_eci(t, r_vec_nav)
             _imu_nav.estimate(t, B_model_eci, sun_eci)
+            _processed_imu = _imu_nav.get_processed_data()
             if config.IMU_SIM.use_mag_for_control:
                 B_sensor_eci = srd._dcm_bi_from_q(_att_est.q_eci) @ _imu_nav.B_body()
             # FULL sensor belief to the ADCS: measured rate, measured field,
@@ -264,11 +273,13 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # steer on what the satellite BELIEVES, exactly like real flight
             # software. The physics still integrates the true state.
             srd.set_imu_adcs_input(config.IMU_SIM.use_gyro_for_control,
-                                   _imu_nav.omega_body(), _imu_nav.B_body(),
-                                   q_belief_eci=_att_est.q_eci,
+                                   _processed_imu['omega_body_rad_s'],
+                                   _processed_imu['magnetic_field_body_t'],
+                                   q_belief_eci=_processed_imu['quaternion_eci'],
                                    use_attitude=config.IMU_SIM.use_attitude_estimate_for_control)
         else:
             srd.set_imu_adcs_input(False, use_attitude=False)
+            sensor_sender.send_simulated_sensor_data(lambda: get_raw_sensor_data(t, _msg))
 
         # ---- ROTATION STEP (LIVE CONTROLS READ HERE) ----
         
@@ -845,6 +856,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # the array's latest receipt (None before the first grid tick)
             _sun_rec = _imu_nav.latest_sun()
             if _sun_rec is not None:
+                # Physical illumination/shadow diagnostics are operator truth,
+                # separate from ADC packets and navigation's reconstructed data.
+                _sun_diagnostics = getattr(_imu_sim._sun_array, '_last_cell_diagnostics', {})
+                def _sun_diagnostic(name, field, scale=1.0):
+                    value = getattr(_sun_diagnostics.get(name), field, None)
+                    return None if value is None else (value if scale == 1.0 else value * scale)
                 data_to_send["sun_arr_valid"] = bool(_sun_rec.valid)
                 data_to_send["sun_arr_cells_used"] = int(sum(1 for c in _sun_rec.cells if c.used))
                 data_to_send["sun_arr_cells_total"] = int(len(_sun_rec.cells))
@@ -853,14 +870,14 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                      "output_pct": float(c.output_pct),
                      "adc_counts": int(c.adc_counts),
                      "angle_deg": (None if c.angle_deg is None else float(c.angle_deg)),
-                     "used": bool(c.used), "in_fov": bool(c.in_fov),
-                     "shadowed": bool(c.shadowed), "saturated": bool(c.saturated),
-                     "eclipse_factor": float(c.eclipse_factor_applied),
-                     "albedo_pct": float(c.albedo_fraction * 100.0)}
+                     "used": bool(c.used), "in_fov": _sun_diagnostic(c.name, 'in_fov'),
+                     "shadowed": _sun_diagnostic(c.name, 'shadowed'), "saturated": bool(c.saturated),
+                     "eclipse_factor": _sun_diagnostic(c.name, 'eclipse_factor_applied'),
+                     "albedo_pct": _sun_diagnostic(c.name, 'albedo_fraction', 100.0)}
                     for c in _sun_rec.cells]
                 data_to_send["sun_arr_method"] = str(_sun_rec.method)
                 data_to_send["sun_arr_eclipse_factor"] = (
-                    float(_sun_rec.cells[0].eclipse_factor_applied) if _sun_rec.cells else 1.0)
+                    _sun_diagnostic(_sun_rec.cells[0].name, 'eclipse_factor_applied') if _sun_rec.cells else None)
                 if _sun_rec.reconstruction_valid and _sun_rec.reconstructed_body is not None:
                     data_to_send["sun_arr_recon_x"] = float(_sun_rec.reconstructed_body[0])
                     data_to_send["sun_arr_recon_y"] = float(_sun_rec.reconstructed_body[1])
@@ -953,6 +970,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
 
         X_rot = X_rot_next
         t += dt
+
+    sensor_sender.close()
 
 
 

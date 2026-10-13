@@ -359,7 +359,7 @@ class SimulatedSunSensorArray:
 
     # ---- the heartbeat -------------------------------------------------------
     def update(self, t_seconds, q_truth, sun_eci_truth, eclipse_fraction,
-               r_eci_truth=None):
+               r_eci_truth=None, raw_output=False):
         """Feed ONE loop tick of TRUE state. Returns a SunArrayMeasurement on
         the array's own grid, or None when the grid did not tick this update
         (a returned receipt with valid=False is a dropped sample).
@@ -506,6 +506,14 @@ class SimulatedSunSensorArray:
 
         # (3.3) ONBOARD RECONSTRUCTION -- NOMINAL normals (the as-mounted
         # error is unknown to the spacecraft; that ignorance IS the channel).
+        if raw_output:
+            from sensor_packets import RawSunSample, RawSunCell
+            # Operator diagnostics stay separate from the hardware interface.
+            self._last_cell_diagnostics = {c.name: c for c in cell_samples}
+            self._raw_receipt = RawSunSample(t_meas, t_grid, valid,
+                cfg.cells[0].adc_bits, tuple(RawSunCell(c.name, c.adc_counts,
+                c.saturated) for c in cell_samples))
+            return self._raw_receipt
         recon, recon_valid, method = self._reconstruct(outputs)
         for i, u in enumerate(self._used_mask):
             cell_samples[i].used = bool(u)
@@ -529,6 +537,18 @@ class SimulatedSunSensorArray:
             "cells": cell_samples,
         })
         return meas
+
+    def get_raw_data(self, t_seconds=None, q_truth=None, sun_eci_truth=None,
+                     eclipse_fraction=1.0, r_eci_truth=None):
+        """Return photocell ADC registers only; reconstruction is onboard."""
+        if not self.cfg.enabled:
+            return None
+        if t_seconds is None or t_seconds == getattr(self, '_raw_tick', None):
+            return getattr(self, '_raw_receipt', None)
+        self._raw_receipt = self.update(t_seconds, q_truth, sun_eci_truth,
+            eclipse_fraction, r_eci_truth, raw_output=True)
+        self._raw_tick = float(t_seconds)
+        return self._raw_receipt
 
     def _reconstruct(self, outputs):
         """The flight computer's least-squares solve A s = b over ALL cells

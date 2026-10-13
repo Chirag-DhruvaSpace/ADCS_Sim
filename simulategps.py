@@ -1,5 +1,9 @@
 """simulategps.py -- the simulated GPS receiver ("FakeGPS"), all in one file.
 
+get_raw_data() is the public receiver interface, with no navigation solution.
+ECEF-to-ECI conversion now belongs to gps_navigation. update() is retained for
+legacy validation callers. See SENSOR_INTERFACES.md for bytes and usage.
+
 WHAT THIS IS (plain language): a stand-in for the real GPS receiver chip the
 satellite will carry. Once per simulated second it "reports" the satellite's
 position, velocity and status, slightly wrong in the same ways a real
@@ -258,35 +262,7 @@ class ClockErrorModel:
 # GpsMeasurement -- one GPS receiver "message", in receiver-style formats.
 # ---------------------------------------------------------------------------
 from dataclasses import dataclass
-
-
-@dataclass
-class GpsMeasurement:
-    """One 1 Hz GPS receiver output. Units live in the field names.
-
-    week/tow: GPS calendar (week since 1980-01-06 + seconds into the week).
-    fix_type 3 = full 3-D fix (receiver convention). vel_enu ORDER: [E, N, U].
-    """
-
-    week: int                                  # GPS week number (since 1980-01-06)
-    tow: float                                 # GPS time-of-week [s], receiver clock error INCLUDED
-    t_meas_s: float                            # true sim time the fix describes [s since epoch_utc]
-    t_arrival_s: float                         # sim time the fix was produced at [s] (the 1 Hz grid point)
-    clock_error_s: float                       # receiver clock error included in week/tow [s]
-    fix_type: int                              # 3 = 3D fix (receiver convention)
-    num_sv: int                                # number of satellites used (simulated random walk)
-    pdop: float                                # position dilution of precision (geometry quality)
-    lat_deg: float                             # WGS84 geodetic latitude [deg], quantized like a real chip
-    lon_deg: float                             # WGS84 geodetic longitude [deg], quantized
-    alt_ell_m: float                           # WGS84 ellipsoidal altitude [m], quantized
-    pos_ecef_m: np.ndarray                     # measured position, ECEF [m] (3,)
-    vel_ecef_m_s: np.ndarray                   # measured velocity, ECEF [m/s] (3,)
-    vel_enu_m_s: np.ndarray                    # measured velocity in ENU [m/s] (3,) -- ORDER [East, North, Up]
-    h_acc_m: float                             # receiver-reported horizontal accuracy estimate [m]
-    v_acc_m: float                             # receiver-reported vertical accuracy estimate [m]
-    latency_s: float                           # how stale the fix was when produced [s]
-    nav_pos_eci_m: np.ndarray                  # onboard ECEF->ECI conversion of pos_ecef_m [m] (3,)
-    nav_vel_eci_mps: np.ndarray                # onboard ECEF->ECI conversion of vel_ecef_m_s [m/s] (3,)
+from sensor_packets import RawGpsSample
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +367,7 @@ class SimulatedGPS:
         # In-memory records for the validation harness.
         self.records = []
 
-    def update(self, t_seconds, r_eci_m, v_eci_mps):
+    def _sample_raw(self, t_seconds, r_eci_m, v_eci_mps):
         """Feed one loop tick of TRUTH; returns GpsMeasurement on 1 Hz
         boundaries (else None). Called in time order, exactly once per tick.
         """
@@ -540,18 +516,14 @@ class SimulatedGPS:
         # NOTE: pos_ecef_m / vel_ecef_m_s are NOT quantized (real receivers'
         # binary outputs are float).
 
-        # 13) the onboard conversion every flight computer does: receiver
-        #     ECEF message -> ECI for the attitude controllers.
-        nav_pos_eci, nav_vel_eci = ecef_to_eci_pv(
-            meas_pos_ecef, meas_vel_ecef, self.inertial_frame, self.itrf, date)
-
-        msg = GpsMeasurement(
+        msg = RawGpsSample(
             week=week, tow=tow, t_meas_s=t_meas, t_arrival_s=t_grid,
-            clock_error_s=clock_err, fix_type=3, num_sv=int(self._num_sv),
-            pdop=float(self._pdop), lat_deg=lat_deg, lon_deg=lon_deg, alt_ell_m=alt_m,
-            pos_ecef_m=meas_pos_ecef, vel_ecef_m_s=meas_vel_ecef,
-            vel_enu_m_s=meas_vel_enu, h_acc_m=h_acc, v_acc_m=v_acc, latency_s=tau,
-            nav_pos_eci_m=nav_pos_eci, nav_vel_eci_mps=nav_vel_eci)
+            fix_type=3, num_sv=int(self._num_sv), pdop=float(self._pdop),
+            lat_deg=lat_deg, lon_deg=lon_deg, alt_ell_m=alt_m,
+            pos_ecef_m=tuple(map(float, meas_pos_ecef)),
+            vel_ecef_m_s=tuple(map(float, meas_vel_ecef)),
+            vel_enu_m_s=tuple(map(float, meas_vel_enu)),
+            h_acc_m=h_acc, v_acc_m=v_acc, latency_s=tau)
 
         # 14) in-memory record (truth columns are validation-only)
         rec = {
@@ -563,9 +535,34 @@ class SimulatedGPS:
             "meas_pos_ecef": np.asarray(meas_pos_ecef), "meas_vel_ecef": np.asarray(meas_vel_ecef),
             "err_pos_enu": err_pos_enu, "err_vel_enu": err_vel_enu,
             "h_acc_m": h_acc, "v_acc_m": v_acc,
-            "nav_pos_eci": np.asarray(nav_pos_eci), "nav_vel_eci": np.asarray(nav_vel_eci),
         }
         self.records.append(rec)
+        return msg
+
+    def get_raw_data(self, t_seconds=None, r_eci_m=None, v_eci_mps=None):
+        """Sample receiver output once; repeated/no-argument reads are free.
+
+        Returns only receiver fields in ECEF/geodetic coordinates. The caller
+        provides truth; this function never advances the engine or navigates.
+        """
+        if not self.cfg.enabled:
+            return None
+        if t_seconds is None or t_seconds == getattr(self, '_raw_tick', None):
+            return getattr(self, '_raw_receipt', None)
+        self._raw_receipt = self._sample_raw(t_seconds, r_eci_m, v_eci_mps)
+        self._raw_tick = float(t_seconds)
+        return self._raw_receipt
+
+    def update(self, t_seconds, r_eci_m, v_eci_mps):
+        """Compatibility API; new integrations use get_raw_data()."""
+        from gps_navigation import decode_gps_data
+        raw = self.get_raw_data(t_seconds, r_eci_m, v_eci_mps)
+        if raw is None:
+            return None
+        msg = decode_gps_data(raw, self.epoch_utc, self.inertial_frame, self.itrf)
+        msg.clock_error_s = self.records[-1]['clock_error_s']
+        self.records[-1]['nav_pos_eci'] = msg.nav_pos_eci_m
+        self.records[-1]['nav_vel_eci'] = msg.nav_vel_eci_mps
         return msg
 
 # ---------------------------------------------------------------------------

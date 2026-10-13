@@ -2,7 +2,7 @@
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
 pointing:
-  strategy: firmware_sitl          # legacy | custom | firmware_sitl (external UDP actuators)
+  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
   legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
   # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
   # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
@@ -19,7 +19,7 @@ pointing:
 # Per-unit overrides take precedence; sun profile is independent of IMU.
 sensor_profiles:
   gps: custom
-  imu: stress        # Shared gyro/magnetometer baseline
+  imu: custom        # Shared gyro/magnetometer baseline
   gyroscope: custom  # Optional independent override of the IMU profile
   magnetometer: custom
   sun_array: custom
@@ -424,6 +424,7 @@ imu_sim:
   gyro_latency_min_s: 0.001
   gyro_latency_max_s: 0.02
   gyro_quantization_rad_s: 0.0              # ADC step; zero disables quantization
+  gyro_adc_bits: 16                        # Signed sensor-axis output registers
   # Exact deterministic chip response and bias, separate from random errors.
   gyro_response_matrix:
     - [1.0, 0.0, 0.0]
@@ -450,6 +451,7 @@ imu_sim:
   mag_latency_min_s: 0.002
   mag_latency_max_s: 0.05
   mag_quantization_t: 0.0                   # ADC step; zero disables quantization
+  mag_adc_bits: 16                         # Signed sensor-axis output registers
   # Exact deterministic chip response and bias, separate from random errors.
   mag_response_matrix:
     - [1.0, 0.0, 0.0]

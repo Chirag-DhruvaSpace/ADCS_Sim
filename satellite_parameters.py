@@ -688,6 +688,7 @@ class ImuSimParameters:
     gyro_latency_min_s: float = 0.001
     gyro_latency_max_s: float = 0.02
     gyro_quantization_rad_s: float = 0.0     # ADC step size (0 = no quantization)
+    gyro_adc_bits: int = 16                 # Signed raw output register depth
     gyro_response_matrix: tuple = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
     gyro_fixed_bias_rad_s: tuple = (0., 0., 0.)  # exact chip-frame bias, additive to random bias
 
@@ -709,6 +710,7 @@ class ImuSimParameters:
     mag_latency_min_s: float = 0.002
     mag_latency_max_s: float = 0.05
     mag_quantization_t: float = 0.0          # ADC step size (0 = no quantization)
+    mag_adc_bits: int = 16                  # Signed raw output register depth
     mag_response_matrix: tuple = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
     mag_fixed_bias_t: tuple = (0., 0., 0.)
 
@@ -741,6 +743,9 @@ class ImuSimParameters:
                                              # true attitude (A/B test the estimator)
 
     def __post_init__(self) -> None:
+        for bits in (self.gyro_adc_bits, self.mag_adc_bits):
+            if isinstance(bits, bool) or not isinstance(bits, int) or not 8 <= bits <= 24:
+                raise ValueError('Vector sensor ADC resolution must be 8..24 bits')
         for group in (self.gyros, self.magnetometers):
             if any(not isinstance(u, VectorSensorParameters) for u in group):
                 raise ValueError('Sensor groups must contain VectorSensorParameters')
