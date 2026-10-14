@@ -51,7 +51,7 @@ try {
   assert.equal(await page.locator('.startup-error').count(), 0);
   assert.equal(await page.locator('#set-preset').inputValue(), 'ultra');
   assert.equal(await page.locator('#set-sharp').inputValue(), '170');
-  assert.equal(await page.locator('#set-clouds').inputValue(), '0.3');
+  assert.equal(await page.locator('#set-clouds').inputValue(), '0.15');
   assert.equal(await page.locator('#set-stream-on').isChecked(), false);
   const glass = await page.evaluate(() => {
     document.documentElement.style.setProperty('--glass-tint', '120 10 10');
@@ -140,7 +140,7 @@ try {
   assert.equal(await page.locator('[data-settings-page="2"]').evaluate(element => getComputedStyle(element).opacity), '1');
   await page.click('[data-settings-tab="2"]');
   assert.equal(await page.locator('[data-settings-page="2"]').isVisible(), true);
-  assert((await page.locator('#mount-select option').count()) > 0);
+  assert.equal(await page.locator('#mount-select').count(), 0);
   await page.keyboard.press('Escape'); await page.waitForTimeout(350);
   assert.equal(await page.locator('#settings-panel').isVisible(), false);
   await page.click('#mission-tab-pointing'); await page.waitForTimeout(1100);

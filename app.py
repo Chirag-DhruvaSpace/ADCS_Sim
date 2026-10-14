@@ -14,26 +14,6 @@ import numpy as np
 app = Flask(__name__, static_folder=None)
 
 
-@app.route('/api/imu/mounts', methods=['GET', 'POST'])
-def imu_mount_configuration():
-    from imu_mount_settings import get_mounts, request_mount
-    if request.method == 'GET':
-        return jsonify(get_mounts())
-    try:
-        result = request_mount(request.get_json(silent=True))
-    except (ValueError, TypeError) as error:
-        return jsonify(error=str(error)), 400
-    return jsonify(mounts=result, status='Applies at next simulation tick; sensor calibration restarts.')
-
-@app.route('/api/imu/defaults', methods=['POST'])
-def imu_save_defaults():
-    from imu_mount_settings import save_mount_defaults
-    try:
-        save_mount_defaults()
-    except (ValueError, OSError) as error:
-        return jsonify(error=str(error)), 400
-    return jsonify(status='Mounts saved to satellite_parameters.yaml for future runs.')
-
 # This will store the LATEST received telemetry point
 latest_telemetry = {}
 _telemetry_cache_lock = Lock()

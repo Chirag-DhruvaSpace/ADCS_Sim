@@ -8,8 +8,8 @@ The orbit appears beyond 120 km camera-to-satellite distance (previously 1000 km
 
 Checks:
 
-- `node scripts/browser_visual_check.cjs`: Chrome and Playwright, local synthetic telemetry; sensor colours, orbit threshold, glass settings, high/low texture switching, mobile and 4K layouts, runtime/shader errors. Uses the existing Playwright installation in `%TEMP%/leap-viewer-check`.
 - `.venv/Scripts/python.exe -m unittest validation.test_sensor_navigation`
-- `.venv/Scripts/python.exe scripts/verify_sensor_changes.py --integration`
 
 Map tile detail still needs an internet connection. The bundled base/cloud/Moon textures load locally. Cloud imagery is not time-varying weather. Existing Sun/Moon size sliders deliberately allow nonphysical display magnification.
+
+Current checks: `.venv/Scripts/python.exe -B -m pytest validation/test_sensor_navigation.py validation/test_hardware_sensor_outputs.py`; frontend: `npm.cmd test` and `npm.cmd run test:browser` from `frontend/`. The browser fixture is `validation/tools/viewer_test_server.py`. Sensor locations and mount orientations are configured in backend YAML only.

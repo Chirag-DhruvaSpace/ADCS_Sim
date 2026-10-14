@@ -229,50 +229,6 @@ export default memo(function SettingsPanel() {
       <p>
         {"Sun glow follows measured photocurrent. Gyro and magnetometer glow indicates a valid receipt."}
       </p>
-      <div className="set-row">
-        <label htmlFor="mount-select">
-          {"Mount"}
-        </label>
-        <select id="mount-select">
-        </select>
-      </div>
-      <div className="set-row">
-        <label>
-          {"X / Y / Z (m)"}
-        </label>
-        <div id="mount-position">
-          <input aria-label="Mount X" type="number" step="any" />
-          <input aria-label="Mount Y" type="number" step="any" />
-          <input aria-label="Mount Z" type="number" step="any" />
-        </div>
-      </div>
-      <div className="set-row" id="mount-normal-row">
-        <label>
-          {"Normal X / Y / Z"}
-        </label>
-        <div id="mount-normal">
-          <input aria-label="Normal X" type="number" step="any" />
-          <input aria-label="Normal Y" type="number" step="any" />
-          <input aria-label="Normal Z" type="number" step="any" />
-        </div>
-      </div>
-      <div className="set-row" id="mount-fov-row">
-        <label htmlFor="mount-fov">
-          {"FOV half-angle (deg)"}
-        </label>
-        <input id="mount-fov" type="number" min="0.1" max="90" step="any" />
-      </div>
-      <button id="mount-apply" type="button">
-        {"Apply mounting"}
-      </button>
-      <button id="mount-save" type="button">
-        {"Save applied mounts as defaults"}
-      </button>
-      <p id="mount-status" role="status">
-      </p>
-      <p>
-        {"Changes apply at the next simulation tick and restart sensor calibration. Permanent defaults, mount orientations, and field gradients: satellite_parameters.yaml → imu_sim."}
-      </p>
     </div>
     <div className="settings-content" data-settings-page="3" hidden={true}>
       <h3 className="sec" style={{

@@ -138,10 +138,14 @@ state0 = np.concatenate((r0, v0))          # [x, y, z, vx, vy, vz]
 # one every 300 simulated seconds) so a wheel sitting near its momentum limit
 # doesn't print one line per second for hours. The huge negative start value
 # lets the first warning fire immediately.
+from simulateimu import sensor_layout
+_sensor_layout = sensor_layout(config.IMU_SIM)
+
+
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
     global _imu_sim, _telemetry_sequence
 
-    from send_simulated_sensor_data import SensorDataSender, get_raw_sensor_data
+    from send_simulated_sensor_data import SensorDataSender
     sensor_sender = SensorDataSender()
 
     firmware = None
@@ -236,20 +240,11 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # the sensor belief therefore stays consistent with the body frame
         # even between 10 Hz IMU ticks.
         B_sensor_eci = B_eci
-        from imu_mount_settings import consume_mount_config
-        mount_config = consume_mount_config()
-        if mount_config is not None:
-            config.IMU_SIM = mount_config
-            _imu_nav.sun_config = mount_config.sun_array
-            _imu_nav._unit_receipts = {'gyro': {}, 'mag': {}}
-            _imu_sim = SimulatedIMU(mount_config, record_history=False) if mount_config.enabled else None
         if _imu_sim is not None:
             _gyro_msg, _mag_msg, _sun_msg = _imu_sim.get_raw_data(
                 t, X_rot[:4], X_rot[4:7], B_eci, sun_eci,
                 eclipse_fraction=srp_result.eclipse_fraction,
                 position_eci=r_vec)
-            sensor_sender.send_simulated_sensor_data(
-                lambda: get_raw_sensor_data(t, _msg, _gyro_msg, _mag_msg, _sun_msg))
             _imu_nav.process_raw_data(t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM)
             # use_mag_for_control switch: the magnetic laws (B-dot detumble,
             # MTR cross-product) see the SENSOR's field only when True; False
@@ -279,7 +274,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                                    use_attitude=config.IMU_SIM.use_attitude_estimate_for_control)
         else:
             srd.set_imu_adcs_input(False, use_attitude=False)
-            sensor_sender.send_simulated_sensor_data(lambda: get_raw_sensor_data(t, _msg))
+        sensor_sender.send_from_sensors(t, _gps_sim, _imu_sim)
 
         # ---- ROTATION STEP (LIVE CONTROLS READ HERE) ----
         
@@ -467,8 +462,11 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # screen shows what the satellite itself thinks its attitude is, so
         # sensor noise/bias is VISIBLE as small jitter/wander in the model.
         # The TRUE pointing-error rows below still use TRUE C_bi.
+        # SITL displays the plant attitude: the external firmware, rather than
+        # this Python estimator, controls the satellite in that mode.
         C_bi_render = C_bi
-        if _imu_sim is not None and config.IMU_SIM.render_estimated_attitude:
+        if (store.mode != 'FIRMWARE_SITL' and _imu_sim is not None
+                and config.IMU_SIM.render_estimated_attitude):
             C_bi_render = srd._dcm_bi_from_q(_att_est.q_eci)
         C_body2ecef = C_eci2ecef @ C_bi_render
         quat_xyzw = R.from_matrix(C_body2ecef).as_quat()   # scipy gives [x, y, z, w]
@@ -658,7 +656,15 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         ))
 
         # ---- TELEMETRY ----
-        firmware_metadata = firmware.metadata(t, {'NadirPoint': float(nadir_pointing_error_deg), 'Sunpoint': float(sun_pointing_error_deg)}, X_rot[4:7]) if firmware is not None else {}
+        firmware_errors = {
+            'NadirPoint': float(nadir_pointing_error_deg),
+            'Sunpoint': float(sun_pointing_error_deg),
+            'MoonSweep': float(moon_pointing_error_deg),
+            'SunSweep': float(sun_sweep_error_deg),
+            'NominalInOrbit': float(nominal_in_orbit_error_deg),
+            'KinematicRobustness': float(kinematic_robustness_error_deg),
+        }
+        firmware_metadata = firmware.metadata(t, firmware_errors, X_rot[4:7]) if firmware is not None else {}
         custom_command = custom_tick_command
         custom_target = np.array(custom_command['desired_quaternion'])
         custom_error = float(2 * np.degrees(np.arccos(np.clip(abs(q2e.get_quaternion_error(custom_target, X_rot[:4])[0]), 0, 1))))
@@ -821,8 +827,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # ---- IMU sensor belief (only when IMU enabled; no new keys when off)
         if _imu_sim is not None:
             data_to_send.update(_imu_nav.telemetry())
-            from imu_mount_settings import mounts
-            data_to_send['imu_mounts'] = [m for m in mounts(config.IMU_SIM)
+            data_to_send['imu_mounts'] = [m for m in _sensor_layout
                 if m.get('enabled', True) and {'Sun': config.IMU_SIM.enable_sun_sensor,
                     'Gyro': config.IMU_SIM.enable_gyro,
                     'Mag': config.IMU_SIM.enable_magnetometer}[m['kind']]]

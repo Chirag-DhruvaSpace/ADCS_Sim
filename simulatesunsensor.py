@@ -77,6 +77,149 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 
+def white_noise(random_generator, sigma):
+    """One independent zero-mean noise sample, in the same units as sigma."""
+    if sigma < 0:
+        raise ValueError('Noise sigma must be nonnegative')
+    return sigma * random_generator.standard_normal()
+
+class GaussMarkov:
+    """A slowly changing bias with an exponential memory time, tau seconds."""
+
+    def __init__(self, sigma, tau, initial=0.0):
+        if sigma < 0:
+            raise ValueError('Drift sigma must be nonnegative')
+        if tau <= 0:
+            raise ValueError('Drift time constant must be positive')
+        self.sigma = float(sigma)
+        self.tau = float(tau)
+        self._value = float(initial)
+
+    @property
+    def value(self):
+        return self._value
+
+    def advance(self, dt_seconds, rng):
+        elapsed_time_s = float(dt_seconds)
+        if elapsed_time_s <= 0:
+            return
+        decay = float(np.exp(-elapsed_time_s / self.tau))
+        noise_scale = float(np.sqrt(1.0 - decay * decay)) * self.sigma
+        self._value = decay * self._value + noise_scale * rng.standard_normal()
+
+    def redraw(self, random_generator):
+        self._value = self.sigma * random_generator.standard_normal()
+
+    def reset(self):
+        self._value = 0.0
+
+def _dcm_bi_from_q(quaternion):
+    quaternion = np.asarray(quaternion, dtype=float).reshape(4)
+    quaternion = quaternion / np.linalg.norm(quaternion)
+    scalar, vector_x, vector_y, vector_z = quaternion
+    return np.array([
+        [1 - 2 * (vector_y**2 + vector_z**2),
+         2 * (vector_x * vector_y + scalar * vector_z),
+         2 * (vector_x * vector_z - scalar * vector_y)],
+        [2 * (vector_x * vector_y - scalar * vector_z),
+         1 - 2 * (vector_x**2 + vector_z**2),
+         2 * (vector_y * vector_z + scalar * vector_x)],
+        [2 * (vector_x * vector_z + scalar * vector_y),
+         2 * (vector_y * vector_z - scalar * vector_x),
+         1 - 2 * (vector_x**2 + vector_y**2)],
+    ])
+
+def sensor_to_body_matrix(normal_body, roll_rad=0.0):
+    """Create sensor axes with local +Z along its facing normal."""
+    sensor_z = np.asarray(normal_body, dtype=float)
+    sensor_z = sensor_z / np.linalg.norm(sensor_z)
+    reference_axis = np.array([1.0, 0.0, 0.0])
+    if abs(sensor_z[0]) > 0.9:
+        reference_axis = np.array([0.0, 1.0, 0.0])
+    sensor_x = reference_axis - np.dot(reference_axis, sensor_z) * sensor_z
+    sensor_x = sensor_x / np.linalg.norm(sensor_x)
+    sensor_y = np.cross(sensor_z, sensor_x)
+    rolled_x = math.cos(roll_rad) * sensor_x + math.sin(roll_rad) * sensor_y
+    rolled_y = -math.sin(roll_rad) * sensor_x + math.cos(roll_rad) * sensor_y
+    return np.column_stack((rolled_x, rolled_y, sensor_z))
+
+def signed_16_bit(value):
+    return max(-32768, min(32767, round(value)))
+
+def quadrant_signal(direction_sensor, brightness, config):
+    """Light reaching each quadrant, before electronic error and digitization."""
+    direction_x, direction_y, direction_z = map(float, direction_sensor)
+    if direction_z <= 0.0:
+        return (0.0, 0.0, 0.0, 0.0)
+    maximum_ratio = math.tan(config.fine_fov_half_angle_rad)
+    horizontal_ratio = direction_x / direction_z
+    vertical_ratio = direction_y / direction_z
+    if abs(horizontal_ratio) > maximum_ratio or abs(vertical_ratio) > maximum_ratio:
+        return (0.0, 0.0, 0.0, 0.0)
+    spot_x = horizontal_ratio / maximum_ratio
+    spot_y = vertical_ratio / maximum_ratio
+    total_signal_counts = brightness * config.fine_total_signal_counts
+    return (
+        total_signal_counts * (1 + spot_x) * (1 + spot_y) / 4,
+        total_signal_counts * (1 - spot_x) * (1 + spot_y) / 4,
+        total_signal_counts * (1 - spot_x) * (1 - spot_y) / 4,
+        total_signal_counts * (1 + spot_x) * (1 - spot_y) / 4,
+    )
+
+def simulate_fine_sensor(sun_direction_sensor, brightness, temperature_k, config,
+                         noise_sigma, random_generator, albedo_direction_sensor=None,
+                         albedo_brightness=0.0):
+    """Form quadrants, then derive the sensor's reported vector from those counts.
+
+    A pinhole shifts the light spot by distance*tan(angle). The four quadrant
+    fractions use a linear split across that spot displacement. Vendor optical
+    response curves can replace this equation once the FSS ICD is available.
+    """
+    maximum_ratio = math.tan(config.fine_fov_half_angle_rad)
+    direct_counts = quadrant_signal(sun_direction_sensor, brightness, config)
+    reflected_counts = (0.0, 0.0, 0.0, 0.0)
+    if albedo_direction_sensor is not None:
+        # Existing Earth-albedo irradiance uses the Earth-center direction as
+        # a single optical source here, rather than resolving its extended disk.
+        reflected_counts = quadrant_signal(albedo_direction_sensor, albedo_brightness, config)
+    quadrants = []
+    for direct_count, reflected_count in zip(direct_counts, reflected_counts):
+        noise_counts = random_generator.normal(0.0, noise_sigma * config.fine_total_signal_counts / 4)
+        measured_counts = round(direct_count + reflected_count + noise_counts)
+        quadrants.append(max(0, min(config.fine_quadrant_max_counts, measured_counts)))
+    quadrant_1, quadrant_2, quadrant_3, quadrant_4 = quadrants
+    measured_total = sum(quadrants)
+    dark = measured_total < config.fine_eclipse_threshold_counts
+    coordinate_x_m = 0.0
+    coordinate_y_m = 0.0
+    alpha_rad = 0.0
+    beta_rad = 0.0
+    direction = np.zeros(3)
+    if not dark:
+        measured_spot_x = (quadrant_1 + quadrant_4 - quadrant_2 - quadrant_3) / measured_total
+        measured_spot_y = (quadrant_1 + quadrant_2 - quadrant_3 - quadrant_4) / measured_total
+        measured_ratio_x = measured_spot_x * maximum_ratio
+        measured_ratio_y = measured_spot_y * maximum_ratio
+        coordinate_x_m = config.fine_aperture_distance_m * measured_ratio_x
+        coordinate_y_m = config.fine_aperture_distance_m * measured_ratio_y
+        alpha_rad = math.atan(measured_ratio_x)
+        beta_rad = math.atan(measured_ratio_y)
+        direction = np.array([measured_ratio_x, measured_ratio_y, 1.0])
+        direction = direction / np.linalg.norm(direction)
+    temperature_counts = round((temperature_k - config.fine_temperature_zero_k)
+                                * config.fine_temperature_counts_per_k)
+    return {
+        'Q1': quadrant_1, 'Q2': quadrant_2, 'Q3': quadrant_3, 'Q4': quadrant_4,
+        'Temp': max(0, min(65535, temperature_counts)), 'Eclipse': int(dark),
+        'CrdX': signed_16_bit(coordinate_x_m * config.fine_coordinate_counts_per_m),
+        'CrdY': signed_16_bit(coordinate_y_m * config.fine_coordinate_counts_per_m),
+        'VecX': signed_16_bit(direction[0] * config.fine_vector_scale_counts),
+        'VecY': signed_16_bit(direction[1] * config.fine_vector_scale_counts),
+        'VecZ': signed_16_bit(direction[2] * config.fine_vector_scale_counts),
+        'Alpha': signed_16_bit(math.degrees(alpha_rad) * 100),
+        'Beta': signed_16_bit(math.degrees(beta_rad) * 100),
+    }
+
 def earth_albedo_fractions(position_eci, sun_eci, body_to_eci, normals, fov_cos,
                            reflectivity, patches=2048):
     """Lambertian spherical Earth surface quadrature, normalized to solar flux.
@@ -89,89 +232,34 @@ def earth_albedo_fractions(position_eci, sun_eci, body_to_eci, normals, fov_cos,
     r = np.asarray(position_eci, float)
     if np.linalg.norm(r) <= radius:
         return np.zeros(len(normals))
-    i = np.arange(patches)
+    index = np.arange(patches)
     axis = r / np.linalg.norm(r)
     cap = radius / np.linalg.norm(r)
-    z = cap + (1-cap) * (i + 0.5) / patches
-    phi = i * (np.pi * (3 - np.sqrt(5)))
+    z = cap + (1-cap) * (index + 0.5) / patches
+    phi = index * (np.pi * (3 - np.sqrt(5)))
     rho = np.sqrt(1-z*z)
     helper = np.array([0., 0., 1.]) if abs(axis[2]) < .9 else np.array([1., 0., 0.])
     e1 = np.cross(helper, axis); e1 /= np.linalg.norm(e1)
     e2 = np.cross(axis, e1)
-    n = rho[:, None]*np.cos(phi)[:, None]*e1 + rho[:, None]*np.sin(phi)[:, None]*e2 + z[:, None]*axis
-    ray = n * radius - r
+    vector_length = rho[:, None]*np.cos(phi)[:, None]*e1 + rho[:, None]*np.sin(phi)[:, None]*e2 + z[:, None]*axis
+    ray = vector_length * radius - r
     distance = np.linalg.norm(ray, axis=1)
     ray /= distance[:, None]
-    illumination = np.maximum(0., n @ sun_eci)
-    emission = np.maximum(0., np.sum(n * -ray, axis=1))
+    illumination = np.maximum(0., vector_length @ sun_eci)
+    emission = np.maximum(0., np.sum(vector_length * -ray, axis=1))
     weights = reflectivity * (2 * radius**2 * (1-cap) / patches) * illumination * emission / distance**2
     incidence = normals @ body_to_eci.T @ ray.T
     response = np.where((incidence >= fov_cos[:, None]) & (incidence > 0), incidence, 0.)
     return response @ weights
 
 
-def _dcm_bi_from_q(q):
-    """Attitude matrix dcm body->ECI (v_eci = C_bi @ v_body) from a
-    scalar-first [q0, q1, q2, q3] quaternion -- copied EXACTLY from
-    satellite_rotational_dynamics_var_mag_field.py (same formula as the
-    copies in simulateimu.py / calculate_disturbances.py). The repo's
-    load-bearing convention for body-frame vectors is:
-        B_body = C_bi.T @ B_eci
-    using this same matrix. Do NOT "fix" this formula -- it IS the repo.
-    """
-    q = np.asarray(q, dtype=float).reshape(4)
-    q = q / np.linalg.norm(q)
-    q0, q1, q2, q3 = q
-    return np.array([
-        [1 - 2 * (q2**2 + q3**2),     2 * (q1 * q2 + q0 * q3),     2 * (q1 * q3 - q0 * q2)],
-        [2 * (q1 * q2 - q0 * q3),     1 - 2 * (q1**2 + q3**2),     2 * (q2 * q3 + q0 * q1)],
-        [2 * (q1 * q3 + q0 * q2),     2 * (q2 * q3 - q0 * q1),     1 - 2 * (q1**2 + q2**2)],
-    ])
 
 
-def white_noise(rng, sigma: float) -> float:
-    """One fresh, memoryless random draw of size `sigma` (zero on average).
-    Same helper as simulateimu.py / simulategps.py (house pattern)."""
-    if sigma < 0.0:
-        raise ValueError("white-noise sigma must be >= 0")
-    return sigma * rng.standard_normal()
 
 
-class GaussMarkov:
-    """One axis of a slowly-wandering error (wants: sigma >= 0, tau > 0).
 
-    Advance rule (exact for a discrete step of any size):
-        b_new = exp(-dt/tau) * b + sqrt(1 - exp(-2*dt/tau)) * sigma * N(0,1)
-    With dt = 0 the state is left unchanged, so the very first call is safe.
-    (Same small class as simulateimu.py's GaussMarkov, kept self-contained so
-    this file stands alone like the other sensor modules do.)
-    """
 
-    __slots__ = ("sigma", "tau", "_value")
 
-    def __init__(self, sigma: float, tau: float, initial: float = 0.0) -> None:
-        if sigma < 0.0:
-            raise ValueError("GaussMarkov sigma must be >= 0")
-        if tau <= 0.0:
-            raise ValueError("GaussMarkov tau must be > 0")
-        self.sigma = float(sigma)
-        self.tau = float(tau)
-        self._value = float(initial)
-
-    @property
-    def value(self) -> float:
-        return self._value
-
-    def advance(self, dt_seconds: float, rng) -> None:
-        dt = float(dt_seconds)
-        if dt <= 0.0:
-            return
-        decay = float(np.exp(-dt / self.tau))
-        self._value = (decay * self._value
-                       + float(np.sqrt(1.0 - decay * decay)) * self.sigma * rng.standard_normal())
-
-    def reset(self) -> None:
-        self._value = 0.0
 
 
 def _ray_hits_box(p_body, d_body, center, half_extents) -> bool:
@@ -188,11 +276,11 @@ def _ray_hits_box(p_body, d_body, center, half_extents) -> bool:
             if p[axis] < lo[axis] or p[axis] > hi[axis]:
                 return False          # ray parallel to this slab pair and outside
         else:
-            t1 = (lo[axis] - p[axis]) / d[axis]
+            later_time_s = (lo[axis] - p[axis]) / d[axis]
             t2 = (hi[axis] - p[axis]) / d[axis]
-            if t1 > t2:
-                t1, t2 = t2, t1
-            t_near = max(t_near, t1)
+            if later_time_s > t2:
+                later_time_s, t2 = t2, later_time_s
+            t_near = max(t_near, later_time_s)
             t_far = min(t_far, t2)
             if t_near > t_far:
                 return False
@@ -236,6 +324,30 @@ class SunArrayMeasurement:
     valid: bool                          # False on a dropout sample
 
 
+@dataclass(frozen=True)
+class RawSunCell:
+    name: str
+    adc_counts: int
+    saturated: bool
+
+
+@dataclass(frozen=True)
+class RawFineSunSensor:
+    name: str
+    slave_id: int
+    data: dict                         # Fields returned by FSS_GetTelemetry
+
+
+@dataclass(frozen=True)
+class RawSunSample:
+    t_meas_s: float
+    t_arrival_s: float
+    valid: bool
+    adc_bits: int
+    cells: tuple
+    sensors: tuple = ()
+
+
 class SimulatedSunSensorArray:
     """The simulated coarse-sun-sensor ARRAY. Feed the TRUE state each loop
     tick with update(t, q_truth, sun_eci_truth, eclipse_fraction, r_eci_truth);
@@ -247,15 +359,15 @@ class SimulatedSunSensorArray:
     """
 
     def __init__(self, config, record_history=True) -> None:
-        cfg = config
-        self.cfg = cfg
+        configuration = config
+        self.cfg = configuration
         # SunSensorArrayParameters.post_init already validated everything
         # (fail loudly at startup); re-check the cheap invariants defensively.
-        if len(cfg.cells) < 3:
+        if len(configuration.cells) < 3:
             raise ValueError("sun sensor array needs at least 3 cells")
-        self.rng = np.random.default_rng(cfg.seed)   # ONE generator, all randomness
+        self.rng = np.random.default_rng(configuration.seed)   # ONE generator, all randomness
 
-        cells = list(cfg.cells)
+        cells = list(configuration.cells)
         bits = int(cells[0].adc_bits)
         self._bits = bits
         self._full_scale = float(2 ** bits - 1)
@@ -271,11 +383,11 @@ class SimulatedSunSensorArray:
         self._scale = []
         self._k3 = []
         for c in cells:
-            n = np.asarray(c.normal_body, dtype=float).reshape(3)
-            n_norm = float(np.linalg.norm(n))
+            vector_length = np.asarray(c.normal_body, dtype=float).reshape(3)
+            n_norm = float(np.linalg.norm(vector_length))
             if n_norm < 1e-9:
                 raise ValueError(f"cell {c.name}: normal_body must be nonzero")
-            n = n / n_norm
+            vector_length = vector_length / n_norm
             if not (0.0 < float(c.fov_half_angle_deg) <= 90.0):
                 raise ValueError(f"cell {c.name}: fov_half_angle_deg must be in (0, 90]")
             if not isinstance(c.adc_bits, int) or not (2 <= c.adc_bits <= 16):
@@ -283,26 +395,26 @@ class SimulatedSunSensorArray:
                                  f"(the validate harness deliberately exercises 4 bits)")
             if int(c.adc_bits) != int(cells[0].adc_bits):
                 raise ValueError("all cells must share one adc_bits depth")
-            self._n_nominal.append(n)
+            self._n_nominal.append(vector_length)
             self._positions.append(np.asarray(c.position_body_m, dtype=float).reshape(3))
             self._fov_cos.append(float(math.cos(math.radians(c.fov_half_angle_deg))))
             # (a) mounting misalignment: one small rotation vector, applied via
             #     the house trick R = _dcm_bi_from_q([1, 0.5*v]) (then renormalize).
-            sig = math.radians(c.alignment_error_sigma_deg) if cfg.enable_alignment_error else 0.0
+            sig = math.radians(c.alignment_error_sigma_deg) if configuration.enable_alignment_error else 0.0
             v = np.array([white_noise(self.rng, sig) for _ in range(3)])
             R = _dcm_bi_from_q(np.concatenate(([1.0], 0.5 * v)))
-            n_eff = R @ n
+            n_eff = R @ vector_length
             self._n_effective.append(n_eff / np.linalg.norm(n_eff))
             # (e) bias + thermal drift
             self._bias0.append(white_noise(self.rng, c.bias_sigma)
-                               if cfg.enable_bias_drift else 0.0)
-            self._drift.append(GaussMarkov(c.drift_sigma if cfg.enable_bias_drift else 0.0,
+                               if configuration.enable_bias_drift else 0.0)
+            self._drift.append(GaussMarkov(c.drift_sigma if configuration.enable_bias_drift else 0.0,
                                            c.drift_tau_s))
             # (f) scale + cubic nonlinearity
             self._scale.append(white_noise(self.rng, c.scale_error_sigma)
-                               if cfg.enable_scale_nonlinearity else 0.0)
+                               if configuration.enable_scale_nonlinearity else 0.0)
             self._k3.append(white_noise(self.rng, c.nonlinearity_k3_sigma)
-                            if cfg.enable_scale_nonlinearity else 0.0)
+                            if configuration.enable_scale_nonlinearity else 0.0)
 
         self._n_nominal = np.array(self._n_nominal)      # (n_cells, 3)
         self._n_effective = np.array(self._n_effective)
@@ -337,20 +449,20 @@ class SimulatedSunSensorArray:
         history value (documented simplification)."""
         times = [h[0] for h in self._history]
         if t_meas_s <= times[0] or len(times) < 2:
-            t0, q0, f0, r0 = self._history[0]
-            return t0, q0, f0, r0
-        j = bisect_right(times, t_meas_s) - 1
-        j = min(max(j, 0), len(times) - 2)
-        t0, q0, f0, r0 = self._history[j]
-        t1, q1, f1, r1 = self._history[j + 1]
-        if np.dot(q0, q1) < 0:
-            q1 = -q1  # q and -q represent the same attitude; take the short arc
-        w = (t_meas_s - t0) / (t1 - t0) if t1 > t0 else 0.0
-        q = q0 + w * (q1 - q0)
-        q /= np.linalg.norm(q)
-        f = f1 if w >= 0.5 else f0          # nearest bracket (changes slowly)
-        r = (r1 if w >= 0.5 else r0)        # nearest bracket (changes slowly)
-        return (t_meas_s, q, f, r)
+            earlier_time_s, earlier_quaternion, earlier_lighting, earlier_position = self._history[0]
+            return earlier_time_s, earlier_quaternion, earlier_lighting, earlier_position
+        history_index = bisect_right(times, t_meas_s) - 1
+        history_index = min(max(history_index, 0), len(times) - 2)
+        earlier_time_s, earlier_quaternion, earlier_lighting, earlier_position = self._history[history_index]
+        later_time_s, later_quaternion, later_lighting, later_position = self._history[history_index + 1]
+        if np.dot(earlier_quaternion, later_quaternion) < 0:
+            later_quaternion = -later_quaternion  # q and -q represent the same attitude; take the short arc
+        interpolation_fraction = (t_meas_s - earlier_time_s) / (later_time_s - earlier_time_s) if later_time_s > earlier_time_s else 0.0
+        quaternion = earlier_quaternion + interpolation_fraction * (later_quaternion - earlier_quaternion)
+        quaternion /= np.linalg.norm(quaternion)
+        f = later_lighting if interpolation_fraction >= 0.5 else earlier_lighting          # nearest bracket (changes slowly)
+        position_eci = (later_position if interpolation_fraction >= 0.5 else earlier_position)        # nearest bracket (changes slowly)
+        return (t_meas_s, quaternion, f, position_eci)
 
     @staticmethod
     def _latency_draw(rng, mean, sigma, lo, hi):
@@ -370,149 +482,102 @@ class SimulatedSunSensorArray:
         true ECI position (needed only for the Earth-albedo term; None
         disables albedo that tick).
         """
-        cfg = self.cfg
-        t = float(t_seconds)
-        q = np.asarray(q_truth, dtype=float).reshape(4)
+        configuration = self.cfg
+        time_s = float(t_seconds)
+        quaternion = np.asarray(q_truth, dtype=float).reshape(4)
         sun_eci = np.asarray(sun_eci_truth, dtype=float).reshape(3)
-        n = float(np.linalg.norm(sun_eci))
-        if n < 1e-12:
+        vector_length = float(np.linalg.norm(sun_eci))
+        if vector_length < 1e-12:
             return None
-        sun_eci = sun_eci / n
-        F = 1.0 if eclipse_fraction is None else float(np.clip(eclipse_fraction, 0.0, 1.0))
-        r_eci = None if r_eci_truth is None else np.asarray(r_eci_truth, dtype=float).reshape(3)
+        sun_eci = sun_eci / vector_length
+        lighting_ratio = 1.0 if eclipse_fraction is None else float(np.clip(eclipse_fraction, 0.0, 1.0))
+        position_eci_m = None if r_eci_truth is None else np.asarray(r_eci_truth, dtype=float).reshape(3)
 
-        if self._last_t is not None and t <= self._last_t:
+        if self._last_t is not None and time_s <= self._last_t:
             raise ValueError(
-                f"SimulatedSunSensorArray.update received t={t} but the previous "
+                f"SimulatedSunSensorArray.update received t={time_s} but the previous "
                 f"call was t={self._last_t}. Time must move forward.")
 
-        dt = 0.0 if self._last_t is None else t - self._last_t
-        self._last_t = t
-        self._history.append((t, q.copy(), F, None if r_eci is None else r_eci.copy()))
+        elapsed_time_s = 0.0 if self._last_t is None else time_s - self._last_t
+        self._last_t = time_s
+        self._history.append((time_s, quaternion.copy(), lighting_ratio, None if position_eci_m is None else position_eci_m.copy()))
 
         # advance the thermal-drift states by this tick's duration (every
         # tick, on-grid or not -- same pattern as the IMU's wander states)
-        if cfg.enable_bias_drift:
-            for gm in self._drift:
-                gm.advance(dt, self.rng)
+        if configuration.enable_bias_drift:
+            for drift_model in self._drift:
+                drift_model.advance(elapsed_time_s, self.rng)
 
         # own fixed-rate grid; the slot is consumed even on a dropout so a
         # dropped sample is never retried ("bus on the hour")
-        k = math.floor(t * cfg.update_rate_hz + 1e-9)
-        if k <= self._last_k:
+        sample_index = math.floor(time_s * configuration.update_rate_hz + 1e-9)
+        if sample_index <= self._last_k:
             return None
-        self._last_k = k
-        t_grid = k / cfg.update_rate_hz
+        self._last_k = sample_index
+        sample_time_s = sample_index / configuration.update_rate_hz
         self.samples += 1
 
         # latency: the sample describes the geometry a few ms ago
-        tau = self._latency_draw(self.rng, cfg.latency_mean_s, cfg.latency_sigma_s,
-                                 cfg.latency_min_s, cfg.latency_max_s)
-        t_meas, q_meas, F_meas, r_meas = self._sample_truth_at(t_grid - tau)
+        latency_s = self._latency_draw(self.rng, configuration.latency_mean_s, configuration.latency_sigma_s,
+                                 configuration.latency_min_s, configuration.latency_max_s)
+        measurement_time_s, q_meas, measured_lighting_ratio, r_meas = self._sample_truth_at(sample_time_s - latency_s)
 
         # (a) GEOMETRY: true sun direction in the body frame at t_meas,
         #     using the repo's own convention (B_body = C_bi.T @ B_eci).
-        C_bi = _dcm_bi_from_q(q_meas)
-        s_body = C_bi.T @ sun_eci
-        s_body = s_body / np.linalg.norm(s_body)
+        body_to_eci = _dcm_bi_from_q(q_meas)
+        sun_direction_body = body_to_eci.T @ sun_eci
+        sun_direction_body = sun_direction_body / np.linalg.norm(sun_direction_body)
         # (d) EARTH ALBEDO inputs (simplified engineering model): unit nadir
         #     in the body frame + the lit fraction of the visible disk.
-        if r_meas is not None and cfg.enable_albedo:
+        if r_meas is not None and configuration.enable_albedo:
             r_hat = np.asarray(r_meas, dtype=float) / np.linalg.norm(r_meas)
-            a_body = C_bi.T @ (-r_hat)
-            f_illum = float(np.clip(0.5 * (1.0 + float(np.dot(sun_eci, r_hat))), 0.0, 1.0))
+            earth_direction_body = body_to_eci.T @ (-r_hat)
+            earth_illuminated_fraction = float(np.clip(0.5 * (1.0 + float(np.dot(sun_eci, r_hat))), 0.0, 1.0))
         else:
-            a_body = None
-            f_illum = 0.0
+            earth_direction_body = None
+            earth_illuminated_fraction = 0.0
 
-        dots_eff = self._n_effective @ s_body
-        dots_nom = self._n_nominal @ s_body
-        dots_alb = (self._n_effective @ a_body) if a_body is not None else np.zeros(len(dots_eff))
-        albedo_outputs = (earth_albedo_fractions(r_meas, sun_eci, C_bi,
-                          self._n_effective, self._fov_cos, cfg.albedo_scale)
-                          if a_body is not None else np.zeros(len(dots_eff)))
+        dots_eff = self._n_effective @ sun_direction_body
+        dots_nom = self._n_nominal @ sun_direction_body
+        dots_alb = (self._n_effective @ earth_direction_body) if earth_direction_body is not None else np.zeros(len(dots_eff))
+        albedo_outputs = (earth_albedo_fractions(r_meas, sun_eci, body_to_eci,
+                          self._n_effective, self._fov_cos, configuration.albedo_scale)
+                          if earth_direction_body is not None else np.zeros(len(dots_eff)))
 
         # (j) DROPOUT: one per-sample dice for the WHOLE receipt
-        valid = not (cfg.dropout_probability > 0.0
-                     and self.rng.random() < cfg.dropout_probability)
+        valid = not (configuration.dropout_probability > 0.0
+                     and self.rng.random() < configuration.dropout_probability)
         if not valid:
             self.dropouts += 1
 
         cell_samples = []
         outputs = np.zeros(len(self._names))
-        used_flags = []
-        for i, name in enumerate(self._names):
-            in_fov = bool(dots_eff[i] >= self._fov_cos[i] and dots_eff[i] > 0.0)
-            # (a) cosine response, zero outside the FOV cone
-            x_dir = max(0.0, float(dots_eff[i])) if in_fov else 0.0
-            ideal_direct = x_dir
-            # (b) PENUMBRA: gradual eclipse scales the direct term
-            F_applied = F_meas if cfg.enable_penumbra else float(F_meas > 0.5)
-            x = x_dir * F_applied
-            # (c) SELF-SHADOWING: ray from the cell position along the sun ray
-            shadowed = False
-            if cfg.enable_self_shadowing and x > 0.0:
-                for blocker in cfg.blockers:
-                    if _ray_hits_box(self._positions[i], s_body,
-                                     blocker.center_body_m, blocker.half_extents_m):
-                        shadowed = True
-                        break
-            if shadowed:
-                x = 0.0
-            # (d) EARTH ALBEDO: additive, NOT blocked by the shadow ray.
-            # Surface illumination is computed separately from direct eclipse.
-            # Reflected light is real signal even when the Sun is outside FOV.
-            albedo = 0.0
-            if a_body is not None and cfg.enable_albedo:
-                albedo = float(albedo_outputs[i])
-                x += albedo
-            # (e) BIAS + THERMAL DRIFT (gated: a dark cell stays dark when the
-            #     channel is off -- no phantom signal with no sun)
-            if cfg.enable_bias_drift:
-                x += self._bias0[i] + self._drift[i].value
-            # (f) SCALE + NONLINEARITY (gated: multiplicative only, so exact
-            #     darkness is preserved; both power-on draws are honored only
-            #     when the channel switch is on)
-            if cfg.enable_scale_nonlinearity:
-                x = (1.0 + self._scale[i]) * x + self._k3[i] * x ** 3
-            # (g) WHITE NOISE
-            if cfg.enable_white_noise:
-                x += white_noise(self.rng, cfg.cells[i].white_noise_sigma)
-            # (i) SATURATION flag: pre-ADC value above full scale
-            pre_adc = x
-            saturated = bool(cfg.enable_saturation and pre_adc > 1.0)
-            # (h) ADC QUANTIZATION (+ inherent clamp: a photocell cannot read <0 or >1)
-            if cfg.enable_quantization:
-                counts = int(round(float(np.clip(x, 0.0, 1.0)) * self._full_scale))
-                x = counts / self._full_scale
-            else:
-                x = float(np.clip(x, 0.0, 1.0))
-                counts = int(round(x * self._full_scale))
-            outputs[i] = x
-            used_flags.append(False)
-            cell_samples.append(SunCellSample(
-                name=name,
-                output_fraction=float(x),
-                output_pct=100.0 * float(x),
-                adc_counts=counts,
-                angle_deg=(None if x <= 0.0 else float(np.degrees(np.arccos(np.clip(x, 0.0, 1.0))))),
-                used=False,
-                in_fov=in_fov,
-                shadowed=shadowed,
-                saturated=saturated,
-                eclipse_factor_applied=float(F_applied),
-                albedo_fraction=float(albedo),
-            ))
+        for cell_index, cell_name in enumerate(self._names):
+            cell = self._measure_cell(cell_index, cell_name, dots_eff[cell_index],
+                measured_lighting_ratio, sun_direction_body, earth_direction_body, albedo_outputs)
+            outputs[cell_index] = cell.output_fraction
+            cell_samples.append(cell)
 
         # (3.3) ONBOARD RECONSTRUCTION -- NOMINAL normals (the as-mounted
         # error is unknown to the spacecraft; that ignorance IS the channel).
         if raw_output:
-            from sensor_packets import RawSunSample, RawSunCell
             # Operator diagnostics stay separate from the hardware interface.
             self._last_cell_diagnostics = {c.name: c for c in cell_samples}
-            self._raw_receipt = RawSunSample(t_meas, t_grid, valid,
-                cfg.cells[0].adc_bits, tuple(RawSunCell(c.name, c.adc_counts,
-                c.saturated) for c in cell_samples))
+            fine_sensors = []
+            for index, cell in enumerate(cell_samples):
+                cell_config = configuration.cells[index]
+                sensor_to_body = sensor_to_body_matrix(self._n_effective[index], cell_config.sensor_roll_rad)
+                direction_sensor = sensor_to_body.T @ sun_direction_body
+                noise_sigma = cell_config.white_noise_sigma if configuration.enable_white_noise else 0.0
+                direct_brightness = max(0.0, cell.output_fraction - cell.albedo_fraction)
+                albedo_direction_sensor = None if earth_direction_body is None else sensor_to_body.T @ earth_direction_body
+                data = simulate_fine_sensor(direction_sensor, direct_brightness,
+                    configuration.fine_temperature_k, configuration, noise_sigma, self.rng,
+                    albedo_direction_sensor, cell.albedo_fraction)
+                fine_sensors.append(RawFineSunSensor(cell.name, 0x11 + index, data))
+            self._raw_receipt = RawSunSample(measurement_time_s, sample_time_s, valid,
+                configuration.cells[0].adc_bits, tuple(RawSunCell(c.name, c.adc_counts,
+                c.saturated) for c in cell_samples), tuple(fine_sensors))
             return self._raw_receipt
         recon, recon_valid, method = self._reconstruct(outputs)
         for i, u in enumerate(self._used_mask):
@@ -520,17 +585,17 @@ class SimulatedSunSensorArray:
         used_count = int(np.sum(self._used_mask))
 
         meas = SunArrayMeasurement(
-            t_meas_s=t_meas, t_arrival_s=t_grid, cells=cell_samples,
+            t_meas_s=measurement_time_s, t_arrival_s=sample_time_s, cells=cell_samples,
             reconstructed_body=(None if recon is None else recon.copy()),
             reconstruction_valid=bool(recon_valid), method=method, valid=valid)
 
         # ---- record (receipt + stapled truth) -- VALIDATION ONLY -------------
         self.records.append({
-            "t_meas": t_meas, "t_arrival": t_grid, "valid": valid,
-            "truth": s_body.copy(),              # true body-frame sun direction
+            "t_meas": measurement_time_s, "t_arrival": sample_time_s, "valid": valid,
+            "truth": sun_direction_body.copy(),              # true body-frame sun direction
             "ideal_direct": (dots_eff * (dots_eff >= self._fov_cos)).copy(),
             "ideal_direct_nom": (dots_nom * (dots_nom >= self._fov_cos)).copy(),
-            "F": float(F_meas), "albedo_f_illum": float(f_illum),
+            "F": float(measured_lighting_ratio), "albedo_f_illum": float(earth_illuminated_fraction),
             "meas": (None if recon is None else recon.copy()),
             "reconstruction_valid": bool(recon_valid), "method": method,
             "outputs": outputs.copy(), "used": list(self._used_mask),
@@ -538,11 +603,78 @@ class SimulatedSunSensorArray:
         })
         return meas
 
+    def _measure_cell(self, cell_index, cell_name, incidence_cosine,
+                      measured_lighting_ratio, sun_direction_body,
+                      earth_direction_body, albedo_outputs):
+        """Apply lighting, shadows, albedo and electronics to one photocell."""
+        configuration = self.cfg
+        in_fov = bool(incidence_cosine >= self._fov_cos[cell_index] and incidence_cosine > 0.0)
+        # (a) cosine response, zero outside the FOV cone
+        direct_signal = max(0.0, float(incidence_cosine)) if in_fov else 0.0
+        ideal_direct = direct_signal
+        # (b) PENUMBRA: gradual eclipse scales the direct term
+        applied_lighting_ratio = measured_lighting_ratio if configuration.enable_penumbra else float(measured_lighting_ratio > 0.5)
+        signal = direct_signal * applied_lighting_ratio
+        # (c) SELF-SHADOWING: ray from the cell position along the sun ray
+        shadowed = False
+        if configuration.enable_self_shadowing and signal > 0.0:
+            for blocker in configuration.blockers:
+                if _ray_hits_box(self._positions[cell_index], sun_direction_body,
+                                 blocker.center_body_m, blocker.half_extents_m):
+                    shadowed = True
+                    break
+        if shadowed:
+            signal = 0.0
+        # (d) EARTH ALBEDO: additive, NOT blocked by the shadow ray.
+        # Surface illumination is computed separately from direct eclipse.
+        # Reflected light is real signal even when the Sun is outside FOV.
+        albedo = 0.0
+        if earth_direction_body is not None and configuration.enable_albedo:
+            albedo = float(albedo_outputs[cell_index])
+            signal += albedo
+        # (e) BIAS + THERMAL DRIFT (gated: a dark cell stays dark when the
+        #     channel is off -- no phantom signal with no sun)
+        if configuration.enable_bias_drift:
+            signal += self._bias0[cell_index] + self._drift[cell_index].value
+        # (f) SCALE + NONLINEARITY (gated: multiplicative only, so exact
+        #     darkness is preserved; both power-on draws are honored only
+        #     when the channel switch is on)
+        if configuration.enable_scale_nonlinearity:
+            signal = (1.0 + self._scale[cell_index]) * signal + self._k3[cell_index] * signal ** 3
+        # (g) WHITE NOISE
+        if configuration.enable_white_noise:
+            signal += white_noise(self.rng, configuration.cells[cell_index].white_noise_sigma)
+        # (i) SATURATION flag: pre-ADC value above full scale
+        signal_before_digitization = signal
+        saturated = bool(configuration.enable_saturation and signal_before_digitization > 1.0)
+        # (h) ADC QUANTIZATION (+ inherent clamp: a photocell cannot read <0 or >1)
+        if configuration.enable_quantization:
+            counts = int(round(float(np.clip(signal, 0.0, 1.0)) * self._full_scale))
+            signal = counts / self._full_scale
+        else:
+            signal = float(np.clip(signal, 0.0, 1.0))
+            counts = int(round(signal * self._full_scale))
+        return SunCellSample(
+            name=cell_name,
+            output_fraction=float(signal),
+            output_pct=100.0 * float(signal),
+            adc_counts=counts,
+            angle_deg=(None if signal <= 0.0 else float(np.degrees(np.arccos(np.clip(signal, 0.0, 1.0))))),
+            used=False,
+            in_fov=in_fov,
+            shadowed=shadowed,
+            saturated=saturated,
+            eclipse_factor_applied=float(applied_lighting_ratio),
+            albedo_fraction=float(albedo),
+        )
+
     def get_raw_data(self, t_seconds=None, q_truth=None, sun_eci_truth=None,
                      eclipse_fraction=1.0, r_eci_truth=None):
-        """Return photocell ADC registers only; reconstruction is onboard."""
+        """Return FSS records plus separate photocell diagnostics for the UI."""
         if not self.cfg.enabled:
             return None
+        if len(self.cfg.cells) > 6:
+            raise ValueError('FSS interface supports at most six sensor addresses, 0x11..0x16')
         if t_seconds is None or t_seconds == getattr(self, '_raw_tick', None):
             return getattr(self, '_raw_receipt', None)
         self._raw_receipt = self.update(t_seconds, q_truth, sun_eci_truth,
@@ -561,6 +693,8 @@ class SimulatedSunSensorArray:
             outputs, self._n_nominal, self.cfg.activation_threshold,
             self.cfg.min_cells_for_solution)
         return direction, valid, method
+
+
 
 # ---------------------------------------------------------------------------
 # Self-test harness (house style: demo + staged validate, INSIDE this file).

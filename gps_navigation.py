@@ -27,19 +27,47 @@ import numpy as np
 from simulategps import GpsMeasurement
 
 
-def decode_gps_data(raw, epoch_utc, inertial_frame, earth_fixed_frame):
-    """Receiver ECEF fix -> onboard ECI belief, with no truth input.
+def decode_orion_fields(raw, epoch_utc, earth_fixed_frame):
+    """Convert ORION integers into metres, m/s, degrees and seconds."""
+    from simulategps import absolute_date, ReceiverMeasurement, enu_frame_at
+    from org.orekit.bodies import OneAxisEllipsoid
+    from org.orekit.utils import Constants
 
-    t_meas_s is the transport's sampling epoch. The receiver week/TOW stays
-    available for clock processing; the full rotating-frame PV transform is
-    used so velocity includes Earth's rotation.
-    """
+    data = raw.data
+    position_ecef_m = (data['ECEF_X'] * .01, data['ECEF_Y'] * .01, data['ECEF_Z'] * .01)
+    velocity_ecef_m_s = (data['ECEF_VX'] * .01, data['ECEF_VY'] * .01, data['ECEF_VZ'] * .01)
+    ellipsoid = OneAxisEllipsoid(Constants.WGS84_EARTH_EQUATORIAL_RADIUS,
+                                 Constants.WGS84_EARTH_FLATTENING, earth_fixed_frame)
+    measurement_date = absolute_date(epoch_utc, raw.t_meas_s)
+    enu_to_ecef, _, _, _ = enu_frame_at(ellipsoid, position_ecef_m, earth_fixed_frame, measurement_date)
+    velocity_enu_m_s = enu_to_ecef.T @ np.asarray(velocity_ecef_m_s)
+    return ReceiverMeasurement(
+        week=data['GNSS_Week'], tow=data['GNSS_TOW'] * .01,
+        t_meas_s=raw.t_meas_s, t_arrival_s=raw.t_arrival_s,
+        fix_type=data['fix_mode'], num_sv=data['num_SV'], pdop=data['PDOP'] * .01,
+        lat_deg=data['Latitude'] * 1e-7, lon_deg=data['Longitude'] * 1e-7,
+        alt_ell_m=data['Ellipsoid_altitude'] * .01,
+        pos_ecef_m=position_ecef_m, vel_ecef_m_s=velocity_ecef_m_s,
+        vel_enu_m_s=tuple(velocity_enu_m_s), h_acc_m=raw.h_acc_m,
+        v_acc_m=raw.v_acc_m, latency_s=raw.latency_s)
+
+
+def decode_gps_data(raw, epoch_utc, inertial_frame, earth_fixed_frame):
+    """Decode one receiver fix, then transform position and velocity to ECI."""
     from dataclasses import asdict
     from simulategps import absolute_date, ecef_to_eci_pv
-    position, velocity = ecef_to_eci_pv(raw.pos_ecef_m, raw.vel_ecef_m_s,
-        inertial_frame, earth_fixed_frame, absolute_date(epoch_utc, raw.t_meas_s))
-    return GpsMeasurement(**asdict(raw), clock_error_s=0.0,
-                          nav_pos_eci_m=position, nav_vel_eci_mps=velocity)
+    measurement = raw
+    if hasattr(raw, 'data'):
+        measurement = decode_orion_fields(raw, epoch_utc, earth_fixed_frame)
+    measurement_date = absolute_date(epoch_utc, measurement.t_meas_s)
+    # The complete position/velocity transform accounts for Earth's rotation.
+    # Rotating velocity alone would create an incorrect orbital velocity.
+    position_eci_m, velocity_eci_m_s = ecef_to_eci_pv(
+        measurement.pos_ecef_m, measurement.vel_ecef_m_s,
+        inertial_frame, earth_fixed_frame, measurement_date)
+    return GpsMeasurement(**asdict(measurement), clock_error_s=0.0,
+                          nav_pos_eci_m=position_eci_m, nav_vel_eci_mps=velocity_eci_m_s)
+
 
 
 class GpsNav:

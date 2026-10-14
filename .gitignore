@@ -5,8 +5,24 @@ __pycache__/
 # installer logs / local env (machine-specific JAVA_HOME paths)
 setup.log
 .env
+sim-boot.*.log
+sim-run.log
+run_simulator.py.orig
+/tools/
 # frontend build output (rebuilt by setup.ps1)
 frontend/dist/
 frontend/node_modules/
 # JVM crash logs
 hs_err_pid*.log
+# Local editor settings and tool dependencies
+.vscode/
+.tools/
+.pytest_cache/
+# Generated validation output; keep validation source code in Git
+validation/results/
+validation/**/*.png
+validation/**/*.jpg
+validation/**/*.jpeg
+validation/**/*.npz
+*.exe
+*.obj

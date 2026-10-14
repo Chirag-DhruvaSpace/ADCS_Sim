@@ -50,24 +50,6 @@ class Sensors(unittest.TestCase):
         self.assertEqual(nav.estimator.corrections, 0)
         np.testing.assert_allclose(nav.estimator.q_eci, _rotation_quaternion(np.array([0,0,.1])), atol=1e-12)
 
-    def test_save_canonical_mount_defaults(self):
-        import tempfile
-        from pathlib import Path
-        from unittest.mock import patch
-        import satellite_parameters as config
-        import imu_mount_settings as settings
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / 'satellite_parameters.yaml'
-            source.write_bytes(Path(config.__file__).with_suffix('.yaml').read_bytes())
-            cfg = replace(config.IMU_SIM, gyros=(VectorSensorParameters('Precise', position_body_m=(.0123456789,0,0)),))
-            with patch.object(config,'__file__',str(source)), patch.object(settings,'_pending',cfg):
-                values = settings.save_mount_defaults()
-            result = config.apply_imu_mount_defaults(cfg, values)
-            self.assertEqual(result.gyros[0].position_body_m, (.0123456789,0,0))
-            self.assertIn('imu_mount_defaults:', source.read_text())
-            import yaml
-            self.assertIn('Precise', yaml.safe_load(source.read_text())['imu_mount_defaults'])
-
     def test_eclipse_with_every_error_off(self):
         cfg = replace(SunSensorArrayParameters.perfect(), enable_penumbra=False)
         m = SimulatedSunSensorArray(cfg).update(0, [1,0,0,0], [1,1,1], 0)
@@ -168,14 +150,13 @@ class Sensors(unittest.TestCase):
         self.assertLess(quat_angle_deg(est.q_eci, truth), .05)
         np.testing.assert_allclose(est.bias, bias, atol=2e-5)
 
-    def test_mount_api_validation(self):
+
+    def test_mount_editing_endpoints_removed(self):
         from app import app
-        from imu_mount_settings import consume_mount_config
         client = app.test_client()
-        self.assertEqual(len(client.get('/api/imu/mounts').json), 8)
-        self.assertEqual(client.post('/api/imu/mounts', json={'name':'Gyroscope','position':[1,2]}).status_code, 400)
-        self.assertEqual(client.post('/api/imu/mounts', json={'name':'Gyroscope','position':[.1,0,0]}).status_code, 200)
-        self.assertEqual(consume_mount_config().gyro_position_body_m, (.1,0,0))
+        self.assertEqual(client.get('/api/imu/mounts').status_code, 404)
+        self.assertEqual(client.post('/api/imu/mounts', json={}).status_code, 404)
+        self.assertEqual(client.post('/api/imu/defaults').status_code, 404)
 
 
 if __name__ == '__main__':

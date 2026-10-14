@@ -1,6 +1,6 @@
 """simulategps.py -- the simulated GPS receiver ("FakeGPS"), all in one file.
 
-get_raw_data() is the public receiver interface, with no navigation solution.
+get_raw_data() returns ORION integer receiver fields, with no navigation solution.
 ECEF-to-ECI conversion now belongs to gps_navigation. update() is retained for
 legacy validation callers. See SENSOR_INTERFACES.md for bytes and usage.
 
@@ -66,6 +66,94 @@ from engine.orekit_runtime import ensure_initialized
 # Orekit helpers (verified against engine_adcs_bridge's own validated
 # convention: inertial_frame.getTransformTo(itrf, date) maps ECI -> ECEF)
 # ---------------------------------------------------------------------------
+def white_noise(random_generator, sigma):
+    """One independent zero-mean noise sample, in the same units as sigma."""
+    if sigma < 0:
+        raise ValueError('Noise sigma must be nonnegative')
+    return sigma * random_generator.standard_normal()
+
+class GaussMarkov:
+    """A slowly changing bias with an exponential memory time, tau seconds."""
+
+    def __init__(self, sigma, tau, initial=0.0):
+        if sigma < 0:
+            raise ValueError('Drift sigma must be nonnegative')
+        if tau <= 0:
+            raise ValueError('Drift time constant must be positive')
+        self.sigma = float(sigma)
+        self.tau = float(tau)
+        self._value = float(initial)
+
+    @property
+    def value(self):
+        return self._value
+
+    def advance(self, dt_seconds, rng):
+        elapsed_time_s = float(dt_seconds)
+        if elapsed_time_s <= 0:
+            return
+        decay = float(np.exp(-elapsed_time_s / self.tau))
+        noise_scale = float(np.sqrt(1.0 - decay * decay)) * self.sigma
+        self._value = decay * self._value + noise_scale * rng.standard_normal()
+
+    def redraw(self, random_generator):
+        self._value = self.sigma * random_generator.standard_normal()
+
+    def reset(self):
+        self._value = 0.0
+
+EARTH_MU_M3_S2 = 3.986004418e14
+
+GPS_ORBIT_RADIUS_M = 26560000.0
+
+GPS_INCLINATION_RAD = math.radians(55.0)
+
+def satellite_positions_eci(time_s):
+    """Circular orbits in six planes, with four satellites in each plane."""
+    mean_motion_rad_s = math.sqrt(EARTH_MU_M3_S2 / GPS_ORBIT_RADIUS_M**3)
+    positions = []
+    for plane in range(6):
+        node_rad = plane * math.pi / 3.0
+        for satellite in range(4):
+            phase_rad = satellite * math.pi / 2.0 + plane * math.pi / 12.0
+            orbit_angle_rad = phase_rad + mean_motion_rad_s * time_s
+            orbit_x_m = GPS_ORBIT_RADIUS_M * math.cos(orbit_angle_rad)
+            orbit_y_m = GPS_ORBIT_RADIUS_M * math.sin(orbit_angle_rad)
+            tilted_y_m = orbit_y_m * math.cos(GPS_INCLINATION_RAD)
+            position_x_m = orbit_x_m * math.cos(node_rad) - tilted_y_m * math.sin(node_rad)
+            position_y_m = orbit_x_m * math.sin(node_rad) + tilted_y_m * math.cos(node_rad)
+            position_z_m = orbit_y_m * math.sin(GPS_INCLINATION_RAD)
+            positions.append((position_x_m, position_y_m, position_z_m))
+    return positions
+
+def receiver_dop(time_s, position_ecef_m, enu_to_ecef, frame_transform, requested_satellites):
+    """DOP from line-of-sight geometry, using the best visible elevations."""
+    from org.hipparchus.geometry.euclidean.threed import Vector3D
+    visible = []
+    for satellite_position in satellite_positions_eci(time_s):
+        transformed = frame_transform.transformPosition(Vector3D(*satellite_position))
+        satellite_ecef_m = np.array([transformed.getX(), transformed.getY(), transformed.getZ()])
+        line_of_sight = satellite_ecef_m - position_ecef_m
+        direction_ecef = line_of_sight / np.linalg.norm(line_of_sight)
+        direction_enu = enu_to_ecef.T @ direction_ecef
+        if direction_enu[2] > math.sin(math.radians(5.0)):
+            visible.append(direction_enu)
+    visible.sort(key=lambda direction: direction[2], reverse=True)
+    selected = visible[:requested_satellites]
+    if len(selected) < 4:
+        return None
+    design_rows = []
+    for direction in selected:
+        design_rows.append([direction[0], direction[1], direction[2], 1.0])
+    design_matrix = np.array(design_rows)
+    if np.linalg.matrix_rank(design_matrix) < 4:
+        return None
+    covariance = np.linalg.inv(design_matrix.T @ design_matrix)
+    horizontal_dop = math.sqrt(covariance[0, 0] + covariance[1, 1])
+    vertical_dop = math.sqrt(covariance[2, 2])
+    time_dop = math.sqrt(covariance[3, 3])
+    return len(selected), horizontal_dop, vertical_dop, time_dop
+
 def absolute_date(epoch_utc, t_seconds: float):
     """Orekit AbsoluteDate at (epoch_utc + t_seconds), UTC.
 
@@ -74,9 +162,9 @@ def absolute_date(epoch_utc, t_seconds: float):
     """
     from org.orekit.time import AbsoluteDate, TimeScalesFactory
 
-    dt = epoch_utc + timedelta(seconds=float(t_seconds))
-    return AbsoluteDate(dt.year, dt.month, dt.day, dt.hour, dt.minute,
-                        float(dt.second) + dt.microsecond / 1e6,
+    elapsed_time_s = epoch_utc + timedelta(seconds=float(t_seconds))
+    return AbsoluteDate(elapsed_time_s.year, elapsed_time_s.month, elapsed_time_s.day, elapsed_time_s.hour, elapsed_time_s.minute,
+                        float(elapsed_time_s.second) + elapsed_time_s.microsecond / 1e6,
                         TimeScalesFactory.getUTC())
 
 def eci_to_ecef_pv(r_eci, v_eci, inertial_frame, itrf, date):
@@ -159,52 +247,10 @@ def gps_week_tow(epoch_utc, t_seconds: float):
     tow = t_gps_s - 604800.0 * week
     return week, tow, t_gps_s
 
-def white_noise(rng, sigma: float) -> float:
-    """One fresh, memoryless random draw of size `sigma` (zero on average)."""
-    if sigma < 0.0:
-        raise ValueError("white-noise sigma must be >= 0")
-    return sigma * rng.standard_normal()
 
 
-class GaussMarkov:
-    """One axis of a slowly-wandering error (wants: sigma >= 0, tau > 0).
 
-    Advance rule (exact for a discrete step of any size):
-        b_new = exp(-dt/tau) * b + sqrt(1 - exp(-2*dt/tau)) * sigma * N(0,1)
-    With dt = 0 the state is left unchanged, so the very first call is safe.
-    """
 
-    __slots__ = ("sigma", "tau", "_value")
-
-    def __init__(self, sigma: float, tau: float, initial: float = 0.0) -> None:
-        if sigma < 0.0:
-            raise ValueError("GaussMarkov sigma must be >= 0")
-        if tau <= 0.0:
-            raise ValueError("GaussMarkov tau must be > 0")
-        self.sigma = float(sigma)
-        self.tau = float(tau)
-        self._value = float(initial)
-
-    @property
-    def value(self) -> float:
-        return self._value
-
-    def advance(self, dt_seconds: float, rng) -> None:
-        """Move the wander forward by dt_seconds of simulated time."""
-        dt = float(dt_seconds)
-        if dt <= 0.0:
-            return
-        decay = float(np.exp(-dt / self.tau))
-        self._value = (decay * self._value
-                       + float(np.sqrt(1.0 - decay * decay)) * self.sigma * rng.standard_normal())
-
-    def redraw(self, rng) -> None:
-        """Jump to a completely fresh draw from N(0, sigma) -- used for the
-        sudden error change when the GPS constellation geometry changes."""
-        self._value = self.sigma * rng.standard_normal()
-
-    def reset(self) -> None:
-        self._value = 0.0
 
 
 class StepEvents:
@@ -262,7 +308,35 @@ class ClockErrorModel:
 # GpsMeasurement -- one GPS receiver "message", in receiver-style formats.
 # ---------------------------------------------------------------------------
 from dataclasses import dataclass
-from sensor_packets import RawGpsSample
+@dataclass(frozen=True)
+class ReceiverMeasurement:
+    week: int
+    tow: float
+    t_meas_s: float
+    t_arrival_s: float
+    fix_type: int
+    num_sv: int
+    pdop: float
+    lat_deg: float
+    lon_deg: float
+    alt_ell_m: float
+    pos_ecef_m: tuple
+    vel_ecef_m_s: tuple
+    vel_enu_m_s: tuple
+    h_acc_m: float
+    v_acc_m: float
+    latency_s: float
+
+
+@dataclass(frozen=True)
+class RawGpsSample:
+    """ORION_GPS_TypeDef data; timestamps/accuracy are transport metadata."""
+    t_meas_s: float
+    t_arrival_s: float
+    latency_s: float
+    h_acc_m: float
+    v_acc_m: float
+    data: dict
 
 
 # ---------------------------------------------------------------------------
@@ -325,35 +399,35 @@ class SimulatedGPS:
 
         # ONE random generator for the whole receiver (seed from config).
         self.rng = np.random.default_rng(config.seed)
-        cfg = config
+        configuration = config
 
         # Constant biases: drawn ONCE at power-on, fixed for the whole run.
         # Horizontal axes (E, N) and the vertical axis (U) have different
         # sizes -- real GPS really is worse vertically.
-        if cfg.enable_bias:
+        if configuration.enable_bias:
             self._pos_bias_enu = np.array([
-                white_noise(self.rng, cfg.pos_bias_sigma_h_m),
-                white_noise(self.rng, cfg.pos_bias_sigma_h_m),
-                white_noise(self.rng, cfg.pos_bias_sigma_v_m)])
+                white_noise(self.rng, configuration.pos_bias_sigma_h_m),
+                white_noise(self.rng, configuration.pos_bias_sigma_h_m),
+                white_noise(self.rng, configuration.pos_bias_sigma_v_m)])
             self._vel_bias_enu = np.array([
-                white_noise(self.rng, cfg.vel_bias_sigma_m_s) for _ in range(3)])
+                white_noise(self.rng, configuration.vel_bias_sigma_m_s) for _ in range(3)])
         else:
             self._pos_bias_enu = np.zeros(3)
             self._vel_bias_enu = np.zeros(3)
 
         # Slowly-wandering error states, one per axis (start at zero).
-        self._pos_gm = ([GaussMarkov(cfg.gm_sigma_pos_h_m, cfg.gm_tau_pos_s),
-                         GaussMarkov(cfg.gm_sigma_pos_h_m, cfg.gm_tau_pos_s),
-                         GaussMarkov(cfg.gm_sigma_pos_v_m, cfg.gm_tau_pos_s)]
-                        if cfg.enable_wander else None)
-        self._vel_gm = ([GaussMarkov(cfg.gm_sigma_vel_m_s, cfg.gm_tau_vel_s) for _ in range(3)]
-                        if cfg.enable_wander else None)
-        self._clock = ClockErrorModel(cfg, self.rng)
-        self._steps = StepEvents(cfg.step_mean_interval_s, self.rng) if cfg.enable_steps else None
+        self._pos_gm = ([GaussMarkov(configuration.gm_sigma_pos_h_m, configuration.gm_tau_pos_s),
+                         GaussMarkov(configuration.gm_sigma_pos_h_m, configuration.gm_tau_pos_s),
+                         GaussMarkov(configuration.gm_sigma_pos_v_m, configuration.gm_tau_pos_s)]
+                        if configuration.enable_wander else None)
+        self._vel_gm = ([GaussMarkov(configuration.gm_sigma_vel_m_s, configuration.gm_tau_vel_s) for _ in range(3)]
+                        if configuration.enable_wander else None)
+        self._clock = ClockErrorModel(configuration, self.rng)
+        self._steps = StepEvents(configuration.step_mean_interval_s, self.rng) if configuration.enable_steps else None
 
         # Status random walks (satellite count, geometry quality).
-        self._num_sv = int(cfg.num_sv_start)
-        self._pdop = float(cfg.pdop_start)
+        self._num_sv = int(configuration.num_sv_start)
+        self._pdop = float(configuration.pdop_start)
 
         # Bookkeeping: no output before the first boundary; truth history for
         # the latency lookback (100 samples x 0.1 s ~ 10 s -- far more than
@@ -366,123 +440,66 @@ class SimulatedGPS:
 
         # In-memory records for the validation harness.
         self.records = []
+        self._geoid = None
 
-    def _sample_raw(self, t_seconds, r_eci_m, v_eci_mps):
+    def _simulate_receiver_measurement(self, t_seconds, r_eci_m, v_eci_mps):
         """Feed one loop tick of TRUTH; returns GpsMeasurement on 1 Hz
         boundaries (else None). Called in time order, exactly once per tick.
         """
-        cfg = self.cfg
-        t = float(t_seconds)
-        r_eci = np.asarray(r_eci_m, dtype=float).reshape(3)
-        v_eci = np.asarray(v_eci_mps, dtype=float).reshape(3)
+        configuration = self.cfg
+        time_s = float(t_seconds)
+        position_eci_m = np.asarray(r_eci_m, dtype=float).reshape(3)
+        velocity_eci_m_s = np.asarray(v_eci_mps, dtype=float).reshape(3)
 
         # The orbit provider is stateful and only moves forward, so out-of-
         # order calls would silently feed nonsense -- fail loudly instead.
-        if self._last_t is not None and t <= self._last_t:
+        if self._last_t is not None and time_s <= self._last_t:
             raise ValueError(
-                f"SimulatedGPS.update received t={t} but the previous call was t={self._last_t}. "
+                f"SimulatedGPS.update received t={time_s} but the previous call was t={self._last_t}. "
                 "Time must move forward: the truth provider is stateful, never rewind it.")
 
-        dt = 0.0 if self._last_t is None else t - self._last_t
-        self._last_t = t
-        self._history.append((t, r_eci.copy(), v_eci.copy()))
+        elapsed_time_s = 0.0 if self._last_t is None else time_s - self._last_t
+        self._last_t = time_s
+        self._history.append((time_s, position_eci_m.copy(), velocity_eci_m_s.copy()))
 
-        # 1) advance every wandering error by this tick's duration
-        if self._pos_gm is not None:
-            for gm in self._pos_gm:
-                gm.advance(dt, self.rng)
-        if self._vel_gm is not None:
-            for gm in self._vel_gm:
-                gm.advance(dt, self.rng)
-        self._clock.advance(dt, self.rng)
+        self._advance_errors(elapsed_time_s, time_s)
 
-        # 2) constellation-change jump: instantly redraw the position wander
-        #    (the geometry changed, so the receiver's slowly-varying errors
-        #    jump to a fresh draw). Velocity wander is unaffected.
-        if self._steps is not None and self._pos_gm is not None and self._steps.due(t):
-            for gm in self._pos_gm:
-                gm.redraw(self.rng)
-            self._steps.reschedule()
-            self.step_count += 1
-
-        # 3) output scheduling: one output per 1 Hz grid point. If this tick
-        #    does not cross a boundary, there is nothing to say this tick.
-        period = 1.0 / cfg.update_rate_hz
-        k = math.floor(t / period + 1e-9)
-        if k <= self._last_grid_k:
-            return None
-        t_grid = k * period
-        # IMPORTANT: the boundary is consumed in EVERY branch below (including
-        # dropouts) so a dropped second is never retried later.
-        self._last_grid_k = k
-        self.boundaries_seen += 1
-
-        # 4) availability gates: cold start, scheduled outages, random dropout
-        if t < cfg.cold_start_s:
-            return None
-        for window in cfg.outages_s:
-            if window[0] <= t <= window[1]:
-                return None
-        if cfg.enable_dropout and cfg.p_dropout > 0.0 and self.rng.random() < cfg.p_dropout:
+        sample_time_s = self._next_sample_time(time_s)
+        if sample_time_s is None:
             return None
 
         # 5) latency: the fix describes the slightly-past state
-        if cfg.enable_latency:
-            tau = float(np.clip(self.rng.normal(cfg.latency_mean_s, cfg.latency_sigma_s),
-                                cfg.latency_min_s, cfg.latency_max_s))
+        if configuration.enable_latency:
+            latency_s = float(np.clip(self.rng.normal(configuration.latency_mean_s, configuration.latency_sigma_s),
+                                configuration.latency_min_s, configuration.latency_max_s))
         else:
-            tau = 0.0
-        t_meas = t_grid - tau
+            latency_s = 0.0
+        measurement_time_s = sample_time_s - latency_s
 
         # 6) truth at t_meas: linear interpolation between the two bracketing
         #    buffered samples (the buffer holds ~10 s, latency needs <= 0.6 s;
         #    only in the first second of a run can t_meas fall off the front).
         times = [h[0] for h in self._history]
-        if len(times) < 2 or t_meas < times[0]:
+        if len(times) < 2 or measurement_time_s < times[0]:
             return None
-        j = bisect_right(times, t_meas) - 1
-        if j > len(times) - 2:
-            j = len(times) - 2
-        t0, r0, v0 = self._history[j]
-        t1, r1, v1 = self._history[j + 1]
-        w = (t_meas - t0) / (t1 - t0)
-        r_interp = r0 + w * (r1 - r0)
-        v_interp = v0 + w * (v1 - v0)
+        history_index = bisect_right(times, measurement_time_s) - 1
+        if history_index > len(times) - 2:
+            history_index = len(times) - 2
+        earlier_time_s, earlier_position, earlier_velocity = self._history[history_index]
+        later_time_s, later_position, later_velocity = self._history[history_index + 1]
+        interpolation_fraction = (measurement_time_s - earlier_time_s) / (later_time_s - earlier_time_s)
+        r_interp = earlier_position + interpolation_fraction * (later_position - earlier_position)
+        v_interp = earlier_velocity + interpolation_fraction * (later_velocity - earlier_velocity)
 
         # 7) ECI -> ECEF with the FULL PV transform (rotation-only would be a
         #    ~460 m/s velocity bug), then the ENU basis and WGS84 geodetic.
-        date = absolute_date(self.epoch_utc, t_meas)
+        date = absolute_date(self.epoch_utc, measurement_time_s)
         true_pos_ecef, true_vel_ecef = eci_to_ecef_pv(
             r_interp, v_interp, self.inertial_frame, self.itrf, date)
         R_enu, _, _, _ = enu_frame_at(self._earth_wgs84, true_pos_ecef, self.itrf, date)
 
-        # 8) status random walks (satellite count, geometry quality)
-        if cfg.enable_status:
-            self._num_sv = int(np.clip(self._num_sv + (1 if self.rng.random() < 0.5 else -1),
-                                       cfg.num_sv_min, cfg.num_sv_max))
-            self._pdop = float(np.clip(self._pdop + self.rng.normal(0.0, cfg.pdop_step_sigma),
-                                       cfg.pdop_min, cfg.pdop_max))
-
-        # 9) the error components (each only if its enable flag is on). The
-        #    velocity errors are INDEPENDENT draws -- real receivers get
-        #    velocity from a different mechanism (Doppler), so the velocity
-        #    error must not be correlated with the position error.
-        err_pos_enu = np.zeros(3)
-        err_vel_enu = np.zeros(3)
-        if cfg.enable_bias:
-            err_pos_enu += self._pos_bias_enu
-            err_vel_enu += self._vel_bias_enu
-        if self._pos_gm is not None:
-            err_pos_enu += np.array([gm.value for gm in self._pos_gm])
-        if self._vel_gm is not None:
-            err_vel_enu += np.array([gm.value for gm in self._vel_gm])
-        if cfg.enable_white_noise:
-            err_pos_enu += np.array([
-                white_noise(self.rng, cfg.white_sigma_pos_h_m),
-                white_noise(self.rng, cfg.white_sigma_pos_h_m),
-                white_noise(self.rng, cfg.white_sigma_pos_v_m)])
-            err_vel_enu += np.array([
-                white_noise(self.rng, cfg.white_sigma_vel_m_s) for _ in range(3)])
+        self._update_receiver_status()
+        err_pos_enu, err_vel_enu = self._measurement_errors()
 
         # ENU error -> ECEF error through the local East/North/Up basis.
         meas_pos_ecef = true_pos_ecef + R_enu @ err_pos_enu
@@ -495,7 +512,7 @@ class SimulatedGPS:
         #     own (slightly wrong) clock, like a real chip. GPS week/tow are
         #     computed from that reported time.
         clock_err = self._clock.sample(self.rng)
-        t_reported = t_meas + clock_err
+        t_reported = measurement_time_s + clock_err
         week, tow, _ = gps_week_tow(self.epoch_utc, t_reported)
 
         # 11) reported accuracy -- real receivers are OVERCONFIDENT (they
@@ -508,7 +525,7 @@ class SimulatedGPS:
         # 12) the reported lat/lon/alt come from the MEASURED (wrong)
         #     position, because that is what a real receiver reports.
         _, lat_deg, lon_deg, alt_m = enu_frame_at(self._earth_wgs84, meas_pos_ecef, self.itrf, date)
-        if cfg.enable_quantization:
+        if configuration.enable_quantization:
             lat_deg = round(lat_deg / 1e-7) * 1e-7        # 1e-7 deg ~ 1 cm
             lon_deg = round(lon_deg / 1e-7) * 1e-7
             alt_m = round(alt_m / 1e-3) * 1e-3            # 1 mm
@@ -516,54 +533,206 @@ class SimulatedGPS:
         # NOTE: pos_ecef_m / vel_ecef_m_s are NOT quantized (real receivers'
         # binary outputs are float).
 
-        msg = RawGpsSample(
-            week=week, tow=tow, t_meas_s=t_meas, t_arrival_s=t_grid,
+        measurement = ReceiverMeasurement(
+            week=week, tow=tow, t_meas_s=measurement_time_s, t_arrival_s=sample_time_s,
             fix_type=3, num_sv=int(self._num_sv), pdop=float(self._pdop),
             lat_deg=lat_deg, lon_deg=lon_deg, alt_ell_m=alt_m,
             pos_ecef_m=tuple(map(float, meas_pos_ecef)),
             vel_ecef_m_s=tuple(map(float, meas_vel_ecef)),
             vel_enu_m_s=tuple(map(float, meas_vel_enu)),
-            h_acc_m=h_acc, v_acc_m=v_acc, latency_s=tau)
+            h_acc_m=h_acc, v_acc_m=v_acc, latency_s=latency_s)
 
         # 14) in-memory record (truth columns are validation-only)
-        rec = {
-            "t_meas_s": t_meas, "t_arrival_s": t_grid, "week": week, "tow": tow,
-            "clock_error_s": clock_err, "fix_type": msg.fix_type,
-            "num_sv": msg.num_sv, "pdop": msg.pdop, "latency_s": tau,
+        diagnostic_record = {
+            "t_meas_s": measurement_time_s, "t_arrival_s": sample_time_s, "week": week, "tow": tow,
+            "clock_error_s": clock_err, "fix_type": measurement.fix_type,
+            "num_sv": measurement.num_sv, "pdop": measurement.pdop, "latency_s": latency_s,
             "truth_pos_ecef": true_pos_ecef, "truth_vel_ecef": true_vel_ecef,
             "truth_pos_eci": r_interp, "truth_vel_eci": v_interp,
             "meas_pos_ecef": np.asarray(meas_pos_ecef), "meas_vel_ecef": np.asarray(meas_vel_ecef),
             "err_pos_enu": err_pos_enu, "err_vel_enu": err_vel_enu,
             "h_acc_m": h_acc, "v_acc_m": v_acc,
         }
-        self.records.append(rec)
-        return msg
+        self.records.append(diagnostic_record)
+        return measurement
+
+
+    def _advance_errors(self, elapsed_time_s, time_s):
+        # 1) advance every wandering error by this tick's duration
+        if self._pos_gm is not None:
+            for drift_model in self._pos_gm:
+                drift_model.advance(elapsed_time_s, self.rng)
+        if self._vel_gm is not None:
+            for drift_model in self._vel_gm:
+                drift_model.advance(elapsed_time_s, self.rng)
+        self._clock.advance(elapsed_time_s, self.rng)
+
+        # 2) constellation-change jump: instantly redraw the position wander
+        #    (the geometry changed, so the receiver's slowly-varying errors
+        #    jump to a fresh draw). Velocity wander is unaffected.
+        if self._steps is not None and self._pos_gm is not None and self._steps.due(time_s):
+            for drift_model in self._pos_gm:
+                drift_model.redraw(self.rng)
+            self._steps.reschedule()
+            self.step_count += 1
+
+
+    def _next_sample_time(self, time_s):
+        configuration = self.cfg
+        # 3) output scheduling: one output per 1 Hz grid point. If this tick
+        #    does not cross a boundary, there is nothing to say this tick.
+        period = 1.0 / configuration.update_rate_hz
+        sample_index = math.floor(time_s / period + 1e-9)
+        if sample_index <= self._last_grid_k:
+            return None
+        sample_time_s = sample_index * period
+        # IMPORTANT: the boundary is consumed in EVERY branch below (including
+        # dropouts) so a dropped second is never retried later.
+        self._last_grid_k = sample_index
+        self.boundaries_seen += 1
+
+        # 4) availability gates: cold start, scheduled outages, random dropout
+        if time_s < configuration.cold_start_s:
+            return None
+        for window in configuration.outages_s:
+            if window[0] <= time_s <= window[1]:
+                return None
+        if configuration.enable_dropout and configuration.p_dropout > 0.0 and self.rng.random() < configuration.p_dropout:
+            return None
+
+        return sample_time_s
+
+    def _update_receiver_status(self):
+        configuration = self.cfg
+        # 8) status random walks (satellite count, geometry quality)
+        if configuration.enable_status:
+            self._num_sv = int(np.clip(self._num_sv + (1 if self.rng.random() < 0.5 else -1),
+                                       configuration.num_sv_min, configuration.num_sv_max))
+            self._pdop = float(np.clip(self._pdop + self.rng.normal(0.0, configuration.pdop_step_sigma),
+                                       configuration.pdop_min, configuration.pdop_max))
+
+
+    def _measurement_errors(self):
+        configuration = self.cfg
+        # 9) the error components (each only if its enable flag is on). The
+        #    velocity errors are INDEPENDENT draws -- real receivers get
+        #    velocity from a different mechanism (Doppler), so the velocity
+        #    error must not be correlated with the position error.
+        err_pos_enu = np.zeros(3)
+        err_vel_enu = np.zeros(3)
+        if configuration.enable_bias:
+            err_pos_enu += self._pos_bias_enu
+            err_vel_enu += self._vel_bias_enu
+        if self._pos_gm is not None:
+            err_pos_enu += np.array([drift_model.value for drift_model in self._pos_gm])
+        if self._vel_gm is not None:
+            err_vel_enu += np.array([drift_model.value for drift_model in self._vel_gm])
+        if configuration.enable_white_noise:
+            err_pos_enu += np.array([
+                white_noise(self.rng, configuration.white_sigma_pos_h_m),
+                white_noise(self.rng, configuration.white_sigma_pos_h_m),
+                white_noise(self.rng, configuration.white_sigma_pos_v_m)])
+            err_vel_enu += np.array([
+                white_noise(self.rng, configuration.white_sigma_vel_m_s) for _ in range(3)])
+
+        return err_pos_enu, err_vel_enu
 
     def get_raw_data(self, t_seconds=None, r_eci_m=None, v_eci_mps=None):
         """Sample receiver output once; repeated/no-argument reads are free.
 
-        Returns only receiver fields in ECEF/geodetic coordinates. The caller
+        Returns ORION integer receiver fields in ECEF/geodetic coordinates. The caller
         provides truth; this function never advances the engine or navigates.
         """
         if not self.cfg.enabled:
             return None
         if t_seconds is None or t_seconds == getattr(self, '_raw_tick', None):
             return getattr(self, '_raw_receipt', None)
-        self._raw_receipt = self._sample_raw(t_seconds, r_eci_m, v_eci_mps)
+        measurement = self._simulate_receiver_measurement(t_seconds, r_eci_m, v_eci_mps)
+        self._raw_receipt = self._orion_output(measurement)
         self._raw_tick = float(t_seconds)
         return self._raw_receipt
+
+    def _mean_sea_level_altitude_m(self, measurement, date):
+        """Ellipsoid height minus EGM2008 geoid undulation, in metres."""
+        if self._geoid is None:
+            from org.orekit.models.earth import Geoid, ReferenceEllipsoid
+            from org.orekit.forces.gravity.potential import GravityFieldFactory
+            ellipsoid = ReferenceEllipsoid.getWgs84(self.itrf)
+            gravity = GravityFieldFactory.getNormalizedProvider(36, 36)
+            self._geoid = Geoid(gravity, ellipsoid)
+        geoid_height_m = self._geoid.getUndulation(
+            math.radians(measurement.lat_deg), math.radians(measurement.lon_deg), date)
+        return measurement.alt_ell_m - geoid_height_m
+
+    def _orion_output(self, measurement):
+        """Return the integer fields decoded by ORION_READ_GPS_BINARY_OUTPUT."""
+        if measurement is None:
+            return None
+        date = absolute_date(self.epoch_utc, measurement.t_meas_s)
+        position_ecef_m = np.asarray(measurement.pos_ecef_m)
+        enu_to_ecef, _, _, _ = enu_frame_at(self._earth_wgs84, position_ecef_m, self.itrf, date)
+        frame_transform = self.inertial_frame.getTransformTo(self.itrf, date)
+        geometry = receiver_dop(measurement.t_meas_s, position_ecef_m,
+                                enu_to_ecef, frame_transform, measurement.num_sv)
+        if geometry is None:
+            return None
+        satellites_used, horizontal_dop, vertical_dop, time_dop = geometry
+        geometry_position_dop = math.hypot(horizontal_dop, vertical_dop)
+        # Preserve the existing configured PDOP/status error model, while
+        # deriving the additional DOP fields from one consistent covariance.
+        dop_scale = measurement.pdop / geometry_position_dop
+        horizontal_dop *= dop_scale
+        vertical_dop *= dop_scale
+        time_dop *= dop_scale
+        geometric_dop = math.hypot(measurement.pdop, time_dop)
+        week = measurement.week
+        tow_centiseconds = round(measurement.tow * 100)
+        if tow_centiseconds >= 60480000:
+            week += 1
+            tow_centiseconds -= 60480000
+        mean_sea_level_m = self._mean_sea_level_altitude_m(measurement, date)
+        data = {
+            'fix_mode': 3, 'num_SV': satellites_used,
+            'GNSS_Week': week, 'GNSS_TOW': tow_centiseconds,
+            'Latitude': round(measurement.lat_deg * 1e7),
+            'Longitude': round(measurement.lon_deg * 1e7),
+            'Ellipsoid_altitude': round(measurement.alt_ell_m * 100),
+            'Mean_Sea_Level_Altitude': round(mean_sea_level_m * 100),
+            'GDOP': round(geometric_dop * 100), 'PDOP': round(measurement.pdop * 100),
+            'HDOP': round(horizontal_dop * 100), 'VDOP': round(vertical_dop * 100),
+            'TDOP': round(time_dop * 100),
+        }
+        for axis, value in zip(('X', 'Y', 'Z'), measurement.pos_ecef_m):
+            data['ECEF_' + axis] = round(value * 100)
+        for axis, value in zip(('VX', 'VY', 'VZ'), measurement.vel_ecef_m_s):
+            data['ECEF_' + axis] = round(value * 100)
+        for name, value in data.items():
+            if name in ('fix_mode', 'num_SV'):
+                minimum, maximum = 0, 255
+            elif name == 'GNSS_TOW':
+                minimum, maximum = 0, 4294967295
+            elif name in ('GNSS_Week', 'GDOP', 'PDOP', 'HDOP', 'VDOP', 'TDOP'):
+                minimum, maximum = 0, 65535
+            else:
+                minimum, maximum = -2147483648, 2147483647
+            if not minimum <= value <= maximum:
+                raise ValueError(f'ORION field {name} cannot represent this measurement')
+        return RawGpsSample(measurement.t_meas_s, measurement.t_arrival_s,
+            measurement.latency_s, measurement.h_acc_m, measurement.v_acc_m, data)
 
     def update(self, t_seconds, r_eci_m, v_eci_mps):
         """Compatibility API; new integrations use get_raw_data()."""
         from gps_navigation import decode_gps_data
-        raw = self.get_raw_data(t_seconds, r_eci_m, v_eci_mps)
-        if raw is None:
+        receiver_measurement = self._simulate_receiver_measurement(t_seconds, r_eci_m, v_eci_mps)
+        if receiver_measurement is None:
             return None
-        msg = decode_gps_data(raw, self.epoch_utc, self.inertial_frame, self.itrf)
-        msg.clock_error_s = self.records[-1]['clock_error_s']
-        self.records[-1]['nav_pos_eci'] = msg.nav_pos_eci_m
-        self.records[-1]['nav_vel_eci'] = msg.nav_vel_eci_mps
-        return msg
+        measurement = decode_gps_data(receiver_measurement, self.epoch_utc, self.inertial_frame, self.itrf)
+        measurement.clock_error_s = self.records[-1]['clock_error_s']
+        self.records[-1]['nav_pos_eci'] = measurement.nav_pos_eci_m
+        self.records[-1]['nav_vel_eci'] = measurement.nav_vel_eci_mps
+        return measurement
+
+
 
 # ---------------------------------------------------------------------------
 # SELF-TEST: python simulategps.py [demo|validate]

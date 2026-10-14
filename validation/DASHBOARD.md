@@ -28,19 +28,16 @@ All numeric flight values come from `/api/latest`, or are explicit unit conversi
 
 GPS receiver simulation currently publishes aggregate SV counts and PDOP, not tracked PRNs or individual GNSS ephemerides. The GPS globe now draws up to four green *illustrative* links from a nominal constellation, with the reported count limiting them and PDOP affecting their spread. These markers are not actual receiver locks, and the UI labels them as simulated. A future provider may publish `gps_links_available: true` with `gps_satellites: [{prn, position_ecef_m: [x,y,z], used}]`; the widget then draws those reported markers and links. The current backend still reports that capability as unavailable.
 
-Globe panels are schematic: marker sizes and Sun/Moon distances are compressed so they fit, with captions stating this. The overview's flat Sun–Earth–Moon positions are fixed for clarity; its spacecraft orbital phase and distance labels use backend coordinates. The Sun diagram is a Sun-aligned 2D cross-section with illumination from backend telemetry. The GPS globe uses one small WebGL context, with up to four simulated green links drawn on top. Only visible diagrams render, at no more than five refreshes per second. Both the main scene and the inset renderer import the vendored Three.js 0.160.0 package locally.
+Globe panels are schematic: marker sizes and Sun/Moon distances are compressed so they fit, with captions stating this. The overview's flat Sunâ€“Earthâ€“Moon positions are fixed for clarity; its spacecraft orbital phase and distance labels use backend coordinates. The Sun diagram is a Sun-aligned 2D cross-section with illumination from backend telemetry. The GPS globe uses one small WebGL context, with up to four simulated green links drawn on top. Only visible diagrams render, at no more than five refreshes per second. Both the main scene and the inset renderer import the vendored Three.js 0.160.0 package locally.
 
 History contains at most 600 unique snapshots over a 120-second window. Repeated samples are ignored; session changes or backwards simulation time reset history. Missing/invalid sensor values produce gaps and unavailable labels. Gaps over five simulation seconds are not connected. Old truth values are not substituted for missing measurements.
 
 ## Verification
 
 ```
-node scripts/test_dashboard_data.cjs
 .venv/Scripts/python.exe -m unittest validation.test_dashboard_telemetry validation.test_sensor_navigation
-.venv/Scripts/python.exe scripts/verify_sensor_changes.py --integration --dashboard-fixture "$env:TEMP/leap-dashboard-telemetry.json"
-node scripts/browser_dashboard_check.cjs
-node scripts/browser_sensor_check.cjs
-node scripts/browser_visual_check.cjs
 ```
 
-Browser checks use the existing Playwright installation in `%TEMP%/leap-viewer-check` and Chrome. The dashboard test replays actual snapshots captured by the live Orekit/ADCS integration. It checks values, graphs, unavailable GPS links, tab isolation, simulation-clock holding, settings, and layouts at 1614×975, 1366×768, 3840×2160, and 390×844. Screenshots are under `validation/results/dashboard-*.png`.
+Browser checks use the frontend Playwright dependency and installed Chrome. Screenshots are written to the system temporary directory.
+
+Current checks: `.venv/Scripts/python.exe -B -m pytest validation/test_sensor_navigation.py validation/test_hardware_sensor_outputs.py`; frontend: `npm.cmd test` and `npm.cmd run test:browser` from `frontend/`. The browser fixture is `validation/tools/viewer_test_server.py`. Sensor locations and mount orientations are configured in backend YAML only.

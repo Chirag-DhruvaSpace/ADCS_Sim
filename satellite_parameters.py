@@ -213,12 +213,29 @@ class SimulationParameters:
 @dataclass(frozen=True)
 class ReactionWheelParameters:
     count: int
-    axis_matrix_body: tuple[tuple[float, float, float, float], ...]
     max_torque_Nm: float
     max_momentum_Nms: float
     null_space_desaturation_gain: float
+    axis_matrix_body: tuple = ()
+    axis_matrix_assembly: tuple = ()
     saturation_reallocation_enabled: bool = True
     max_reallocation_passes: int = 4
+
+    def __post_init__(self):
+        if self.axis_matrix_body and self.axis_matrix_assembly:
+            raise ValueError('Define wheel axes in body or assembly coordinates, not both')
+        if self.axis_matrix_assembly:
+            mounting_rotation = np.array([[0., 0., 1.], [0., -1., 0.], [1., 0., 0.]])
+            body_axes = mounting_rotation @ np.asarray(self.axis_matrix_assembly, dtype=float)
+            object.__setattr__(self, 'axis_matrix_body', tuple(tuple(row) for row in body_axes))
+        axes = np.asarray(self.axis_matrix_body, dtype=float)
+        if axes.shape != (3, self.count) or not np.all(np.isfinite(axes)):
+            raise ValueError('Wheel axes must be a finite 3-by-count matrix')
+
+    @property
+    def wheel_axes_body(self):
+        """Wheel spin axes expressed in satellite coordinates, transformed once."""
+        return np.asarray(self.axis_matrix_body, dtype=float).copy()
 
 
 @dataclass(frozen=True)
@@ -416,6 +433,7 @@ class SunSensorCellParameters:
     nonlinearity_k3_sigma: float = 0.01          # cubic response coefficient (drawn once)
     white_noise_sigma: float = 0.003             # fresh noise per sample
     adc_bits: int = 12                           # digitizer depth (all cells share it)
+    sensor_roll_rad: float = 0.0                 # fine sensor rotation around its normal
 
 
 @dataclass(frozen=True)
@@ -467,6 +485,18 @@ class SunSensorArrayParameters:
     seed: int = 42                           # RNG seed (all randomness flows from this)
     update_rate_hz: float = 10.0             # == ADCS loop rate (0.1 s)
     cells: tuple = field(default_factory=_default_sun_cells)
+    # Provisional FSS calibration: types/angles match firmware, other scales
+    # require the actual sensor ICD. These are not vendor specifications.
+    fine_fov_half_angle_rad: float = np.deg2rad(35.0)
+    fine_aperture_distance_m: float = 0.001
+    fine_coordinate_counts_per_m: float = 1e6
+    fine_vector_scale_counts: int = 10000
+    fine_total_signal_counts: int = 10000
+    fine_quadrant_max_counts: int = 10000
+    fine_eclipse_threshold_counts: int = 250
+    fine_temperature_k: float = 298.15
+    fine_temperature_zero_k: float = 273.15
+    fine_temperature_counts_per_k: float = 100.0
     blockers: tuple = field(default_factory=_default_sun_blockers)  # bus/panel boxes block the sun
 
     # --- error-channel switches (True = realistic; False = channel off) ---
@@ -491,6 +521,18 @@ class SunSensorArrayParameters:
     latency_max_s: float = 0.05
 
     def __post_init__(self) -> None:
+        for name in ('fine_aperture_distance_m', 'fine_coordinate_counts_per_m',
+                     'fine_temperature_k', 'fine_temperature_counts_per_k'):
+            if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be finite and positive')
+        if not 0 < self.fine_fov_half_angle_rad < np.pi / 2:
+            raise ValueError('Fine sun sensor half angle must be between 0 and pi/2 radians')
+        if not 0 < self.fine_vector_scale_counts <= 32767:
+            raise ValueError('Fine sun vector scale must fit int16')
+        for name in ('fine_total_signal_counts', 'fine_quadrant_max_counts', 'fine_eclipse_threshold_counts'):
+            value = getattr(self, name)
+            if not isinstance(value, int) or not 0 < value <= 65535:
+                raise ValueError(f'{name} must be a positive uint16 count')
         if len(self.cells) < 3:
             raise ValueError("sun array needs at least 3 cells")
         if self.update_rate_hz <= 0.0:
@@ -509,6 +551,8 @@ class SunSensorArrayParameters:
             raise ValueError("sun seed must be an int")
         bits = None
         for c in self.cells:
+            if not np.isfinite(c.sensor_roll_rad):
+                raise ValueError(f'sun sensor {c.name}: roll must be finite radians')
             if float(np.linalg.norm(c.normal_body)) < 1e-9:
                 raise ValueError(f"sun cell {c.name}: normal_body must be nonzero")
             if not 0.0 < c.fov_half_angle_deg <= 90.0:
@@ -688,7 +732,7 @@ class ImuSimParameters:
     gyro_latency_min_s: float = 0.001
     gyro_latency_max_s: float = 0.02
     gyro_quantization_rad_s: float = 0.0     # ADC step size (0 = no quantization)
-    gyro_adc_bits: int = 16                 # Signed raw output register depth
+    gyro_hardware_range_deg_s: int = 125    # ADIS16545 variant: 125, 450, or 2000 deg/s
     gyro_response_matrix: tuple = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
     gyro_fixed_bias_rad_s: tuple = (0., 0., 0.)  # exact chip-frame bias, additive to random bias
 
@@ -710,7 +754,6 @@ class ImuSimParameters:
     mag_latency_min_s: float = 0.002
     mag_latency_max_s: float = 0.05
     mag_quantization_t: float = 0.0          # ADC step size (0 = no quantization)
-    mag_adc_bits: int = 16                  # Signed raw output register depth
     mag_response_matrix: tuple = ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.))
     mag_fixed_bias_t: tuple = (0., 0., 0.)
 
@@ -743,9 +786,8 @@ class ImuSimParameters:
                                              # true attitude (A/B test the estimator)
 
     def __post_init__(self) -> None:
-        for bits in (self.gyro_adc_bits, self.mag_adc_bits):
-            if isinstance(bits, bool) or not isinstance(bits, int) or not 8 <= bits <= 24:
-                raise ValueError('Vector sensor ADC resolution must be 8..24 bits')
+        if self.gyro_hardware_range_deg_s not in (125, 450, 2000):
+            raise ValueError('ADIS16545 gyro range must be 125, 450, or 2000 deg/s')
         for group in (self.gyros, self.magnetometers):
             if any(not isinstance(u, VectorSensorParameters) for u in group):
                 raise ValueError('Sensor groups must contain VectorSensorParameters')
@@ -994,6 +1036,10 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     profiles = data['sensor_profiles']
     if not isinstance(profiles, dict) or set(profiles) != {'gps', 'imu', 'gyroscope', 'magnetometer', 'sun_array'}:
         raise ValueError('sensor_profiles must specify gps, imu, gyroscope, magnetometer, sun_array')
+    # YAML 1.1 reads an unquoted 'off' as False. Keep this human-friendly
+    # profile spelling usable without changing the meaning of the setting.
+    profiles = {name: 'off' if value is False else value for name, value in profiles.items()}
+    data['sensor_profiles'] = profiles
     if any(value not in ('custom', 'off', 'perfect', 'nominal', 'degraded', 'stress') for value in profiles.values()):
         raise ValueError('Unknown sensor profile')
     validate_pointing_configuration(data['pointing'])
@@ -1070,7 +1116,10 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     mounts = data['imu_mount_defaults'] or {}
     if not isinstance(mounts, dict):
         raise ValueError('imu_mount_defaults must be a mapping')
-    wheels = _from_yaml(ReactionWheelParameters, {**data['reaction_wheels'], **selected.get('reaction_wheels', {})})
+    wheel_settings = {**data['reaction_wheels'], **selected.get('reaction_wheels', {})}
+    if 'axis_matrix_body' in selected.get('reaction_wheels', {}):
+        wheel_settings.pop('axis_matrix_assembly', None)
+    wheels = _from_yaml(ReactionWheelParameters, wheel_settings)
     return (spacecraft, orbit, section('attitude', AttitudeParameters),
             _from_yaml(ModelDataParameters, model_data), section('control', ControlParameters),
             section('disturbances', DisturbanceParameters), geometry,

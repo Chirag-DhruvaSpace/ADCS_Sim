@@ -1,4 +1,4 @@
-﻿# ADCS Sim -- P-30XL Attitude Determination & Control System Simulator
+# ADCS Sim -- P-30XL Attitude Determination & Control System Simulator
 
 > High-fidelity Model-Based Design simulator for the **Dhruva Space P-30XL** ADCS -- Orekit orbital physics, sensor emulation, pointing laws, RW + MTQ actuation, firmware SITL, and a React + Three.js mission viewer.
 
@@ -89,12 +89,12 @@ engine_adcs_bridge.py             # Bridge: ADCS <-> engine orbit provider
 MTR_allocator.py / torque_distribution.py / cross_b_torque.py
 calculate_disturbances.py / spacecraft_surface_physics.py
 simulategps.py / gps_navigation.py
-simulateimu.py / imu_navigation.py / imu_mount_settings.py
+simulateimu.py / imu_navigation.py
 simulatesunsensor.py / sun_vector_eci.py
 firmware_sitl_adapter.py / firmware_sitl_link.py / telemetry.py
 pointing_client.py / control_states.py / store.py
 frontend/                         # Vite + React + Three.js viewer
-scripts/ / validation/ / orekit-data/
+validation/ / orekit-data/
 Setup.bat / setup.ps1 / requirements.txt
 K_seq.npy / t_grid.npy            # Stored periodic-LQR gains
 ```
@@ -270,7 +270,7 @@ Boresight: body -Z to Sun (2 DOF; spin about Sun line is free). Design derivatio
 | Chain | Truth -> Measurement -> Belief |
 |-------|-------------------------------|
 | GPS | simulategps.py (bias/wander/noise/latency/dropouts ~1 Hz) -> gps_navigation.py (ECI pos/vel + dead-reckoning). Only ADCS knowledge is GPS-based. |
-| IMU | simulateimu.py (mounts, bias walk, noise, quant) -> imu_navigation.py (sunlight-gated MEKF). Mounts via /api/imu/mounts, save via /api/imu/defaults. See imu_README.md. |
+| IMU | simulateimu.py (mounts, bias walk, noise, quant) -> imu_navigation.py (sunlight-gated MEKF). Mounts are configured only in backend YAML. See imu_README.md. |
 | Sun | simulatesunsensor.py (6 faces, 90 deg FOV, albedo, penumbra, self-shadowing) -> vector solution (min 3 cells). |
 
 ---
@@ -308,8 +308,6 @@ Flask serves frontend/dist/index.html + /frontend/* + /assets/*. Browser polls o
 | /update_telemetry | POST | Separate-process ingestion (compat) |
 | /api/viewer/config | GET | Model, lighting, pointing bootstrap |
 | /api/spacecraft | GET | Mass, model URL, config, COM |
-| /api/imu/mounts | GET, POST | Read / apply mounts (next tick) |
-| /api/imu/defaults | POST | Persist mounts to YAML |
 | /api/pointing | GET, POST | Reference state; quat input (custom only) |
 | /update/mode | POST | Mode command (strategy-gated) |
 | /update/control/inputs | POST | Legacy yaw/pitch/roll sliders |
@@ -328,13 +326,12 @@ Viewer: worker CAD batching, GPU diagrams w/ async readback, 30-s chart windows,
 ```powershell
 python -m pytest validation/ -q
 python -m pytest validation/test_spacecraft_configurations.py validation/test_sensor_navigation.py validation/test_dashboard_telemetry.py -q
-python scripts/verify_cad_physics.py deployed
-python scripts/verify_cad_physics.py stowed
-python scripts/verify_sensor_changes.py
+python validation/tools/verify_cad_physics.py deployed
+python validation/tools/verify_cad_physics.py stowed
 cd frontend; npm.cmd test
 ```
 
-Browser/GPU (needs Chrome): terminal 1 -- python scripts/viewer_test_server.py; terminal 2 -- cd frontend; npm.cmd run test:browser. Orbit proof: python main.py.
+Browser/GPU (needs Chrome): terminal 1 -- python validation/tools/viewer_test_server.py; terminal 2 -- cd frontend; npm.cmd run test:browser. Orbit proof: python main.py.
 
 ---
 
@@ -343,11 +340,11 @@ Browser/GPU (needs Chrome): terminal 1 -- python scripts/viewer_test_server.py; 
 Requires cadquery-ocp, numpy, trimesh, pyyaml (+ gltf-transform CLI):
 
 ```powershell
-python scripts/export_satellite_cad.py '../P-30XL Deployed 22-09-2026.STEP' deployed
-python scripts/export_satellite_cad.py '../P-30XL Stoved 22-09-2026.STEP' stowed
+python validation/tools/export_satellite_cad.py '../P-30XL Deployed 22-09-2026.STEP' deployed
+python validation/tools/export_satellite_cad.py '../P-30XL Stoved 22-09-2026.STEP' stowed
 npm.cmd install --prefix .tools/gltf @gltf-transform/cli
-node scripts/extract_cad_mounts.mjs
-python scripts/build_cad_configurations.py
+node validation/tools/extract_cad_mounts.mjs
+python validation/tools/build_cad_configurations.py
 ```
 
 Compress each GLB with gltf-transform meshopt (pos quant 16-bit). Physics uses a rectangular bus/panel macromodel from CAD bounds. Full notes: CAD_CONFIGURATION.md.

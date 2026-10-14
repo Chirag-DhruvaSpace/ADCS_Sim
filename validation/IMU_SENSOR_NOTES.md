@@ -1,4 +1,4 @@
-﻿# IMU and viewer changes
+# IMU and viewer changes
 
 The default flight path is sensor-driven: physical truth feeds `SimulatedIMU`,
 receipts feed `ImuNav`, and its reconstructed Sun vector and six-state
@@ -13,10 +13,10 @@ parameters, not by bypassing onboard navigation.
 
 ## Sun physics
 
-Direct output is `max(0, normal Â· sun_direction) * eclipse_fraction` inside
+Direct output is `max(0, normal Ã‚Â· sun_direction) * eclipse_fraction` inside
 the FOV, before blockers and electronics. Disabling penumbra selects a binary
 shadow at 50% solar visibility; it no longer creates sunlight in umbra.
-The FOV is a **half-angle**: 90Â° covers a hemisphere.
+The FOV is a **half-angle**: 90Ã‚Â° covers a hemisphere.
 
 Three orthogonal faces see a generic direction. The cube diagonal gives 57.735%
 output on each, not 95%. The default 1.5% activation threshold is five nominal
@@ -41,7 +41,7 @@ Sun normals and FOV are editable. Runtime edits apply at the next tick and
 restart sensor calibration, without rewriting permanent configuration.
 
 Permanent settings are under `imu_sim` in `satellite_parameters.yaml`: positions,
-scalar-first mounting quaternions, Sun array parameters and a 3Ã—3 local magnetic
+scalar-first mounting quaternions, Sun array parameters and a 3Ãƒâ€”3 local magnetic
 gradient in T/m. Gyro rate is independent of position on a rigid body. Magnetic
 position dependence uses the configured linear gradient, not an electromagnetic
 field solver. Mount rotations transform into chip axes before errors/clipping
@@ -61,33 +61,14 @@ also avoids capture rendering and encoding.
 
 ## Verification and limits
 
-Run `.venv/Scripts/python.exe scripts/verify_sensor_changes.py`: 16 regression
-tests, 22 Sun-array checks, 25 IMU checks and JavaScript syntax validation.
-Add `--integration` for 20 real Orekit/ADCS ticks and finite-telemetry checks.
-Java 9+ is required; the test selects the installed JDK 21 when available.
-
-`--stability` runs 300 simulated seconds of reaction-wheel Sun acquisition from
-rest with nominal sensors. The quaternion predictor follows the plant's explicit
-Omega matrix (right quaternion multiplication); left-error covariance and
-measurement-latency transport use the same convention. Inconsistent vector
-innovations are rejected and inferred gyro bias is bounded to 0.005 rad/s.
-The corrected run ended at 0.155Â° estimation error and 0.031Â°/s body rate,
-without crossing the detumble threshold. This is a bounded regression test,
-not a guarantee for every mission duration or initial condition.
-The orbit is hidden within 1000 km of the spacecraft, including capture cameras;
-its geometry buffer is reused rather than allocated per telemetry receipt.
-
-`node scripts/browser_sensor_check.cjs` uses Playwright installed in
-`%TEMP%/leap-viewer-check/node_modules` and Chrome. It checks the populated panel
-at 1366Ã—768, tabs, mounting edits and distant zoom. Screenshots are in
-`validation/results/sensor_viewer.png` and `orbit_viewer.png`.
+Sensor checks run with `.venv/Scripts/python.exe -B -m pytest validation/test_sensor_navigation.py validation/test_hardware_sensor_outputs.py`. The original standalone model checks remain in `simulatesunsensor.py validate` and `simulateimu.py validate`.
 
 These checks establish numerical behavior, not flight-qualified accuracy.
 Albedo assumes a spherical Earth, uniform reflectivity, finite quadrature and
 no cloud maps or reflected-light spacecraft occlusion. The EKF uses tuned
 direction uncertainties and a local attitude prior; latency compensation assumes
 constant rate rather than a historical-state smoother. Its bias random walk
-approximates the simulated Gaussâ€“Markov process. Absolute pointing accuracy
+approximates the simulated GaussÃ¢â‚¬â€œMarkov process. Absolute pointing accuracy
 requires actual sensor calibration, geometry, field gradients and covariance
 tuning. The existing disturbance budget also uses fallback spacecraft values.
 
@@ -123,12 +104,7 @@ truth-based comparison modes. Turning ONLY the EKF off now means gyro-only
 propagation, not truth feedback. Its innovation gate, bias bound and initial
 covariance are wired to the canonical parameters.
 
-The mounting UI applies session edits at a simulation tick boundary. **Save
-applied mounts as defaults** writes only the `imu_mount_defaults` section
-in `satellite_parameters.yaml`.
-Sensor replacement restarts its simulated hardware history; do not treat a live
-mount edit as a physically continuous experiment. Remove outdated saved entries
-when renaming hardware. Exact calibration remains in each unit definition.
+Sensor locations, mount orientations and field gradients are configured in backend YAML. Optional `imu_mount_defaults` entries are applied at startup. Restart the simulation after editing them; no frontend mounting editor or mounting API remains.
 
 ## Viewer and verification scope
 
@@ -153,3 +129,5 @@ albedo/eclipse model, quaternion propagation order, feedback routing and sample
 timing; it would be incorrect to claim the entire effort made no assumptions or
 left every preexisting equation untouched.
 
+
+Current checks: `.venv/Scripts/python.exe -B -m pytest validation/test_sensor_navigation.py validation/test_hardware_sensor_outputs.py`; frontend: `npm.cmd test` and `npm.cmd run test:browser` from `frontend/`. The browser fixture is `validation/tools/viewer_test_server.py`. Sensor locations and mount orientations are configured in backend YAML only.

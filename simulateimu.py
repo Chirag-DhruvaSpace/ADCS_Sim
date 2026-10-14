@@ -1,7 +1,7 @@
 """simulateimu.py -- the simulated IMU (gyroscope + magnetometer), all in one file.
 
-Public hardware interface: get_raw_data() returns sensor-axis signed register
-counts; navigation decodes them. update() below is the legacy physical-unit
+Public hardware interface: get_raw_data() returns ADIS/AK09916 sensor-axis signed
+registers and FSS records; navigation decodes them. update() is the legacy physical-unit
 interface described by the historical notes. See SENSOR_INTERFACES.md.
 
 WHAT THIS IS (plain language): a stand-in for the real gyroscope and
@@ -73,70 +73,104 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from simulatesunsensor import SimulatedSunSensorArray
-from sensor_packets import RawVectorSample
-
-def _dcm_bi_from_q(q):
-    """Attitude matrix dcm body->ECI (v_eci = C_bi @ v_body) from a
-    scalar-first [q0, q1, q2, q3] quaternion -- copied EXACTLY from
-    satellite_rotational_dynamics_var_mag_field.py (and the identical formula
-    in calculate_disturbances._dcm_bi_from_q and satellite_flight_visualisation.py).
-    The repo's load-bearing convention for body-frame vectors is:
-        B_body = C_bi.T @ B_eci
-    using this same matrix. Do NOT "fix" this formula -- it IS the repo.
-    """
-    q = np.asarray(q, dtype=float).reshape(4)
-    q = q / np.linalg.norm(q)
-    q0, q1, q2, q3 = q
-    return np.array([
-        [1 - 2 * (q2**2 + q3**2),     2 * (q1 * q2 + q0 * q3),     2 * (q1 * q3 - q0 * q2)],
-        [2 * (q1 * q2 - q0 * q3),     1 - 2 * (q1**2 + q3**2),     2 * (q2 * q3 + q0 * q1)],
-        [2 * (q1 * q3 + q0 * q2),     2 * (q2 * q3 - q0 * q1),     1 - 2 * (q1**2 + q2**2)],
-    ])
-
-
-def white_noise(rng, sigma: float) -> float:
-    """One fresh, memoryless random draw of size `sigma` (zero on average)."""
-    if sigma < 0.0:
-        raise ValueError("white-noise sigma must be >= 0")
-    return sigma * rng.standard_normal()
-
+def white_noise(random_generator, sigma):
+    """One independent zero-mean noise sample, in the same units as sigma."""
+    if sigma < 0:
+        raise ValueError('Noise sigma must be nonnegative')
+    return sigma * random_generator.standard_normal()
 
 class GaussMarkov:
-    """One axis of a slowly-wandering error (wants: sigma >= 0, tau > 0).
+    """A slowly changing bias with an exponential memory time, tau seconds."""
 
-    Advance rule (exact for a discrete step of any size):
-        b_new = exp(-dt/tau) * b + sqrt(1 - exp(-2*dt/tau)) * sigma * N(0,1)
-    With dt = 0 the state is left unchanged, so the very first call is safe.
-    (Same small class as simulategps.py's GaussMarkov, kept self-contained so
-    this file stands alone like simulategps.py does.)
-    """
-
-    __slots__ = ("sigma", "tau", "_value")
-
-    def __init__(self, sigma: float, tau: float, initial: float = 0.0) -> None:
-        if sigma < 0.0:
-            raise ValueError("GaussMarkov sigma must be >= 0")
-        if tau <= 0.0:
-            raise ValueError("GaussMarkov tau must be > 0")
+    def __init__(self, sigma, tau, initial=0.0):
+        if sigma < 0:
+            raise ValueError('Drift sigma must be nonnegative')
+        if tau <= 0:
+            raise ValueError('Drift time constant must be positive')
         self.sigma = float(sigma)
         self.tau = float(tau)
         self._value = float(initial)
 
     @property
-    def value(self) -> float:
+    def value(self):
         return self._value
 
-    def advance(self, dt_seconds: float, rng) -> None:
-        """Move the wander forward by dt_seconds of simulated time."""
-        dt = float(dt_seconds)
-        if dt <= 0.0:
+    def advance(self, dt_seconds, rng):
+        elapsed_time_s = float(dt_seconds)
+        if elapsed_time_s <= 0:
             return
-        decay = float(np.exp(-dt / self.tau))
-        self._value = (decay * self._value
-                       + float(np.sqrt(1.0 - decay * decay)) * self.sigma * rng.standard_normal())
+        decay = float(np.exp(-elapsed_time_s / self.tau))
+        noise_scale = float(np.sqrt(1.0 - decay * decay)) * self.sigma
+        self._value = decay * self._value + noise_scale * rng.standard_normal()
 
-    def reset(self) -> None:
+    def redraw(self, random_generator):
+        self._value = self.sigma * random_generator.standard_normal()
+
+    def reset(self):
         self._value = 0.0
+
+def _dcm_bi_from_q(quaternion):
+    quaternion = np.asarray(quaternion, dtype=float).reshape(4)
+    quaternion = quaternion / np.linalg.norm(quaternion)
+    scalar, vector_x, vector_y, vector_z = quaternion
+    return np.array([
+        [1 - 2 * (vector_y**2 + vector_z**2),
+         2 * (vector_x * vector_y + scalar * vector_z),
+         2 * (vector_x * vector_z - scalar * vector_y)],
+        [2 * (vector_x * vector_y - scalar * vector_z),
+         1 - 2 * (vector_x**2 + vector_z**2),
+         2 * (vector_y * vector_z + scalar * vector_x)],
+        [2 * (vector_x * vector_z + scalar * vector_y),
+         2 * (vector_y * vector_z - scalar * vector_x),
+         1 - 2 * (vector_x**2 + vector_y**2)],
+    ])
+
+@dataclass(frozen=True)
+class RawVectorSample:
+    kind: str
+    t_meas_s: float
+    t_arrival_s: float
+    data: dict                         # ADIS_GYRO_Typedef or ICM_MAG_Typedef fields
+    valid: bool
+    saturated: bool
+
+    @property
+    def counts(self):
+        return (self.data['X_axis'], self.data['Y_axis'], self.data['Z_axis'])
+
+
+def gyro_register_scale_rad_s(hardware_range_deg_s):
+    """SI rate represented by one ADIS16545 high-word count."""
+    degrees_per_count = {125: 0.00625, 450: 0.025, 2000: 0.1}
+    return math.radians(degrees_per_count[hardware_range_deg_s])
+
+
+def encode_gyro_registers(sensor_rate_rad_s, hardware_range_deg_s):
+    """Match ADIS_READ_GYRO: return the signed high word of each 32-bit output."""
+    scale_rad_s = gyro_register_scale_rad_s(hardware_range_deg_s)
+    registers = {}
+    for axis_name, angular_rate in zip(('X_axis', 'Y_axis', 'Z_axis'), sensor_rate_rad_s):
+        full_register = round(float(angular_rate) / scale_rad_s * 65536)
+        high_word = full_register // 65536
+        registers[axis_name] = max(-32768, min(32767, high_word))
+    return registers
+
+
+def encode_magnetometer_registers(sensor_field_t):
+    """AK09916 signed 16-bit outputs; one count is 0.15 microtesla (150 nT)."""
+    registers = {}
+    for axis_name, magnetic_field_t in zip(('X_axis', 'Y_axis', 'Z_axis'), sensor_field_t):
+        count = round(float(magnetic_field_t) / 150e-9)
+        registers[axis_name] = max(-32768, min(32767, count))
+    return registers
+
+
+
+
+
+
+
+
 
 # ---------------------------------------------------------------------------
 # Measurement dataclasses -- one output of each sensor, units/frames explicit.
@@ -243,9 +277,9 @@ class SimulatedIMU:
         self._units = {}
         for kind, group in (('gyro', config.gyros), ('mag', config.magnetometers)):
             if group:
-                self._units[kind] = [(unit, SimulatedIMU(config.unit_config(kind, unit, i),
+                self._units[kind] = [(unit, SimulatedIMU(config.unit_config(kind, unit, index),
                                       record_history=record_history))
-                                     for i, unit in enumerate(group) if unit.enabled]
+                                     for index, unit in enumerate(group) if unit.enabled]
         self._M_gyro = np.asarray(config.gyro_response_matrix) @ self._M_gyro
         self._M_mag = np.asarray(config.mag_response_matrix) @ self._M_mag
         self._gyro_bias_const += np.asarray(config.gyro_fixed_bias_rad_s)
@@ -261,17 +295,17 @@ class SimulatedIMU:
         spacecraft axes and the scale can be slightly off. Drawn from this
         IMU's own rng so it is deterministic for a given seed.
         """
-        scale = 1.0 + np.array([white_noise(self.rng, scale_error) if scale_error > 0 else 0.0
+        measurement_scale = 1.0 + np.array([white_noise(self.rng, scale_error) if scale_error > 0 else 0.0
                                 for _ in range(3)])
-        M = np.diag(scale)
+        response_matrix = np.diag(measurement_scale)
         if misalignment_rad > 0.0:
-            M[0, 1] = white_noise(self.rng, misalignment_rad)
-            M[0, 2] = white_noise(self.rng, misalignment_rad)
-            M[1, 0] = white_noise(self.rng, misalignment_rad)
-            M[1, 2] = white_noise(self.rng, misalignment_rad)
-            M[2, 0] = white_noise(self.rng, misalignment_rad)
-            M[2, 1] = white_noise(self.rng, misalignment_rad)
-        return M
+            response_matrix[0, 1] = white_noise(self.rng, misalignment_rad)
+            response_matrix[0, 2] = white_noise(self.rng, misalignment_rad)
+            response_matrix[1, 0] = white_noise(self.rng, misalignment_rad)
+            response_matrix[1, 2] = white_noise(self.rng, misalignment_rad)
+            response_matrix[2, 0] = white_noise(self.rng, misalignment_rad)
+            response_matrix[2, 1] = white_noise(self.rng, misalignment_rad)
+        return response_matrix
 
 # ---- internal helpers ----------------------------------------------------
     def _sample_truth_at(self, t_meas_s):
@@ -281,19 +315,19 @@ class SimulatedIMU:
         changes negligibly over 0.001-0.25 s."""
         times = [h[0] for h in self._history]
         if t_meas_s <= times[0] or len(times) < 2:
-            t0, q0, o0, b0 = self._history[0]
-            return t0, q0, o0, b0
+            earlier_time_s, earlier_quaternion, earlier_rate, earlier_field = self._history[0]
+            return earlier_time_s, earlier_quaternion, earlier_rate, earlier_field
         from bisect import bisect_right
-        j = bisect_right(times, t_meas_s) - 1
-        j = min(max(j, 0), len(times) - 2)
-        t0, q0, o0, b0 = self._history[j]
-        t1, q1, o1, b1 = self._history[j + 1]
-        if np.dot(q0, q1) < 0:
-            q1 = -q1
-        w = (t_meas_s - t0) / (t1 - t0) if t1 > t0 else 0.0
-        q = q0 + w * (q1 - q0)
-        q /= np.linalg.norm(q)
-        return (t_meas_s, q, o0 + w * (o1 - o0), b0 + w * (b1 - b0))
+        history_index = bisect_right(times, t_meas_s) - 1
+        history_index = min(max(history_index, 0), len(times) - 2)
+        earlier_time_s, earlier_quaternion, earlier_rate, earlier_field = self._history[history_index]
+        later_time_s, later_quaternion, later_rate, later_field = self._history[history_index + 1]
+        if np.dot(earlier_quaternion, later_quaternion) < 0:
+            later_quaternion = -later_quaternion
+        interpolation_fraction = (t_meas_s - earlier_time_s) / (later_time_s - earlier_time_s) if later_time_s > earlier_time_s else 0.0
+        quaternion = earlier_quaternion + interpolation_fraction * (later_quaternion - earlier_quaternion)
+        quaternion /= np.linalg.norm(quaternion)
+        return (t_meas_s, quaternion, earlier_rate + interpolation_fraction * (later_rate - earlier_rate), earlier_field + interpolation_fraction * (later_field - earlier_field))
 
     @staticmethod
     def _latency_draw(rng, mean, sigma, lo, hi):
@@ -304,70 +338,65 @@ class SimulatedIMU:
     def update(self, t_seconds, q_truth, omega_truth, B_eci_truth,
                sun_eci_truth=None, eclipse_fraction=1.0, position_eci=None,
                raw_output=False):
-        """Feed ONE loop tick of TRUE state. Returns
-        (gyro, mag, sun) where each is a Measurement or None (that sensor did
-        not tick this update) and a returned measurement with valid=False
-        means a dropped (invalid) sample.
+        """Sample sensors from supplied truth; rate is rad/s and field tesla."""
+        time_s = float(t_seconds)
+        quaternion = np.asarray(q_truth, dtype=float).reshape(4)
+        angular_rate_rad_s = np.asarray(omega_truth, dtype=float).reshape(3)
+        field_eci_t = np.asarray(B_eci_truth, dtype=float).reshape(3)
+        self._advance_sensor_clock(time_s, quaternion, angular_rate_rad_s, field_eci_t)
+        gyro = self._sample_vector_sensor('gyro', time_s, quaternion,
+                                          angular_rate_rad_s, field_eci_t, raw_output)
+        magnetometer = self._sample_vector_sensor('mag', time_s, quaternion,
+                                                  angular_rate_rad_s, field_eci_t, raw_output)
+        sun = self._sample_sun_sensor(time_s, quaternion, sun_eci_truth,
+                                      eclipse_fraction, position_eci, raw_output)
+        return gyro, magnetometer, sun
 
-        Truth is passed IN: q_truth = scalar-first body->ECI quaternion,
-        omega_truth = true body rate (rad/s), B_eci_truth = true Earth field
-        in ECI (Tesla, the repo's engine_bridge convention), sun_eci_truth =
-        true unit Sun direction in ECI (from the GPS clock; None leaves the
-        sun array silent), eclipse_fraction = the engine lighting ratio in
-        [0, 1] (the sun array's penumbra channel), position_eci = true ECI
-        position (the sun array's Earth-albedo channel; None disables it).
-        """
-        cfg = self.cfg
-        t = float(t_seconds)
-        q = np.asarray(q_truth, dtype=float).reshape(4)
-        omega = np.asarray(omega_truth, dtype=float).reshape(3)
-        B_eci = np.asarray(B_eci_truth, dtype=float).reshape(3)
+    def _advance_sensor_clock(self, time_s, quaternion, angular_rate_rad_s, field_eci_t):
+        if self._last_t is not None and time_s <= self._last_t:
+            raise ValueError('IMU sampling time must move forward')
+        elapsed_time_s = 0.0 if self._last_t is None else time_s - self._last_t
+        self._last_t = time_s
+        self._history.append((time_s, quaternion.copy(), angular_rate_rad_s.copy(), field_eci_t.copy()))
+        for drift_models in (self._gyro_wander, self._mag_disturb_wander):
+            if drift_models is None:
+                continue
+            for drift_model in drift_models:
+                drift_model.advance(elapsed_time_s, self.rng)
 
-        if self._last_t is not None and t <= self._last_t:
-            raise ValueError(
-                f"SimulatedIMU.update received t={t} but the previous call was "
-                f"t={self._last_t}. Time must move forward.")
+    def _sample_vector_sensor(self, sensor_kind, time_s, quaternion,
+                              angular_rate_rad_s, field_eci_t, raw_output):
+        enabled = self.cfg.enable_gyro if sensor_kind == 'gyro' else self.cfg.enable_magnetometer
+        if sensor_kind not in self._units:
+            if not enabled:
+                return None
+            if sensor_kind == 'gyro':
+                return self._produce_gyro(time_s, raw_output)
+            return self._produce_mag(time_s, raw_output)
+        if not enabled:
+            return []
+        readings = []
+        for unit, hardware in self._units[sensor_kind]:
+            gyro, magnetic, _ = hardware.update(time_s, quaternion, angular_rate_rad_s,
+                                                field_eci_t, raw_output=raw_output)
+            reading = gyro if sensor_kind == 'gyro' else magnetic
+            readings.append((unit, reading))
+        return readings
 
-        dt = 0.0 if self._last_t is None else t - self._last_t
-        self._last_t = t
-        self._history.append((t, q.copy(), omega.copy(), B_eci.copy()))
+    def _sample_sun_sensor(self, time_s, quaternion, sun_direction_eci,
+                           lighting_ratio, position_eci_m, raw_output):
+        if self._sun_array is None or sun_direction_eci is None:
+            return None
+        if raw_output:
+            reading = self._sun_array.get_raw_data(time_s, quaternion, sun_direction_eci,
+                                                   lighting_ratio, position_eci_m)
+        else:
+            reading = self._sun_array.update(time_s, quaternion, sun_direction_eci,
+                                             lighting_ratio, position_eci_m)
+        if reading is not None:
+            self.sun_samples += 1
+        return reading
 
-        # advance the slowly-wandering states by this tick's duration
-        if self._gyro_wander is not None:
-            for gm in self._gyro_wander:
-                gm.advance(dt, self.rng)
-        if self._mag_disturb_wander is not None:
-            for gm in self._mag_disturb_wander:
-                gm.advance(dt, self.rng)
-
-        gyro = self._produce_gyro(t, raw_output) if cfg.enable_gyro and not cfg.gyros else None
-        mag = self._produce_mag(t, raw_output) if cfg.enable_magnetometer and not cfg.magnetometers else None
-        for kind, enabled in (('gyro', cfg.enable_gyro), ('mag', cfg.enable_magnetometer)):
-            if kind in self._units:
-                receipts = []
-                if enabled:
-                    for unit, hardware in self._units[kind]:
-                        g, m, _ = hardware.update(t, q, omega, B_eci, raw_output=raw_output)
-                        receipt = g if kind == 'gyro' else m
-                        receipts.append((unit, receipt))
-                if kind == 'gyro':
-                    gyro = receipts
-                else:
-                    mag = receipts
-        # The sun array runs on its OWN grid with its OWN truth history: hand
-        # it this tick's truth (None sun direction = array stays silent). The
-        # returned receipt is a SunArrayMeasurement (or None off-grid).
-        sun = None
-        if self._sun_array is not None and sun_eci_truth is not None:
-            if raw_output:
-                sun = self._sun_array.get_raw_data(t, q, sun_eci_truth,
-                                                   eclipse_fraction, position_eci)
-            else:
-                sun = self._sun_array.update(t, q, sun_eci_truth, eclipse_fraction,
-                                             position_eci)
-            if sun is not None:
-                self.sun_samples += 1
-        return gyro, mag, sun
 
     def get_raw_data(self, t_seconds=None, q_truth=None, omega_truth=None,
                      B_eci_truth=None, sun_eci_truth=None, eclipse_fraction=1.0,
@@ -400,112 +429,122 @@ class SimulatedIMU:
         """1 Hz-style grid check for one sensor: returns (k, t_grid) on a new
         boundary, else None. The boundary is consumed even on dropout so a
         dropped sample is never retried."""
-        k = math.floor(t / period + 1e-9)
-        if k <= last_k:
+        sample_index = math.floor(t / period + 1e-9)
+        if sample_index <= last_k:
             return None
-        return k, k * period
+        return sample_index, sample_index * period
 
     def _produce_gyro(self, t, raw_output=False):
         """Build one gyro sample on the gyro's own grid (None off-grid)."""
-        cfg = self.cfg
-        period = 1.0 / cfg.gyro_update_rate_hz
+        configuration = self.cfg
+        period = 1.0 / configuration.gyro_update_rate_hz
         grid = self._on_grid(t, period, self._gyro_last_k)
         if grid is None:
             return None
-        k, t_grid = grid
-        self._gyro_last_k = k
+        sample_index, sample_time_s = grid
+        self._gyro_last_k = sample_index
         self.gyro_samples += 1
 
         # latency: the sample describes the motion a few ms ago
-        tau = self._latency_draw(self.rng, cfg.gyro_latency_mean_s,
-                                 cfg.gyro_latency_sigma_s,
-                                 cfg.gyro_latency_min_s, cfg.gyro_latency_max_s)
-        t_meas, _, omega_true, _ = self._sample_truth_at(t_grid - tau)
+        latency_s = self._latency_draw(self.rng, configuration.gyro_latency_mean_s,
+                                 configuration.gyro_latency_sigma_s,
+                                 configuration.gyro_latency_min_s, configuration.gyro_latency_max_s)
+        measurement_time_s, _, omega_true, _ = self._sample_truth_at(sample_time_s - latency_s)
 
-        wander = (np.array([gm.value for gm in self._gyro_wander])
+        drifting_bias = (np.array([drift_model.value for drift_model in self._gyro_wander])
                   if self._gyro_wander is not None else np.zeros(3))
-        bias = self._gyro_bias_const + wander
-        noise = np.array([white_noise(self.rng, cfg.gyro_white_noise_sigma_rad_s)
+        measurement_bias = self._gyro_bias_const + drifting_bias
+        measurement_noise = np.array([white_noise(self.rng, configuration.gyro_white_noise_sigma_rad_s)
                           for _ in range(3)])
-        raw = self._M_gyro @ (self._gyro_mount.T @ omega_true) + bias + noise
-        saturated = bool(np.any(np.abs(raw) > cfg.gyro_range_rad_s))
-        omega_meas = np.clip(raw, -cfg.gyro_range_rad_s, cfg.gyro_range_rad_s)
-        if cfg.gyro_quantization_rad_s > 0.0:
-            omega_meas = np.round(omega_meas / cfg.gyro_quantization_rad_s) * cfg.gyro_quantization_rad_s
-        valid = not (cfg.gyro_dropout_probability > 0.0
-                     and self.rng.random() < cfg.gyro_dropout_probability)
+        unclipped_measurement = self._M_gyro @ (self._gyro_mount.T @ omega_true) + measurement_bias + measurement_noise
+        measurement_range_rad_s = configuration.gyro_range_rad_s
+        if raw_output:
+            measurement_range_rad_s = math.radians(configuration.gyro_hardware_range_deg_s)
+        saturated = bool(np.any(np.abs(unclipped_measurement) > measurement_range_rad_s))
+        omega_meas = np.clip(unclipped_measurement, -measurement_range_rad_s, measurement_range_rad_s)
+        if configuration.gyro_quantization_rad_s > 0.0:
+            omega_meas = np.round(omega_meas / configuration.gyro_quantization_rad_s) * configuration.gyro_quantization_rad_s
+        valid = not (configuration.gyro_dropout_probability > 0.0
+                     and self.rng.random() < configuration.gyro_dropout_probability)
 
         if raw_output:
-            limit = 2**(cfg.gyro_adc_bits - 1) - 1
-            counts = np.clip(np.rint(omega_meas / cfg.gyro_range_rad_s * limit), -limit, limit).astype(int)
-            return RawVectorSample('gyro', t_meas, t_grid, tuple(map(int, counts)), valid, saturated)
+            hardware_limit_rad_s = math.radians(configuration.gyro_hardware_range_deg_s)
+            saturated = saturated or bool(np.any(np.abs(omega_meas) > hardware_limit_rad_s))
+            sensor_rate_rad_s = np.clip(omega_meas, -hardware_limit_rad_s, hardware_limit_rad_s)
+            registers = encode_gyro_registers(sensor_rate_rad_s, configuration.gyro_hardware_range_deg_s)
+            return RawVectorSample('gyro', measurement_time_s, sample_time_s, registers, valid, saturated)
 
         omega_meas = self._gyro_mount @ omega_meas
         meas = GyroMeasurement(
-            t_meas_s=t_meas, t_arrival_s=t_grid, omega_body_rad_s=omega_meas,
-            bias_rad_s=bias, wander_rad_s=wander, white_noise_rad_s=noise,
+            t_meas_s=measurement_time_s, t_arrival_s=sample_time_s, omega_body_rad_s=omega_meas,
+            bias_rad_s=measurement_bias, wander_rad_s=drifting_bias, white_noise_rad_s=measurement_noise,
             saturated=saturated, valid=valid)
         self._last_gyro_rec = {
-            "t_meas": t_meas, "t_arrival": t_grid,
+            "t_meas": measurement_time_s, "t_arrival": sample_time_s,
             "truth": np.asarray(omega_true), "meas": np.asarray(omega_meas),
-            "bias": np.asarray(bias), "wander": np.asarray(wander),
-            "noise": np.asarray(noise), "valid": valid, "saturated": saturated}
+            "bias": np.asarray(measurement_bias), "wander": np.asarray(drifting_bias),
+            "noise": np.asarray(measurement_noise), "valid": valid, "saturated": saturated}
         self.records.append(("gyro", self._last_gyro_rec))
         return meas
 
     def _produce_mag(self, t, raw_output=False):
         """Build one magnetometer sample on the magnetometer's own grid."""
-        cfg = self.cfg
-        period = 1.0 / cfg.mag_update_rate_hz
+        configuration = self.cfg
+        period = 1.0 / configuration.mag_update_rate_hz
         grid = self._on_grid(t, period, self._mag_last_k)
         if grid is None:
             return None
-        k, t_grid = grid
-        self._mag_last_k = k
+        sample_index, sample_time_s = grid
+        self._mag_last_k = sample_index
         self.mag_samples += 1
 
-        tau = self._latency_draw(self.rng, cfg.mag_latency_mean_s,
-                                 cfg.mag_latency_sigma_s,
-                                 cfg.mag_latency_min_s, cfg.mag_latency_max_s)
-        t_meas, q_meas, _, B_eci_meas = self._sample_truth_at(t_grid - tau)
+        latency_s = self._latency_draw(self.rng, configuration.mag_latency_mean_s,
+                                 configuration.mag_latency_sigma_s,
+                                 configuration.mag_latency_min_s, configuration.mag_latency_max_s)
+        measurement_time_s, q_meas, _, B_eci_meas = self._sample_truth_at(sample_time_s - latency_s)
 
         # TRUE field in the body frame, using the repo's own convention:
         #     B_body = C_bi.T @ B_eci   (C_bi = body->ECI from the quaternion)
         B_true_body = _dcm_bi_from_q(q_meas).T @ B_eci_meas
 
-        disturbance = (np.array([gm.value for gm in self._mag_disturb_wander])
+        disturbance = (np.array([drift_model.value for drift_model in self._mag_disturb_wander])
                        if self._mag_disturb_wander is not None else np.zeros(3))
         disturbance = disturbance + self._mag_disturb_fixed
-        noise = np.array([white_noise(self.rng, cfg.mag_white_noise_sigma_t)
+        measurement_noise = np.array([white_noise(self.rng, configuration.mag_white_noise_sigma_t)
                           for _ in range(3)])
-        local_field = B_true_body + np.asarray(cfg.mag_gradient_body_t_per_m) @ np.asarray(cfg.mag_position_body_m)
-        raw = (self._M_mag @ (self._mag_mount.T @ (local_field + disturbance))
-               + self._mag_hard_iron + noise)
-        saturated = bool(np.any(np.abs(raw) > cfg.mag_range_t))
-        B_meas = np.clip(raw, -cfg.mag_range_t, cfg.mag_range_t)
-        if cfg.mag_quantization_t > 0.0:
-            B_meas = np.round(B_meas / cfg.mag_quantization_t) * cfg.mag_quantization_t
-        valid = not (cfg.mag_dropout_probability > 0.0
-                     and self.rng.random() < cfg.mag_dropout_probability)
+        local_field = B_true_body + np.asarray(configuration.mag_gradient_body_t_per_m) @ np.asarray(configuration.mag_position_body_m)
+        unclipped_measurement = (self._M_mag @ (self._mag_mount.T @ (local_field + disturbance))
+               + self._mag_hard_iron + measurement_noise)
+        measurement_range_t = 4900e-6 if raw_output else configuration.mag_range_t
+        saturated = bool(np.any(np.abs(unclipped_measurement) > measurement_range_t))
+        B_meas = np.clip(unclipped_measurement, -measurement_range_t, measurement_range_t)
+        if configuration.mag_quantization_t > 0.0:
+            B_meas = np.round(B_meas / configuration.mag_quantization_t) * configuration.mag_quantization_t
+        valid = not (configuration.mag_dropout_probability > 0.0
+                     and self.rng.random() < configuration.mag_dropout_probability)
 
         if raw_output:
-            limit = 2**(cfg.mag_adc_bits - 1) - 1
-            counts = np.clip(np.rint(B_meas / cfg.mag_range_t * limit), -limit, limit).astype(int)
-            return RawVectorSample('mag', t_meas, t_grid, tuple(map(int, counts)), valid, saturated)
+            hardware_limit_t = 4900e-6
+            saturated = saturated or bool(np.any(np.abs(B_meas) > hardware_limit_t))
+            sensor_field_t = np.clip(B_meas, -hardware_limit_t, hardware_limit_t)
+            registers = encode_magnetometer_registers(sensor_field_t)
+            return RawVectorSample('mag', measurement_time_s, sample_time_s, registers, valid, saturated)
 
         B_meas = self._mag_mount @ B_meas
         meas = MagnetometerMeasurement(
-            t_meas_s=t_meas, t_arrival_s=t_grid, magnetic_field_body_t=B_meas,
+            t_meas_s=measurement_time_s, t_arrival_s=sample_time_s, magnetic_field_body_t=B_meas,
             hard_iron_bias_t=self._mag_hard_iron, disturbance_body_t=disturbance,
-            white_noise_t=noise, saturated=saturated, valid=valid)
+            white_noise_t=measurement_noise, saturated=saturated, valid=valid)
         self._last_mag_rec = {
-            "t_meas": t_meas, "t_arrival": t_grid,
+            "t_meas": measurement_time_s, "t_arrival": sample_time_s,
             "truth": np.asarray(B_true_body), "meas": np.asarray(B_meas),
             "hard_iron": np.asarray(self._mag_hard_iron),
-            "disturbance": np.asarray(disturbance), "noise": np.asarray(noise),
+            "disturbance": np.asarray(disturbance), "noise": np.asarray(measurement_noise),
             "valid": valid, "saturated": saturated}
         self.records.append(("mag", self._last_mag_rec))
         return meas
+
+
 
 # ---------------------------------------------------------------------------
 # Shared: load the real truth sources the demo/validation use.
@@ -991,6 +1030,23 @@ def run_validation() -> int:
             print(f"   FAILED: [{stage}] {name}: {detail}", flush=True)
     return 0 if n_fail == 0 else 1
 
+
+
+def sensor_layout(configuration):
+    """Read-only sensor positions in metres for operator displays."""
+    layout = []
+    for cell in configuration.sun_array.cells:
+        layout.append(dict(name=cell.name, kind='Sun',
+            position=list(cell.position_body_m), normal=list(cell.normal_body),
+            fov=cell.fov_half_angle_deg))
+    for sensor_kind, label in [('gyro', 'Gyro'), ('mag', 'Mag')]:
+        for unit in configuration.sensor_units(sensor_kind):
+            position = unit.position_body_m
+            if position is None:
+                position = getattr(configuration, sensor_kind + '_position_body_m')
+            layout.append(dict(name=unit.name, kind=label,
+                position=list(position), enabled=unit.enabled))
+    return layout
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].lower().startswith("valid"):

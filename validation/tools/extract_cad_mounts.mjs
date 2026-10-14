@@ -1,9 +1,9 @@
 /* Read CAD planar mounting directions from compressed or raw glTF geometry.
    Requires npm install --prefix .tools/gltf @gltf-transform/cli.
    Face geometry establishes mechanical axes; calibration remains separate. */
-import {NodeIO} from '../.tools/gltf/node_modules/@gltf-transform/core/dist/index.js';
-import {ALL_EXTENSIONS} from '../.tools/gltf/node_modules/@gltf-transform/extensions/dist/index.js';
-import {MeshoptDecoder} from '../.tools/gltf/node_modules/meshoptimizer/index.js';
+import {NodeIO} from '../../.tools/gltf/node_modules/@gltf-transform/core/dist/index.js';
+import {ALL_EXTENSIONS} from '../../.tools/gltf/node_modules/@gltf-transform/extensions/dist/index.js';
+import {MeshoptDecoder} from '../../.tools/gltf/node_modules/meshoptimizer/index.js';
 import fs from 'node:fs';
 await MeshoptDecoder.ready;
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({'meshopt.decoder':MeshoptDecoder});

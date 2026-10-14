@@ -2,7 +2,7 @@
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
 pointing:
-  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
+  strategy: firmware_sitl          # legacy | custom | firmware_sitl (external UDP actuators)
   legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
   # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
   # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
@@ -18,11 +18,11 @@ pointing:
 # nominal resets those channels to nominal defaults. Geometry/seeds are retained.
 # Per-unit overrides take precedence; sun profile is independent of IMU.
 sensor_profiles:
-  gps: custom
-  imu: custom        # Shared gyro/magnetometer baseline
-  gyroscope: custom  # Optional independent override of the IMU profile
-  magnetometer: custom
-  sun_array: custom
+  gps: perfect
+  imu: perfect        # Shared gyro/magnetometer baseline
+  gyroscope: perfect  # Optional independent override of the IMU profile
+  magnetometer: perfect
+  sun_array: perfect
 
 # P-30XL simulation configuration. Units are included in field names.
 # =============================================================================
@@ -215,11 +215,11 @@ geometry:
 # =============================================================================
 # REACTION WHEELS
 # =============================================================================
-# Four-wheel pyramid with a 35 degree cant. axis_matrix_body is 3x4: each
-# column is one wheel spin axis expressed in the body frame.
+# Four-wheel pyramid with a 35 degree cant. The legacy matrix below was defined
+# in wheel-assembly coordinates. The mounting drawing rotates it into body axes.
 reaction_wheels:
   count: 4
-  axis_matrix_body:
+  axis_matrix_assembly:
     - [0.5792279653395692, -0.5792279653395692, -0.5792279653395692, 0.5792279653395692]
     - [0.5792279653395692, 0.5792279653395692, -0.5792279653395692, -0.5792279653395692]
     - [0.573576436351046, 0.573576436351046, 0.573576436351046, 0.573576436351046]
@@ -234,7 +234,7 @@ reaction_wheels:
 simulation:
   default_duration_s: 100000.0            # ASSUMPTION: launcher demo duration
   telemetry_publish_period_s: 0.25         # Viewer/telemetry update period
-  speed: 10.0                              # Simulated seconds per real second; finite and > 0
+  speed: 10.0                              # Simulated seconds per real second; no upper limit (e.g. 100). CPU limits actual speed.
   realtime: true                          # Deprecated compatibility field; speed controls pacing
   attitude_integrator_abs_tolerance: 1.0e-06
   attitude_integrator_rel_tolerance: 0.0001
@@ -417,14 +417,14 @@ imu_sim:
   gyro_wander_tau_s: 100.0                  # Wander memory/time constant
   gyro_scale_error: 0.001                   # Per-axis relative gain error (0.1%)
   gyro_misalignment_rad: 0.001              # Cross-axis coupling (0.057 deg)
-  gyro_range_rad_s: 4.36                    # Measurement range: +/-250 deg/s
+  gyro_range_rad_s: 4.36                    # Legacy update() range; raw uses ADIS variant
   gyro_dropout_probability: 0.0             # Chance a scheduled receipt is absent
   gyro_latency_mean_s: 0.005                # Typical measurement staleness (5 ms)
   gyro_latency_sigma_s: 0.001
   gyro_latency_min_s: 0.001
   gyro_latency_max_s: 0.02
   gyro_quantization_rad_s: 0.0              # ADC step; zero disables quantization
-  gyro_adc_bits: 16                        # Signed sensor-axis output registers
+  gyro_hardware_range_deg_s: 125           # ADIS16545 variant: 125, 450, or 2000 deg/s
   # Exact deterministic chip response and bias, separate from random errors.
   gyro_response_matrix:
     - [1.0, 0.0, 0.0]
@@ -444,14 +444,13 @@ imu_sim:
     [1.0e-07, -5.0e-08, 2.5e-08]            # Fixed spacecraft field in body frame
   mag_disturbance_wander_sigma_t: 2.0e-08   # Slow spacecraft-field variation (20 nT)
   mag_disturbance_wander_tau_s: 200.0       # Disturbance time constant
-  mag_range_t: 0.001                        # Measurement range: +/-1000 uT
+  mag_range_t: 0.001                        # Legacy update() range; raw AK09916 uses +/-4900 uT
   mag_dropout_probability: 0.0              # Chance a scheduled receipt is absent
   mag_latency_mean_s: 0.01                  # Typical staleness (10 ms)
   mag_latency_sigma_s: 0.002
   mag_latency_min_s: 0.002
   mag_latency_max_s: 0.05
   mag_quantization_t: 0.0                   # ADC step; zero disables quantization
-  mag_adc_bits: 16                         # Signed sensor-axis output registers
   # Exact deterministic chip response and bias, separate from random errors.
   mag_response_matrix:
     - [1.0, 0.0, 0.0]
@@ -475,6 +474,18 @@ imu_sim:
   # the second independent reference direction.
   enable_sun_sensor: true                    # Array is physically present
   sun_array:
+    # FSS field layout matches firmware. These calibration values are
+    # engineering assumptions until the fine sun sensor ICD is identified.
+    fine_fov_half_angle_rad: 0.6108652381980153  # 35 degrees in radians
+    fine_aperture_distance_m: 0.001
+    fine_coordinate_counts_per_m: 1000000.0
+    fine_vector_scale_counts: 10000
+    fine_total_signal_counts: 10000
+    fine_quadrant_max_counts: 10000
+    fine_eclipse_threshold_counts: 250
+    fine_temperature_k: 298.15              # Configured internal sensor temperature
+    fine_temperature_zero_k: 273.15
+    fine_temperature_counts_per_k: 100.0
     enabled: true                            # Array master switch
     seed: 42                                 # All CSS randomness flows from this seed
     update_rate_hz: 10.0                     # Equals current 0.1 s ADCS loop
@@ -628,10 +639,9 @@ viewer:
   earth_night_floor: 0.015 # Minimum terrain visibility; keep small for dark nights
 
 # =============================================================================
-# VIEWER-SAVED SENSOR MOUNTING OVERRIDES
+# BACKEND SENSOR MOUNTING OVERRIDES
 # =============================================================================
-# The mounting editor rewrites only this final mapping. Each entry is keyed by
-# sensor name and may contain position, normal, and fov. Keep this section last
-# so saving mounts never rewrites or removes the documentation above.
+# Optional overrides keyed by sensor name: position (m), normal, and fov (deg).
+# Edit this mapping in the backend configuration; restart to apply changes.
 imu_mount_defaults: {}
 

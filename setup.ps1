@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 #  setup.ps1 - ADCS Simulator - one-click setup (v8)
 #  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
 #
@@ -259,8 +259,8 @@ public static class AdcsSetupConsole {
     if(!active) return;
     Write(success?"  [+] Setup complete. Start your simulation in VS Code.":"  [!] UI missing: re-run Setup.bat -ReuseVenv with internet.",success?ConsoleColor.Green:ConsoleColor.Yellow,true);
     Write("  1. Open this folder in VS Code.",ConsoleColor.White,true);
-    Write("  2. Open a new terminal (the .venv activates).",ConsoleColor.Gray,true);
-    Write("  3. python run_simulator.py",ConsoleColor.Cyan,true);
+    Write("  2. Open a terminal in the project folder.",ConsoleColor.Gray,true);
+    Write("  3. .venv/Scripts/python.exe run_simulator.py",ConsoleColor.Cyan,true);
     Write("  4. http://127.0.0.1:5000 / Ctrl+C to stop",ConsoleColor.Magenta,true);
   }
   public static void Shutdown() {
@@ -711,29 +711,8 @@ if (-not (Test-Path (Join-Path $jdkHome 'bin\server\jvm.dll'))) { Fail "jvm.dll 
 Log "  JAVA_HOME=$env:JAVA_HOME"
 Ok "jvm.dll present: $jdkHome\bin\server\jvm.dll (run_simulator.py sets this itself too - no terminal setup needed)"
 
- $vsDir = Join-Path $Root '.vscode'; New-Item -ItemType Directory -Force -Path $vsDir | Out-Null
- $settingsPath = Join-Path $vsDir 'settings.json'
- $settings = [ordered]@{}
-if (Test-Path $settingsPath) {
-  $raw = Get-Content $settingsPath -Raw
-  $raw = $raw.TrimStart([char]0xFEFF)
-  $parsed = $null
-  try { $parsed = $raw | ConvertFrom-Json } catch {}
-  if (-not $parsed) {
-    $stripped = ($raw -replace '/\*[\s\S]*?\*/','') -replace '(?m)^\s*//.*$',''
-    $stripped = $stripped -replace ',\s*([\]}])', '$1'
-    try { $parsed = $stripped | ConvertFrom-Json } catch {}
-  }
-  if ($parsed) { $parsed.PSObject.Properties | ForEach-Object { $settings[$_.Name] = $_.Value } }
-  else { Copy-Item $settingsPath "$settingsPath.bak" -Force; Warn 'existing .vscode/settings.json unreadable (JSONC?) - backed up, writing ours' }
-}
- $settings['python.defaultInterpreterPath'] = $VenvPy
- $settings['python.terminal.activateEnvironment'] = $true
-($settings | ConvertTo-Json -Depth 6) | Out-File -FilePath $settingsPath -Encoding utf8
-Ok 'VS Code pinned: opening a terminal there auto-activates this .venv'
-
  $gi = Join-Path $Root '.gitignore'
- $want = @('tools/','setup.log','sim-boot.*.log','sim-run.log','.env','run_simulator.py.orig')
+ $want = @('/tools/','setup.log','sim-boot.*.log','sim-run.log','.env','run_simulator.py.orig')
  $cur = if (Test-Path $gi) { Get-Content $gi } else { @() }
  $add = $want | Where-Object { $cur -notcontains $_ }
 if ($add) { Add-Content -Path $gi -Value ''; Add-Content -Path $gi -Value '# auto-added by setup.ps1'; $add | ForEach-Object { Add-Content -Path $gi -Value $_ }; Ok ".gitignore updated (added: $($add -join ', '))" }
@@ -925,15 +904,14 @@ if ($up) {
   Write-MissionText ' Re-run WITH internet:  Setup.bat -ReuseVenv   (auto-fetches Node + builds)' -ForegroundColor White
 }
 Write-MissionText ''
-Write-MissionText ' HOW EVERYONE RUNS THE SIM FROM NOW ON (VS Code, as usual):' -ForegroundColor Cyan
+Write-MissionText ' HOW TO RUN THE SIM:' -ForegroundColor Cyan
 Write-MissionText '   1. Open VS Code > File > Open Folder > this folder' -ForegroundColor White
-Write-MissionText '      (if it asks to use the existing virtual environment -> Yes)' -ForegroundColor Gray
-Write-MissionText '   2. Open a NEW terminal (Ctrl+`)  - the .venv activates itself' -ForegroundColor White
-Write-MissionText '   3. python run_simulator.py' -ForegroundColor White
+Write-MissionText '   2. Open a terminal in the project folder' -ForegroundColor White
+Write-MissionText '   3. .venv/Scripts/python.exe run_simulator.py' -ForegroundColor White
 Write-MissionText '   4. open http://127.0.0.1:5000   (Ctrl+C in the terminal stops it)' -ForegroundColor White
 Write-MissionText ' ONE instance at a time - starting a second prints a friendly' -ForegroundColor Gray
 Write-MissionText ' message instead of a port error (shield v2 handles it).' -ForegroundColor Gray
-Write-MissionText ' Viewer-only, no Java:  python app.py' -ForegroundColor Gray
+Write-MissionText ' Viewer-only, no Java:  .venv/Scripts/python.exe app.py' -ForegroundColor Gray
 Write-MissionText " Full log: $LogFile   Boot log: $BootOut / $BootErr" -ForegroundColor Gray
 if ('AdcsSetupConsole' -as [type]) { [AdcsSetupConsole]::Complete([bool]$up) }
 } finally {

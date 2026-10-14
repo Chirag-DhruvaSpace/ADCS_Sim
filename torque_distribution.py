@@ -1,5 +1,22 @@
 import numpy as np
 
+ASSEMBLY_TO_BODY = np.array([
+    [0.0, 0.0, 1.0],
+    [0.0, -1.0, 0.0],
+    [1.0, 0.0, 0.0],
+])
+
+def assembly_to_body(vector_assembly):
+    """Express an assembly-frame torque, momentum, or direction in body axes."""
+    vector_assembly = np.asarray(vector_assembly, dtype=float)
+    return ASSEMBLY_TO_BODY @ vector_assembly
+
+def body_to_assembly(vector_body):
+    """Express a body-frame vector in the wheel assembly's axes."""
+    vector_body = np.asarray(vector_body, dtype=float)
+    return ASSEMBLY_TO_BODY.T @ vector_body
+
+
 # NEW import: integrate_wheel_momentum() (below) integrates store.rw_torques
 # -- the per-wheel torque the dynamics ACTUALLY applied (written
 # unconditionally on every pass of rotational_equations_of_motion, in every
@@ -7,7 +24,6 @@ import numpy as np
 # DETUMBLE/POINTING). store.py imports nothing but numpy, so this adds no
 # import cycle.
 import store
-import satellite_parameters as config
 import satellite_parameters as config
 
 # Wheel-axis matrix -- hoisted to module level (was rebuilt inside the
@@ -32,7 +48,7 @@ _a2 = np.array([_C*np.cos(np.radians(beta2)), _C*np.sin(np.radians(beta2)), _S])
 _a3 = np.array([_C*np.cos(np.radians(beta3)), _C*np.sin(np.radians(beta3)), _S])
 _a4 = np.array([_C*np.cos(np.radians(beta4)), _C*np.sin(np.radians(beta4)), _S])
 
-A = np.asarray(config.REACTION_WHEELS.axis_matrix_body, dtype=float)
+A = config.REACTION_WHEELS.wheel_axes_body
 A_INV = np.linalg.pinv(A)
 # The four fixed wheel axes have only 15 nonempty free-wheel subsets.
 # Precompute identical SVD solutions once instead of in every saturated RK stage.

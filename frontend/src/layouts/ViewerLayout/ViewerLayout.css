@@ -62,8 +62,6 @@ button:active { transform:scale(.97); }
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible { outline:2px solid var(--ui-accent); outline-offset:3px; }
 #settings-panel input[type=number],#settings-panel select { background:#0b121d; color:#dce8f5; border:1px solid #36485f; border-radius:5px; padding:6px; min-width:0; }
 /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-#settings-panel #mount-apply { width:100%; margin-top:16px; padding:10px; background:#294c70; color:white; border:1px solid #496d92; border-radius:6px; cursor:pointer; }
-#mount-save { width:100%; margin-top:8px; padding:10px; background:transparent; color:#b6cee7; border:1px solid #36485f; border-radius:6px; cursor:pointer; }
 @keyframes panel-enter { from {opacity:0;transform:translateY(6px)} to {opacity:1;transform:translateY(0)} }
 @media(max-width:850px) {
  html,body { overflow:auto; height:auto; }

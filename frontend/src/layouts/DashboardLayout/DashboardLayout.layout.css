@@ -239,8 +239,6 @@
 #settings-panel.mission-settings .set-row input:checked[type=checkbox]::after { transform:translateX(15px); }
 #settings-panel.mission-settings .set-row select { grid-column:2/4;width:100%; }
 #settings-panel.mission-settings .set-row input[type=number] { width:100%; }
-#settings-panel.mission-settings .set-row:has(#mount-position),#settings-panel.mission-settings .set-row:has(#mount-normal) { grid-template-columns:125px minmax(0,1fr); }
-#settings-panel.mission-settings #mount-position,#settings-panel.mission-settings #mount-normal { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;min-width:0; }
 
 .glass-select-menu { scrollbar-width:none;max-height:calc(100dvh - 16px)!important; }
 .glass-select-menu::-webkit-scrollbar { display:none; }

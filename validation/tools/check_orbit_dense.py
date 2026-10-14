@@ -3,7 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 import sys,time
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 import numpy as np
 import satellite_parameters as config
 from engine_adcs_bridge import EngineOrbitProvider

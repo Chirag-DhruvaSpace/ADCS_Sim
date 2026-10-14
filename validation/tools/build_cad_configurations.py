@@ -11,7 +11,7 @@ import numpy as np
 import trimesh
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 REPORTS = {
     'stowed': dict(mass=30.40, com=[-.01682,-.01421,-.12967],
                    tensor=[[1.22157185,-.00845668,.00685571],[-.00845668,.96667654,.01546644],[.00685571,.01546644,1.08575350]],
@@ -88,7 +88,7 @@ def configuration(mode):
     wheels = [p for p in parts if p['name']=='SP_RW060 - RevE _27-11-2024']
     wheel_axes = [p.get('mount_normal_body') for p in wheels]
     if any(axis is None for axis in wheel_axes):
-        raise ValueError('Run node scripts/extract_cad_mounts.mjs first to extract wheel mounting axes')
+        raise ValueError('Run node validation/tools/extract_cad_mounts.mjs first to extract wheel mounting axes')
     # No unambiguous magnetometer chip label: retain the documented assumption.
     bounds = np.array(inventory['bounds_body_m'])
     return dict(

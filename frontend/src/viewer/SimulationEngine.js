@@ -370,9 +370,15 @@ export async function startSimulationEngine(configuration) {
       this.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
       this.mat = new THREE.LineBasicMaterial({
         color: colorHex,
-        toneMapped: false
+        toneMapped: false,
+        transparent: true,
+        // Direction guides must remain visible through the enlarged display model.
+        depthTest: false,
+        depthWrite: false
       });
       this.line = new THREE.Line(this.geo, this.mat);
+      // Draw guides after the model and atmosphere, in the transparent pass.
+      this.line.renderOrder = 1000;
       this.line.frustumCulled = false;
       this.line.visible = false;
     }
@@ -408,11 +414,12 @@ export async function startSimulationEngine(configuration) {
   const homeView = new THREE.Vector3();
   addLabel('We are here \u00b7 Begumpet, Hyderabad', '#a9e9ff', out => out.copy(homeLocation), () => homeView.copy(camLogical).sub(homeLocation).dot(homeNormal) > 0 && camLogical.distanceTo(homeLocation) < 2.0e7);
   const satelliteNameLabel = addLabel('Spacecraft', '#9fe5ff', out => out.copy(satLogical), () => overviewView);
-  const bodyDirPos = (dir, len) => out => out.copy(dir).multiplyScalar(len).applyQuaternion(satGroup.quaternion).add(satLogical);
+  const guideScale = () => Math.max(1, modelHolder.scale.x / 500);
+  const bodyDirPos = (dir, len) => out => out.copy(dir).multiplyScalar(len * guideScale()).applyQuaternion(satGroup.quaternion).add(satLogical);
   const worldDirPos = (dirGetter, len) => out => {
     const d = dirGetter();
     if (!d) return out.set(0, 0, 0);
-    return out.copy(d).normalize().multiplyScalar(len).add(satLogical);
+    return out.copy(d).normalize().multiplyScalar(len * guideScale()).add(satLogical);
   };
   const axes = [];
   let axesVisible = false;
@@ -1336,7 +1343,8 @@ export async function startSimulationEngine(configuration) {
     const moonOn = m === "MOON";
     moonLine.line.visible = moonOn && !!moonDirEcef;
     moonPanelLine.line.visible = moonOn;
-    nadirLine.line.visible = (m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS") && !!nadirDirEcef;
+    const nadirMode = m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS";
+    nadirLine.line.visible = nadirMode && !!nadirDirEcef;
     sweepLine.line.visible = m === "SUN_SWEEP" && !!sweepDirEcef;
   }, updateInterval);
   setInterval(fetchTelemetry, updateInterval);
@@ -1821,6 +1829,16 @@ export async function startSimulationEngine(configuration) {
     // The physically sized model is sub-pixel from overview range; enlarge
     // only its display mesh so the same live spacecraft remains identifiable.
     modelHolder.scale.setScalar(cameraTransition ? flightDisplayScale : overviewView ? clamp(camLogical.distanceTo(satLogical) * .012, 1, 180000) : 1);
+    // In overview the display mesh is enlarged. Keep guides outside that mesh,
+    // without changing any physical coordinates or telemetry directions.
+    const directionGuideScale = guideScale();
+    for (const axis of axes) axis.line.scale.setScalar(directionGuideScale);
+    sunLine.line.scale.setScalar(directionGuideScale);
+    moonLine.line.scale.setScalar(directionGuideScale);
+    nadirLine.line.scale.setScalar(directionGuideScale);
+    sweepLine.line.scale.setScalar(directionGuideScale);
+    panelNormalLine.line.scale.setScalar(directionGuideScale);
+    moonPanelLine.line.scale.setScalar(directionGuideScale);
     paintSensorMarkers();
     const camAlt = camLogical.length() - EARTH_R_MEAN;
     const atmoF = sstep(85000, 150000, camAlt);

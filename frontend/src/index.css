@@ -20,9 +20,6 @@
     #telemetry span { display: block; }
     #tlm-page-sensors span { display: inline; }
     #tlm-page-sensors td, #tlm-page-sensors th { white-space: nowrap; }
-    #mount-position, #mount-normal { display: flex; gap: 3px; }
-    #mount-position input, #mount-normal input { width: 52px; }
-    #mount-fov { width: 70px; }
     /* Telemetry / Sensors tabs share one fixed-size, non-closable box. */
     .tlm-tabs { display: flex; gap: 4px; padding: 8px 10px 0; }
     .tlm-tab {

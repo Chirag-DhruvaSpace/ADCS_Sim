@@ -8,6 +8,19 @@ import satellite_parameters as config
 from spacecraft_surface_physics import SurfaceForceModel, AU_M, PRESSURE_AT_AU_PA, body_to_eci
 
 
+def test_unquoted_off_sensor_profiles_load(tmp_path):
+    import yaml
+    from pathlib import Path
+    basic = yaml.safe_load(Path(config.__file__).with_suffix('.yaml').read_text())
+    basic['use_advanced_satellite_model'] = False
+    basic['sensor_profiles'] = dict.fromkeys(basic['sensor_profiles'], False)
+    source = tmp_path / 'satellite_parameters.yaml'
+    source.write_text(yaml.safe_dump(basic), encoding='utf-8')
+    loaded = config._load_configuration(source)
+    assert not loaded[9].enabled
+    assert not loaded[10].enabled
+
+
 def plate(absorption=1., diffuse=0., specular=0., com=(0,0,0)):
     face = config.SurfaceParameters('plate', 2., (1,0,0), (0,1,0), absorption,diffuse,specular)
     geometry = config.GeometryParameters((face,),com)
@@ -125,3 +138,34 @@ def test_wheel_momentum_redistribution_preserves_body_torque(monkeypatch):
     command = np.array([1e-4, -2e-4, 3e-4])
     wheel_torque = allocator.reaction_wheel_torque_distribution(*command)
     np.testing.assert_allclose(allocator.A @ wheel_torque, command, atol=1e-15)
+
+
+import unittest
+from torque_distribution import ASSEMBLY_TO_BODY, assembly_to_body, body_to_assembly
+configuration = config
+
+class WheelCoordinates(unittest.TestCase):
+    def test_image_basis_directions(self):
+        np.testing.assert_array_equal(assembly_to_body([1,0,0]), [0,0,1])
+        np.testing.assert_array_equal(assembly_to_body([0,1,0]), [0,-1,0])
+        np.testing.assert_array_equal(assembly_to_body([0,0,1]), [1,0,0])
+        np.testing.assert_array_equal(ASSEMBLY_TO_BODY.T @ ASSEMBLY_TO_BODY, np.eye(3))
+        self.assertEqual(np.linalg.det(ASSEMBLY_TO_BODY), 1.0)
+
+    def test_legacy_axes_rotated_and_cad_axes_used_once(self):
+        basic = configuration._load_configuration(use_advanced_satellite_model=False)[7]
+        expected = ASSEMBLY_TO_BODY @ np.asarray(basic.axis_matrix_assembly)
+        np.testing.assert_allclose(basic.wheel_axes_body, expected)
+        for deployed in (True, False):
+            cad = configuration._load_configuration(use_advanced_satellite_model=True, panels_deployed=deployed)[7]
+            np.testing.assert_array_equal(cad.wheel_axes_body, cad.axis_matrix_body)
+        assembly_torque = np.array([.001, -.002, .003])
+        np.testing.assert_allclose(body_to_assembly(assembly_to_body(assembly_torque)), assembly_torque)
+
+    def test_allocator_uses_satellite_axes(self):
+        import torque_distribution as wheels
+        np.testing.assert_allclose(wheels.A, configuration.REACTION_WHEELS.wheel_axes_body)
+        wheels._wheel_momentum[0][:] = 0
+        for commanded_torque in ([1e-5,0,0], [0,1e-5,0], [0,0,1e-5]):
+            motor_torques = wheels.reaction_wheel_torque_distribution(*commanded_torque)
+            np.testing.assert_allclose(wheels.A @ motor_torques, commanded_torque, atol=1e-18)

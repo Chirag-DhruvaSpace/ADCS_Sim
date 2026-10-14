@@ -1,9 +1,10 @@
 """Local fixture server for browser regression checks; no flight commands."""
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import app
-from imu_mount_settings import get_mounts
+from simulateimu import sensor_layout
+from satellite_parameters import IMU_SIM
 import numpy as np
 from engine.astrodynamics.orbit_display import osculating_orbit
 from engine.astrodynamics.constants import EARTH_MU
@@ -14,7 +15,7 @@ m = SimulatedSunSensorArray(SunSensorArrayParameters.perfect()).update(0, [1,0,0
 app.latest_telemetry = dict(timestamp='2026-10-01T15:00:00+00:00', latitude_deg=0,
     longitude_deg=0, altitude_m=500000, yaw_deg=0, pitch_deg=0, roll_deg=0,
     body_rate_x=0, body_rate_y=0, body_rate_z=0, alpha_x=0, alpha_y=0, alpha_z=0,
-    quat_w=1, quat_x=0, quat_y=0, quat_z=0, imu_mounts=get_mounts(),
+    quat_w=1, quat_x=0, quat_y=0, quat_z=0, imu_mounts=sensor_layout(IMU_SIM),
     sun_arr_cells=[dict(name=c.name, output_pct=c.output_pct, adc_counts=c.adc_counts,
         angle_deg=c.angle_deg, used=c.used, in_fov=c.in_fov, shadowed=c.shadowed,
         saturated=c.saturated, eclipse_factor=1, albedo_pct=0) for c in m.cells],

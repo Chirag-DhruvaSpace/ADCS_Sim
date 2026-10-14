@@ -1,4 +1,4 @@
-﻿# Simulated IMU (gyroscope + magnetometer) â€” plain-language guide
+# Simulated IMU (gyroscope + magnetometer) â€” plain-language guide
 
 > The implementation has changed. See [current IMU physics, filtering, mounting and validation notes](validation/IMU_SENSOR_NOTES.md).
 > The older discussion below describes earlier filter behavior and is retained as historical context.
