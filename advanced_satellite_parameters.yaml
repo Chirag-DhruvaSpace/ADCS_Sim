@@ -413,25 +413,34 @@ configurations:
         center_body_m: [7.291542369891602e-12, 0.2203995982522997, -0.18949999999791678]
         half_extents_m: [0.1875000000000085, 0.006360401513883521, 0.14300000000000035]
     sun_array:
+      # Cell order is the FSS slave address (cell k = FSS(k+1), slave 0x11+k);
+      # normal + sensor_roll_rad reproduce the firmware's RelDCM (ADS main.c).
+      # See the sun_array cells note in satellite_parameters.yaml.
       cells:
-      - name: +Z
-        normal_body: [0, 0, 1]
-        position_body_m: [0.03400000000000011, -0.15900000000000641, 0.0017599999999999502]
-      - name: -Z
+      - name: -Z                             # FSS1, slave 0x11
         normal_body: [0, 0, -1]
         position_body_m: [-0.1325, 0.10600000000000019, -0.3417600000000004]
-      - name: +X
-        normal_body: [1, 0, 0]
-        position_body_m: [0.18176000000000073, -0.15899999999999936, -0.2869999999999999]
-      - name: -X
+        sensor_roll_rad: -1.5707963267948966  # -90 deg
+      - name: -X                             # FSS2, slave 0x12
         normal_body: [-1, 0, 0]
         position_body_m: [-0.18175999999999998, -1.0408340855860843e-17, -0.28700000000000014]
-      - name: +Y
+        sensor_roll_rad: 0.0
+      - name: +Y                             # FSS3, slave 0x13, 15 deg to +Z
         normal_body: [-7.365756194850318e-07, 0.9659256482307854, 0.25881970962311673]
         position_body_m: [-0.1325000003682883, 0.2148813965334218, -0.07595755773516752]
-      - name: -Y
+        sensor_roll_rad: 0.0
+      - name: +X                             # FSS4, slave 0x14
+        normal_body: [1, 0, 0]
+        position_body_m: [0.18176000000000073, -0.15899999999999936, -0.2869999999999999]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
+      - name: -Y                             # FSS5, slave 0x15, 15 deg to +Z
         normal_body: [7.365757294839105e-07, -0.9659256482460497, 0.25881970956615014]
         position_body_m: [0.07950000036828749, -0.21488139653343027, -0.0759575577351962]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
+      - name: +Z                             # FSS6, slave 0x16
+        normal_body: [0, 0, 1]
+        position_body_m: [0.03400000000000011, -0.15900000000000641, 0.0017599999999999502]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
     sensor_mounts:
       gyro_position_body_m: [-0.13249999999999956, 2.6081177838359337e-06, -0.3249999999999983]
     reaction_wheels:
@@ -842,25 +851,34 @@ configurations:
         center_body_m: [1.5514992068865752e-11, 0.7015000000015095, -0.3426004017469792]
         half_extents_m: [0.18750000000228223, 0.1430000000030458, 0.006360401513023639]
     sun_array:
+      # Cell order is the FSS slave address (cell k = FSS(k+1), slave 0x11+k);
+      # normal + sensor_roll_rad reproduce the firmware's RelDCM (ADS main.c).
+      # See the sun_array cells note in satellite_parameters.yaml.
       cells:
-      - name: +Z
-        normal_body: [0, 0, 1]
-        position_body_m: [0.03400000000000011, -0.15900000000000641, 0.0017599999999999502]
-      - name: -Z
+      - name: -Z                             # FSS1, slave 0x11
         normal_body: [0, 0, -1]
         position_body_m: [-0.1325, 0.10600000000000019, -0.3417600000000004]
-      - name: +X
-        normal_body: [1, 0, 0]
-        position_body_m: [0.18176000000000073, -0.15899999999999936, -0.2869999999999999]
-      - name: -X
+        sensor_roll_rad: -1.5707963267948966  # -90 deg
+      - name: -X                             # FSS2, slave 0x12
         normal_body: [-1, 0, 0]
         position_body_m: [-0.18175999999999998, -1.0408340855860843e-17, -0.28700000000000014]
-      - name: +Y
+        sensor_roll_rad: 0.0
+      - name: +Y                             # FSS3, slave 0x13, 15 deg to +Z
         normal_body: [-7.365756194850318e-07, 0.9659256482307854, 0.25881970962311673]
         position_body_m: [-0.1325000003682883, 0.2148813965334218, -0.07595755773516752]
-      - name: -Y
+        sensor_roll_rad: 0.0
+      - name: +X                             # FSS4, slave 0x14
+        normal_body: [1, 0, 0]
+        position_body_m: [0.18176000000000073, -0.15899999999999936, -0.2869999999999999]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
+      - name: -Y                             # FSS5, slave 0x15, 15 deg to +Z
         normal_body: [7.365757294839105e-07, -0.9659256482460497, 0.25881970956615014]
         position_body_m: [0.07950000036828749, -0.21488139653343027, -0.0759575577351962]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
+      - name: +Z                             # FSS6, slave 0x16
+        normal_body: [0, 0, 1]
+        position_body_m: [0.03400000000000011, -0.15900000000000641, 0.0017599999999999502]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
     sensor_mounts:
       gyro_position_body_m: [-0.13249999999999956, 2.6081177838359337e-06, -0.3249999999999983]
     reaction_wheels:

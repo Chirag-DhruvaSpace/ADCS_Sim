@@ -775,7 +775,10 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
         rw_t = _firmware_wheels.copy()
         M = _firmware_dipole.copy()
         field = np.asarray(B_eci if truth_field_eci is None else truth_field_eci)
-        tau_actual = td.A @ rw_t + np.cross(M, _dcm_bi_from_q(q).T @ field)
+        # The firmware's dipole acts on the field in ITS body frame: for this
+        # quaternion's kinematics (q_dot = 0.5*Omega(w)*q) _dcm_bi_from_q(q) is
+        # the physical ECI->body matrix, the same one the 5002 uplink uses.
+        tau_actual = td.A @ rw_t + np.cross(M, _dcm_bi_from_q(q) @ field)
         store.mode = 'FIRMWARE_SITL'
     elif not detumbling_complete:
         # Detumble damps the MEASURED rate (omega_ctrl = gyro belief when the

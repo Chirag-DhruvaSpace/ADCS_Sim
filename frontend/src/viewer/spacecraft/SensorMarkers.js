@@ -59,12 +59,16 @@ export function createSensorMarkers({
       mesh.position.copy(mesh.userData.bodyPosition);
       mesh.userData.kind = item.kind;
       const cell = (data.sun_arr_cells || []).find(c => c.name === item.name);
+      // Firmware SITL: "used" is the firmware's verdict on this head's GETTLM
+      // reply (lit and inside +/-35 deg), not the Python reconstruction's.
+      const head = (data.fss_heads || []).find(h => h.cell === item.name);
+      const sunUsed = head ? head.used : !!cell?.used;
       const unit = (data.imu_units?.[item.kind === 'Gyro' ? 'gyro' : 'mag'] || []).find(u => u.name === item.name);
       /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
       const level = item.kind === 'Sun' ? (cell?.output_pct || 0) / 100 : Number(unit ? unit.used : item.kind === 'Gyro' ? data.imu_gyro_valid : data.imu_mag_valid);
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;
-      mesh.userData.active = item.kind === 'Sun' ? !!cell?.used : level > 0;
-      mesh.userData.color = item.kind === 'Sun' ? (cell?.used ? 0xff8800 : 0xffe600) : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
+      mesh.userData.active = item.kind === 'Sun' ? sunUsed : level > 0;
+      mesh.userData.color = item.kind === 'Sun' ? (sunUsed ? 0xff8800 : 0xffe600) : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
     }
     for (const [name, mesh] of sensorMarkers) if (!alive.has(name)) {
       satGroup.remove(mesh);

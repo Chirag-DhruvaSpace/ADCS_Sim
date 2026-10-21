@@ -995,8 +995,10 @@ def _apply_sensor_profile(cfg, profile):
     changes = {name: getattr(preset, name) for name in error_fields}
     if isinstance(cfg, SunSensorArrayParameters):
         base, target = nominal.cells[0], preset.cells[0]
+        # Mounting geometry (incl. the roll about the normal) is not an error channel.
         error_fields = {f.name for f in fields(base)
-                        if f.name not in ('name', 'normal_body', 'position_body_m', 'fov_half_angle_deg')}
+                        if f.name not in ('name', 'normal_body', 'position_body_m', 'fov_half_angle_deg',
+                                          'sensor_roll_rad')}
         changes['cells'] = tuple(replace(c, **{name: getattr(target, name) for name in error_fields})
                                  for c in cfg.cells)
     return replace(cfg, **changes)

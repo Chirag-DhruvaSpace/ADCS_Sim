@@ -84,7 +84,7 @@ orbit:
   eccentricity: 0.0             # ASSUMPTION: circular starting orbit
   raan_deg: 0.0                 # ASSUMPTION: not supplied
   argument_of_perigee_deg: 0.0  # ASSUMPTION: not supplied
-  true_anomaly_deg: 0.0         # ASSUMPTION: not supplied
+  true_anomaly_deg: 180.0         # ASSUMPTION: not supplied
 
 # =============================================================================
 # INITIAL ATTITUDE
@@ -490,11 +490,20 @@ imu_sim:
     seed: 42                                 # All CSS randomness flows from this seed
     update_rate_hz: 10.0                     # Equals current 0.1 s ADCS loop
 
-    # One cell per cube face. Positions lie approximately 0.25 m from the body
-    # center and normals point outward. At 90 deg half-angle, three faces see a
-    # generic Sun direction before thresholding/shadowing. Output is cosine
-    # incidence, not percentage of sky covered. Position offset only affects
-    # ray-based self-shadowing; direction parallax at 1 AU is negligible.
+    # One cell per FSS head. ORDER IS THE SLAVE ADDRESS: cell k is FSS(k+1),
+    # slave 0x11+k, and its normal_body + sensor_roll_rad must reproduce the
+    # firmware's mounting AdsConfigStruct.RelDCM (ADS main.c; FSS1..3 =
+    # RelDCM[0..2], FSS4..6 = RelDCM[6..8]). The firmware is the reference:
+    #   FSS1 -Z  roll -90 deg    FSS4 +X  roll 180 deg
+    #   FSS2 -X  roll   0        FSS5 -Y, 15 deg to +Z, roll 180 deg
+    #   FSS3 +Y, 15 deg to +Z, roll 0    FSS6 +Z  roll 180 deg
+    # sensor_roll_rad turns the head about its normal from the frame
+    # simulatesunsensor.sensor_to_body_matrix() builds with roll 0.
+    # advanced_satellite_parameters.yaml overrides order/normal/position with
+    # the CAD mounts; keep both in step.
+    # Positions lie approximately 0.25 m from the body center. Output is
+    # cosine incidence, not percentage of sky covered. Position offset only
+    # affects ray-based self-shadowing; direction parallax at 1 AU is negligible.
     #
     # Every cell uses the same error-field meanings:
     #   normal_body              outward direction, normalized when used
@@ -508,81 +517,87 @@ imu_sim:
     #   white_noise_sigma        fresh noise per sample
     #   adc_bits                 digitizer depth; must match across all cells
     cells:
-      - name: "+X"
-        normal_body:
-          [1.0, 0.0, 0.0]
-        position_body_m:
-          [0.25, 0.0, 0.0]
-        fov_half_angle_deg: 90.0
-        alignment_error_sigma_deg: 0.1
-        bias_sigma: 0.005
-        drift_sigma: 0.002
-        drift_tau_s: 200.0
-        scale_error_sigma: 0.005
-        nonlinearity_k3_sigma: 0.01
-        white_noise_sigma: 0.003
-        adc_bits: 12
-      - name: "-X"
-        normal_body:
-          [-1.0, 0.0, 0.0]
-        position_body_m:
-          [-0.25, 0.0, 0.0]
-        fov_half_angle_deg: 90.0
-        alignment_error_sigma_deg: 0.1
-        bias_sigma: 0.005
-        drift_sigma: 0.002
-        drift_tau_s: 200.0
-        scale_error_sigma: 0.005
-        nonlinearity_k3_sigma: 0.01
-        white_noise_sigma: 0.003
-        adc_bits: 12
-      - name: "+Y"
-        normal_body:
-          [0.0, 1.0, 0.0]
-        position_body_m:
-          [0.0, 0.25, 0.0]
-        fov_half_angle_deg: 90.0
-        alignment_error_sigma_deg: 0.1
-        bias_sigma: 0.005
-        drift_sigma: 0.002
-        drift_tau_s: 200.0
-        scale_error_sigma: 0.005
-        nonlinearity_k3_sigma: 0.01
-        white_noise_sigma: 0.003
-        adc_bits: 12
-      - name: "-Y"
-        normal_body:
-          [0.0, -1.0, 0.0]
-        position_body_m:
-          [0.0, -0.25, 0.0]
-        fov_half_angle_deg: 90.0
-        alignment_error_sigma_deg: 0.1
-        bias_sigma: 0.005
-        drift_sigma: 0.002
-        drift_tau_s: 200.0
-        scale_error_sigma: 0.005
-        nonlinearity_k3_sigma: 0.01
-        white_noise_sigma: 0.003
-        adc_bits: 12
-      - name: "+Z"
-        normal_body:
-          [0.0, 0.0, 1.0]
-        position_body_m:
-          [0.0, 0.0, 0.25]
-        fov_half_angle_deg: 90.0
-        alignment_error_sigma_deg: 0.1
-        bias_sigma: 0.005
-        drift_sigma: 0.002
-        drift_tau_s: 200.0
-        scale_error_sigma: 0.005
-        nonlinearity_k3_sigma: 0.01
-        white_noise_sigma: 0.003
-        adc_bits: 12
-      - name: "-Z"
+      - name: "-Z"                           # FSS1, slave 0x11
         normal_body:
           [0.0, 0.0, -1.0]
         position_body_m:
           [0.0, 0.0, -0.25]
+        sensor_roll_rad: -1.5707963267948966  # -90 deg
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "-X"                           # FSS2, slave 0x12
+        normal_body:
+          [-1.0, 0.0, 0.0]
+        position_body_m:
+          [-0.25, 0.0, 0.0]
+        sensor_roll_rad: 0.0
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "+Y"                           # FSS3, slave 0x13, 15 deg to +Z
+        normal_body:
+          [0.0, 0.9659258262890683, 0.25881904510252074]
+        position_body_m:
+          [0.0, 0.25, 0.0]
+        sensor_roll_rad: 0.0
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "+X"                           # FSS4, slave 0x14
+        normal_body:
+          [1.0, 0.0, 0.0]
+        position_body_m:
+          [0.25, 0.0, 0.0]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "-Y"                           # FSS5, slave 0x15, 15 deg to +Z
+        normal_body:
+          [0.0, -0.9659258262890683, 0.25881904510252074]
+        position_body_m:
+          [0.0, -0.25, 0.0]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
+        fov_half_angle_deg: 90.0
+        alignment_error_sigma_deg: 0.1
+        bias_sigma: 0.005
+        drift_sigma: 0.002
+        drift_tau_s: 200.0
+        scale_error_sigma: 0.005
+        nonlinearity_k3_sigma: 0.01
+        white_noise_sigma: 0.003
+        adc_bits: 12
+      - name: "+Z"                           # FSS6, slave 0x16
+        normal_body:
+          [0.0, 0.0, 1.0]
+        position_body_m:
+          [0.0, 0.0, 0.25]
+        sensor_roll_rad: 3.141592653589793   # 180 deg
         fov_half_angle_deg: 90.0
         alignment_error_sigma_deg: 0.1
         bias_sigma: 0.005

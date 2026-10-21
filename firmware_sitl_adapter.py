@@ -28,7 +28,8 @@ class FirmwareLink:
     def __init__(self):
         import firmware_sitl_link as link
         import telemetry
-        self.link, self.telemetry = link, telemetry
+        import sensor_link
+        self.link, self.telemetry, self.sensor_link = link, telemetry, sensor_link
         self.state_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.received_at = self.event_at = None
         self.last_mode = None
@@ -41,8 +42,17 @@ class FirmwareLink:
         if self.received_at is None or now-self.received_at > 2:
             self.event_at = now
         self.received_at = now
-    def tick(self, position, velocity, quaternion, rates, unix_time, field_body):
-        self.telemetry.send_state(self.state_socket, position, velocity, quaternion, rates, unix_time, field_body)
+    def tick(self, position, velocity, quaternion, rates, unix_time, field_body,
+             gps=None, sun=None, sun_cells=()):
+        """rates in rad/s; sent in deg/s, the unit of AdsMdl.bodyRate.
+        gps/sun: this tick's raw sensor samples (None when the sensor did not
+        sample this tick), forwarded to the ADS on sensor_link's port."""
+        self.telemetry.send_state(self.state_socket, position, velocity, quaternion,
+                                  np.degrees(np.asarray(rates, dtype=float)), unix_time, field_body)
+        if gps is not None:
+            self.sensor_link.send_gps(self.state_socket, gps)
+        if sun is not None:
+            self.sensor_link.send_fss(self.state_socket, sun, sun_cells)
         self.link.poll_rw_torques()
         self.link.poll_mode()
         with self.link._lock:

@@ -165,14 +165,19 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     utc_time = epoch_utc 
 
     from engine.simulation.pacing import SimulationPacer
-    pacer = SimulationPacer(config.SIMULATION.speed)
+    # SITL ONLY: the firmware runs on a real-time clock, so the plant must too.
+    # At speed > 1 the firmware gets proportionally fewer control updates per
+    # simulated second and the sensor packets age faster than it reads them.
+    # The yaml speed (and its live re-read) applies to non-SITL runs only.
+    pacer = SimulationPacer(1.0 if firmware is not None else config.SIMULATION.speed)
     speed_path = Path(config.__file__).with_suffix('.yaml')
     custom_stable_since = None
     last_custom_command_id = None
 
     while t < tf:
 
-        pacer.poll_speed(speed_path, t)
+        if firmware is None:
+            pacer.poll_speed(speed_path, t)
         pacer.wait_until(t)
 
         # ---- ENGINE-BASED TRANSLATION SOURCE ----
@@ -240,9 +245,19 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # the sensor belief therefore stays consistent with the body frame
         # even between 10 Hz IMU ticks.
         B_sensor_eci = B_eci
+        # SITL ONLY: the sensor models rotate ECI vectors into the body with
+        # _dcm_bi_from_q(q).T, the MBD convention. For this quaternion's
+        # kinematics (q_dot = 0.5*Omega(w)*q, i.e. q (x) w, body->ECI) the
+        # physical ECI->body matrix is _dcm_bi_from_q(q) itself, and that is
+        # also how the firmware reads the quaternion it gets on 5002
+        # (attitude_fusion.c: fusedquat is body->ECI). Feeding the models the
+        # conjugate gives _dcm_bi_from_q(conj q).T == _dcm_bi_from_q(q), so the
+        # FSS heads see the Sun where the firmware expects it, without
+        # touching the models. Non-SITL runs keep the MBD convention.
+        q_sensor = X_rot[:4] if firmware is None else X_rot[:4] * np.array([1.0, -1.0, -1.0, -1.0])
         if _imu_sim is not None:
             _gyro_msg, _mag_msg, _sun_msg = _imu_sim.get_raw_data(
-                t, X_rot[:4], X_rot[4:7], B_eci, sun_eci,
+                t, q_sensor, X_rot[4:7], B_eci, sun_eci,
                 eclipse_fraction=srp_result.eclipse_fraction,
                 position_eci=r_vec)
             _imu_nav.process_raw_data(t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM)
@@ -258,8 +273,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # model evaluated at the GPS-BELIEVED position (real flight
             # software computes the same model onboard -- this is not the
             # truth channel, it is a model + the sensor's own reading).
+            # SITL: not run. The firmware estimates its own attitude, and this
+            # estimator's gyro propagation assumes the MBD frame, which the
+            # sensor-frame samples above no longer follow.
             B_model_eci = _orbit_provider.magnetic_field_eci(t, r_vec_nav)
-            _imu_nav.estimate(t, B_model_eci, sun_eci)
+            if firmware is None:
+                _imu_nav.estimate(t, B_model_eci, sun_eci)
             _processed_imu = _imu_nav.get_processed_data()
             if config.IMU_SIM.use_mag_for_control:
                 B_sensor_eci = srd._dcm_bi_from_q(_att_est.q_eci) @ _imu_nav.B_body()
@@ -299,8 +318,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         drag_torque_for_step = lambda stage_t, stage_q: facets_at(stage_t, stage_q).drag_torque_body_nm
 
         if firmware is not None:
+            # Field in the firmware's body frame: _dcm_bi_from_q(q) is the
+            # physical ECI->body matrix (see q_sensor above). This tick's raw
+            # GPS fix and FSS replies go out with the state, same epoch t.
             wheels, dipole = firmware.tick(r_vec, v_vec, X_rot[:4], X_rot[4:7], utc_time.timestamp(),
-                srd._dcm_bi_from_q(X_rot[:4]).T @ B_eci)
+                srd._dcm_bi_from_q(X_rot[:4]) @ B_eci,
+                gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells)
             srd.set_firmware_tick(wheels, dipole)
         custom_tick_command = cs.get_pointing_command()
         srd.set_custom_tick_target(custom_tick_command['desired_quaternion'])
@@ -454,6 +477,13 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
             [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
         ])   # body -> ECI (v_eci = C_bi @ v_body), matches the convention used throughout
+        # SITL ONLY: for this quaternion's kinematics the matrix above is
+        # really ECI -> body (see q_sensor in the IMU block), and the firmware
+        # reads the quaternion that way. Use its transpose so the rendered
+        # attitude and the pointing errors match what the firmware and the FSS
+        # heads see. Non-SITL controllers were built around the matrix above.
+        if firmware is not None:
+            C_bi = C_bi.T   # true body -> ECI (v_eci = C_bi @ v_body)
         C_eci2ecef = eci_to_ecef_dcm(utc_time)
         # ---- RENDER ORIENTATION = the satellite's BELIEVED attitude ----
         # When the IMU is enabled (and render_estimated_attitude is True) the
@@ -514,8 +544,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 q_tgt = srd.Q_INITIAL_RW   # slider-zero reference (documented)
             imu_att_pointing_error_deg = (
                 _att_est.pointing_error_deg(q_tgt) if q_tgt is not None else None)
-            imu_att_est_error_deg = _att_est.pointing_error_deg(
-                np.asarray(X_rot[:4], dtype=float))
+            imu_att_est_error_deg = (_att_est.pointing_error_deg(
+                np.asarray(X_rot[:4], dtype=float)) if firmware is None else None)
             # The satellite ALSO reports the SAME mode-specific boresight error
             # the dashboard shows for truth (sun/moon/nadir axis angle) -- but
             # computed from its OWN estimated attitude. Same metric, same mode
@@ -821,6 +851,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             data_to_send["gps_pos_eci_y"] = float(r_vec_nav[1])
             data_to_send["gps_pos_eci_z"] = float(r_vec_nav[2])
 
+        # ---- FSS heads (firmware SITL only): the firmware's view of the
+        # GETTLM replies sensor_link.send_fss() last sent -- lit / inside
+        # +/-35 deg / used (folded into sunVectorB).
+        if firmware is not None and firmware.sensor_link.last_fss_heads:
+            data_to_send["fss_heads"] = firmware.sensor_link.last_fss_heads
+
         from engine.astrodynamics.orbit_display import osculating_orbit
         data_to_send['orbit_path_ecef_m'] = (osculating_orbit(r_vec, v_vec) @ C_eci2ecef.T).tolist()
 
@@ -844,12 +880,14 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # Estimate-vs-truth gap [deg]: how far the satellite's BELIEF is
             # from reality right now. Sub-degree = healthy estimator; a
             # growing number = gyro drift dominating (watch with degraded()).
-            data_to_send["imu_est_vs_truth_deg"] = float(imu_att_est_error_deg)
+            data_to_send["imu_est_vs_truth_deg"] = (
+                None if imu_att_est_error_deg is None else float(imu_att_est_error_deg))
 
             # ---- Sun ARRAY + estimator + truth pairs (dashboard Sensors tab)
             # Truth channel is dashboard-only: the true body-frame sun
             # direction and the true body-frame field, from the TRUE attitude.
-            C_true = srd._dcm_bi_from_q(X_rot[:4])
+            # q_sensor: same frame the sensor models sampled in this tick.
+            C_true = srd._dcm_bi_from_q(q_sensor)
             _sun_truth_body = C_true.T @ sun_eci
             _sun_truth_body = _sun_truth_body / np.linalg.norm(_sun_truth_body)
             data_to_send["truth_mag_body_x_nT"] = float((C_true.T @ B_eci)[0] * 1e9)
@@ -921,7 +959,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             data_to_send['att_est_euler_deg'] = np.degrees(q2e.euler_from_quaternion(*_q_est)).tolist()
             data_to_send['estimated_body_to_ecef_matrix'] = (
                 C_eci2ecef @ srd._dcm_bi_from_q(_q_est)).tolist()
-            data_to_send["att_est_error_deg"] = float(imu_att_est_error_deg)
+            data_to_send["att_est_error_deg"] = (
+                None if imu_att_est_error_deg is None else float(imu_att_est_error_deg))
             data_to_send["att_est_corrections"] = int(_att_est.corrections)
             data_to_send["att_est_propagations"] = int(_att_est.propagations)
             data_to_send["att_est_sun_used"] = bool(_att_est.sun_used_last)
@@ -933,7 +972,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         enrich_dashboard(
             data_to_send, t=t, position_eci=r_vec, velocity_eci=v_vec,
             sun_eci_m=_orbit_provider.sun_position_eci(), eci_to_ecef=C_eci2ecef,
-            body_to_eci=srd._dcm_bi_from_q(X_rot[:4]),
+            body_to_eci=C_bi,   # == _dcm_bi_from_q(X_rot[:4]) outside SITL
             mtr_torque=store.mtr_torques, mtr_dipole=store.mtr_dipole,
             mtr_current=store.mtr_currents, gps_enabled=_gps_sim is not None,
             spacecraft_name=config.SPACECRAFT.name,

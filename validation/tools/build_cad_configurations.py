@@ -24,6 +24,9 @@ REPORTS = {
                      axes=[[-.02,1.,.01],[-.16,-.01,.99],[.99,.01,.16]],
                      origin_tensor=[[2.69831463,-.00810082,.07070690],[-.00810082,1.67283743,.07418616],[.07070690,.07418616,1.84702295]])}
 BUS_BOUNDS = np.array([[-.180,-.210,-.340],[.180,.210,0]])
+# FSS slave order (cell k = slave 0x11+k) and roll about each board normal,
+# reproducing the firmware's AdsConfigStruct.RelDCM (ADS main.c).
+FSS_MOUNTS = {'-Z': -np.pi/2, '-X': 0.0, '+Y': 0.0, '+X': np.pi, '-Y': np.pi, '+Z': np.pi}
 
 
 def box_record(name, bounds):
@@ -82,8 +85,10 @@ def configuration(mode):
         # photosensitive die offset and calibration are not supplied.
         normal = np.array(p.get('mount_normal_body',np.eye(3)[axis]*sign))
         pos += normal*.0005
-        cells.append(dict(name=f'{"+" if sign>0 else "-"}{"XYZ"[axis]}',
-                          normal_body=normal.tolist(), position_body_m=pos.tolist()))
+        name = f'{"+" if sign>0 else "-"}{"XYZ"[axis]}'
+        cells.append(dict(name=name, normal_body=normal.tolist(), position_body_m=pos.tolist(),
+                          sensor_roll_rad=float(FSS_MOUNTS[name])))
+    cells.sort(key=lambda cell: list(FSS_MOUNTS).index(cell['name']))
     gyro = next(p for p in parts if p['name']=='ADIS16547-1BMLZ')
     wheels = [p for p in parts if p['name']=='SP_RW060 - RevE _27-11-2024']
     wheel_axes = [p.get('mount_normal_body') for p in wheels]
