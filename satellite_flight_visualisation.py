@@ -165,19 +165,16 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     utc_time = epoch_utc 
 
     from engine.simulation.pacing import SimulationPacer
-    # SITL ONLY: the firmware runs on a real-time clock, so the plant must too.
-    # At speed > 1 the firmware gets proportionally fewer control updates per
-    # simulated second and the sensor packets age faster than it reads them.
-    # The yaml speed (and its live re-read) applies to non-SITL runs only.
-    pacer = SimulationPacer(1.0 if firmware is not None else config.SIMULATION.speed)
+    # Firmware keeps its own wall clock; accelerated runs give it fewer control
+    # updates per simulated second. Honor the configured plant speed in all modes.
+    pacer = SimulationPacer(config.SIMULATION.speed)
     speed_path = Path(config.__file__).with_suffix('.yaml')
     custom_stable_since = None
     last_custom_command_id = None
 
     while t < tf:
 
-        if firmware is None:
-            pacer.poll_speed(speed_path, t)
+        pacer.poll_speed(speed_path, t)
         pacer.wait_until(t)
 
         # ---- ENGINE-BASED TRANSLATION SOURCE ----
