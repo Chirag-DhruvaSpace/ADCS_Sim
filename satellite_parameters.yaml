@@ -82,7 +82,7 @@ orbit:
   altitude_m: 500003.0
   inclination_deg: 97.0
   eccentricity: 0.0             # ASSUMPTION: circular starting orbit
-  raan_deg: 0.0                 # ASSUMPTION: not supplied
+  raan_deg: 180.0                 # ASSUMPTION: not supplied
   argument_of_perigee_deg: 0.0  # ASSUMPTION: not supplied
   true_anomaly_deg: 180.0         # ASSUMPTION: not supplied
 

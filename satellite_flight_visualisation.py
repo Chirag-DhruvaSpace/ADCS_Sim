@@ -165,16 +165,17 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     utc_time = epoch_utc 
 
     from engine.simulation.pacing import SimulationPacer
-    # Firmware keeps its own wall clock; accelerated runs give it fewer control
-    # updates per simulated second. Honor the configured plant speed in all modes.
-    pacer = SimulationPacer(config.SIMULATION.speed)
+    # Firmware uses a real-time clock, so keep its plant at 1x. Accelerating
+    # only the plant reduces firmware control updates per simulated second.
+    pacer = SimulationPacer(1.0 if firmware is not None else config.SIMULATION.speed)
     speed_path = Path(config.__file__).with_suffix('.yaml')
     custom_stable_since = None
     last_custom_command_id = None
 
     while t < tf:
 
-        pacer.poll_speed(speed_path, t)
+        if firmware is None:
+            pacer.poll_speed(speed_path, t)
         pacer.wait_until(t)
 
         # ---- ENGINE-BASED TRANSLATION SOURCE ----
