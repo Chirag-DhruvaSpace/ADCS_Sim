@@ -7,6 +7,8 @@ export function createSensorMarkers({
   satGroup
 }) {
   const sensorMarkers = new Map();
+  let latestData = {};
+  let trackerPosition = null;
   const inactiveColor = new THREE.Color(0x303947);
   function createSensorLabel(text) {
     const canvas = document.createElement('canvas');
@@ -33,7 +35,12 @@ export function createSensorMarkers({
     return label;
   }
   function updateSensorMarkers(data) {
-    const layout = data.imu_mounts || [];
+    latestData = data;
+    trackerPosition = modelHolder.children[0]?.userData.starTrackerPositionBodyM;
+    const layout = [...(data.imu_mounts || [])];
+    if (trackerPosition) {
+      layout.push({ name: 'Star tracker', kind: 'StarTracker', position: trackerPosition });
+    }
     const alive = new Set();
     let sunSensorNumber = 0;
     for (const item of layout) {
@@ -50,6 +57,7 @@ export function createSensorMarkers({
         }));
         mesh.renderOrder = 500;
         if (item.kind === 'Sun') mesh.add(createSensorLabel(`FSS${sunSensorNumber}`));
+        if (item.kind === 'StarTracker') mesh.add(createSensorLabel('ST'));
         satGroup.add(mesh);
         sensorMarkers.set(item.name, mesh);
       }
@@ -65,10 +73,13 @@ export function createSensorMarkers({
       const sunUsed = head ? head.used : !!cell?.used;
       const unit = (data.imu_units?.[item.kind === 'Gyro' ? 'gyro' : 'mag'] || []).find(u => u.name === item.name);
       /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-      const level = item.kind === 'Sun' ? (cell?.output_pct || 0) / 100 : Number(unit ? unit.used : item.kind === 'Gyro' ? data.imu_gyro_valid : data.imu_mag_valid);
+      const level = item.kind === 'Sun' ? (cell?.output_pct || 0) / 100
+        : item.kind === 'StarTracker' ? Number(data.star_tracker_valid)
+        : Number(unit ? unit.used : item.kind === 'Gyro' ? data.imu_gyro_valid : data.imu_mag_valid);
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;
       mesh.userData.active = item.kind === 'Sun' ? sunUsed : level > 0;
-      mesh.userData.color = item.kind === 'Sun' ? (sunUsed ? 0xff8800 : 0xffe600) : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
+      mesh.userData.color = item.kind === 'Sun' ? (sunUsed ? 0xff8800 : 0xffe600)
+        : item.kind === 'StarTracker' ? 0x66dfff : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
     }
     for (const [name, mesh] of sensorMarkers) if (!alive.has(name)) {
       satGroup.remove(mesh);
@@ -81,9 +92,13 @@ export function createSensorMarkers({
       sensorMarkers.delete(name);
     }
   }
-  function paintSensorMarkers() {
+  function paintSensorMarkers(visible = true) {
+    // A model can finish loading after the last telemetry receipt.
+    if (trackerPosition !== modelHolder.children[0]?.userData.starTrackerPositionBodyM) {
+      updateSensorMarkers(latestData);
+    }
     for (const mesh of sensorMarkers.values()) {
-      mesh.visible = SETTINGS['show' + mesh.userData.kind];
+      mesh.visible = visible && SETTINGS['show' + mesh.userData.kind];
       const illuminated = mesh.userData.kind === 'Sun' && mesh.userData.level > 0;
       if (mesh.userData.kind === 'Sun' && (illuminated || mesh.userData.active)) {
         // Keep selected sensors orange; sunlight controls the other sensors' brightness.

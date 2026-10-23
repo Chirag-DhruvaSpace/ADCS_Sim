@@ -1,6 +1,6 @@
 # IMU and viewer changes
 
-The default flight path is sensor-driven: physical truth feeds `SimulatedIMU`,
+The default flight path is sensor-driven: physical truth feeds `SimulatedSensors`,
 receipts feed `ImuNav`, and its reconstructed Sun vector and six-state
 multiplicative EKF feed the controller. The EKF estimates attitude and gyro
 bias. Magnetic references use the GPS-believed position; solar ephemerides
@@ -61,7 +61,7 @@ also avoids capture rendering and encoding.
 
 ## Verification and limits
 
-Sensor checks run with `.venv/Scripts/python.exe -B -m pytest validation/test_sensor_navigation.py validation/test_hardware_sensor_outputs.py`. The original standalone model checks remain in `simulatesunsensor.py validate` and `simulateimu.py validate`.
+Sensor checks run with `.venv/Scripts/python.exe -B -m pytest validation/test_sensor_navigation.py validation/test_hardware_sensor_outputs.py`. The original standalone model checks remain in `simulate_sunsensor.py validate` and `-m validation.test_simulated_sensor_models validate`.
 
 These checks establish numerical behavior, not flight-qualified accuracy.
 Albedo assumes a spherical Earth, uniform reflectivity, finite quadrature and

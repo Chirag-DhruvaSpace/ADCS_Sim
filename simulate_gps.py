@@ -1,7 +1,7 @@
-"""simulategps.py -- the simulated GPS receiver ("FakeGPS"), all in one file.
+"""simulate_gps.py -- the simulated GPS receiver ("FakeGPS"), all in one file.
 
 get_raw_data() returns ORION integer receiver fields, with no navigation solution.
-ECEF-to-ECI conversion now belongs to gps_navigation. update() is retained for
+ECEF-to-ECI conversion now belongs to compute_simulated_position. update() is retained for
 legacy validation callers. See SENSOR_INTERFACES.md for bytes and usage.
 
 WHAT THIS IS (plain language): a stand-in for the real GPS receiver chip the
@@ -12,7 +12,7 @@ receiver is wrong: a constant bias, a slowly-drifting wander, fresh jitter,
 status numbers (satellite count, geometry quality) that random-walk.
 
 The satellite's onboard belief of where it is comes from this receiver (see
-gps_navigation.py); the orbit truth keeps driving the physics unchanged, so
+compute_simulated_position.py); the orbit truth keeps driving the physics unchanged, so
 the two can always be compared and scored.
 
 CONFIGURE (the ONE line, in satellite_parameters.py):
@@ -23,8 +23,8 @@ CONFIGURE (the ONE line, in satellite_parameters.py):
     GPS_SIM = GpsSimParameters.stress()     # errors x5, 15% dropouts, 30 s silence
 
 SELF-TEST (from the project root):
-    python simulategps.py            # 600 s demo, prints the first 20 messages
-    python simulategps.py validate   # full three-stage proof (20 checks)
+    python simulate_gps.py            # 600 s demo, prints the first 20 messages
+    python simulate_gps.py validate   # full three-stage proof (20 checks)
 
 PLAIN-LANGUAGE GLOSSARY:
     ECI      "star book" coordinates (EME2000 here): what the ADCS wants.
@@ -722,7 +722,7 @@ class SimulatedGPS:
 
     def update(self, t_seconds, r_eci_m, v_eci_mps):
         """Compatibility API; new integrations use get_raw_data()."""
-        from gps_navigation import decode_gps_data
+        from compute_simulated_position import decode_gps_data
         receiver_measurement = self._simulate_receiver_measurement(t_seconds, r_eci_m, v_eci_mps)
         if receiver_measurement is None:
             return None
@@ -735,7 +735,7 @@ class SimulatedGPS:
 
 
 # ---------------------------------------------------------------------------
-# SELF-TEST: python simulategps.py [demo|validate]
+# SELF-TEST: python simulate_gps.py [demo|validate]
 # ---------------------------------------------------------------------------
 def run_demo() -> None:
     """600 s standalone tour with the NOMINAL (realistic) profile: prints the
@@ -1072,5 +1072,5 @@ if __name__ == "__main__":
     elif mode in ("demo", "d", ""):
         run_demo()
     else:
-        print("usage: python simulategps.py [demo|validate]")
+        print("usage: python simulate_gps.py [demo|validate]")
         sys.exit(2)

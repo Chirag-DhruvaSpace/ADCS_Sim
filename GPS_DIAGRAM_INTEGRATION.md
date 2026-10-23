@@ -1,6 +1,6 @@
 # Received GNSS data in the GPS diagram
 
-The current receiver (`simulategps.py`) generates noisy position/velocity fixes,
+The current receiver (`simulate_gps.py`) generates noisy position/velocity fixes,
 satellite counts and DOP. It does not propagate a GPS constellation or generate
 per-satellite signals. Grey/green links are labelled illustrative. CAD antenna
 placements alone cannot determine which GPS spacecraft a receiver tracks.

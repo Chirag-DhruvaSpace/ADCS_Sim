@@ -125,3 +125,18 @@ test('chart averages reduce spikes without changing original telemetry', async (
   assert.equal(averaged[0].pointingError, 1.5);
   assert.equal(samples[0].gyroError[0], -10);
 });
+
+
+test('star tracker residual chart preserves zero and leaves missing readings unavailable', async () => {
+  const { averageChartSamples, chartDefs } = await import('../src/components/LiveChart/drawChart.js');
+  const samples = [
+    { t: 0, d: { star_tracker_error_arcsec: 0 } },
+    { t: 250, d: { star_tracker_error_arcsec: 0 } },
+    { t: 1000, d: {} }
+  ];
+  const averaged = averageChartSamples(samples);
+  assert.equal(chartDefs.startracker[0], 'startracker');
+  assert.equal(averaged[0].d.star_tracker_error_arcsec, 0);
+  assert.equal(averaged[1].d.star_tracker_error_arcsec, null);
+  assert.equal(samples[2].d.star_tracker_error_arcsec, undefined);
+});

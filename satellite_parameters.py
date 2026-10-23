@@ -409,7 +409,7 @@ class GpsSimParameters:
 
 
 # ---------------------------------------------------------------------------
-# Simulated COARSE SUN SENSOR (CSS) ARRAY -- see simulatesunsensor.py.
+# Simulated COARSE SUN SENSOR (CSS) ARRAY -- see simulate_sunsensor.py.
 # Six photocells on the hull, each reporting sunlight as a fraction of full
 # scale (0..1) with a cosine response and a field-of-view cutoff; the flight
 # computer reconstructs the body-frame sun direction by least squares over
@@ -478,7 +478,7 @@ def _default_sun_blockers() -> tuple:
 @dataclass(frozen=True)
 class SunSensorArrayParameters:
     """Configuration of the simulated coarse-sun-sensor ARRAY (error channels
-    documented in simulatesunsensor.py). A 0 sigma disables that per-cell
+    documented in simulate_sunsensor.py). A 0 sigma disables that per-cell
     effect; the enable_* flags toggle whole channels."""
 
     enabled: bool = True                     # master switch
@@ -627,7 +627,7 @@ class SunSensorArrayParameters:
 
 
 # ---------------------------------------------------------------------------
-# Simulated IMU (gyroscope + magnetometer) -- see simulateimu_README.md.
+# Simulated IMU (gyroscope + magnetometer) -- see imu_README.md.
 # The flight software's ATTITUDE-RATE and BODY-MAGNETIC-FIELD knowledge comes
 # from this simulated IMU (scale/misalignment + bias + wander + white noise +
 # hard-iron + disturbance + latency + dropouts, like a real chip). The orbit
@@ -686,6 +686,7 @@ class ImuSimParameters:
     """
 
     enabled: bool = True                     # master switch (False = no IMU at all)
+    enable_star_tracker: bool = True         # ideal absolute-attitude sensor
     seed: int = 42                           # RNG seed (all randomness flows from this)
 
     # Flight-software switches: all live in this single configuration object.
@@ -759,7 +760,7 @@ class ImuSimParameters:
 
     # --- coarse sun sensor ARRAY (second reference for the attitude estimator).
     # The whole sensor lives in the nested SunSensorArrayParameters below
-    # (simulatesunsensor.py): six photocells with the full per-cell error
+    # (simulate_sunsensor.py): six photocells with the full per-cell error
     # pipeline plus eclipse penumbra / Earth albedo / self-shadowing. A
     # magnetometer alone can only see 2 of the 3 rotation axes (the rotation
     # AROUND the magnetic field line is unobservable); the array's

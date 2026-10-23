@@ -65,7 +65,7 @@ def decode_vector_sample(sample, sensor_kind, configuration):
     if np.any(counts != np.rint(counts)) or np.any(counts < -32768) or np.any(counts > 32767):
         raise ValueError('Sensor registers must be signed 16-bit integers')
     if sensor_kind == 'gyro':
-        from simulateimu import gyro_register_scale_rad_s
+        from simulate_gyroscope import gyro_register_scale_rad_s
         scale = gyro_register_scale_rad_s(configuration.gyro_hardware_range_deg_s)
         mount = configuration.gyro_mount_quaternion
     else:
@@ -94,7 +94,7 @@ def decode_vector_group(readings, sensor_kind, configuration):
 
 def fine_sensor_body_direction(sensor, cell_configuration, sun_configuration):
     """Return a trusted local FSS vector rotated into body axes, or None."""
-    from simulatesunsensor import sensor_to_body_matrix
+    from simulate_sunsensor import sensor_to_body_matrix
     data = sensor.data
     signal_counts = data['Q1'] + data['Q2'] + data['Q3'] + data['Q4']
     if signal_counts < sun_configuration.fine_eclipse_threshold_counts:
@@ -111,7 +111,7 @@ def fine_sensor_body_direction(sensor, cell_configuration, sun_configuration):
 
 def decode_sun_sample(sample, configuration):
     """Reconstruct the configured photocells, then try fine sensor vectors."""
-    from simulatesunsensor import SunArrayMeasurement, SunCellSample
+    from simulate_sunsensor import SunArrayMeasurement, SunCellSample
     if sample is None:
         return None
     expected_names = tuple(cell.name for cell in configuration.cells)
@@ -193,6 +193,8 @@ class ImuNav:
         self.enable_sun_update = bool(enable_sun_update)
         self.fusion_max_age_s = fusion_max_age_s
         self.fusion_max_time_skew_s = fusion_max_time_skew_s
+        self.estimator.star_tracker_max_age_s = fusion_max_age_s
+        self._star_tracker = None
         self._unit_receipts = {'gyro': {}, 'mag': {}}
         self._unit_status = {'gyro': [], 'mag': []}
         self._omega = (np.zeros(3) if fallback_omega_rad_s is None
@@ -211,16 +213,20 @@ class ImuNav:
         self._mag_t_meas = None
         self._sun_t_meas = None
 
-    def update(self, t_seconds, gyro, mag, sun=None) -> None:
+    def update(self, t_seconds, gyro, mag, sun=None, star_tracker=None) -> None:
         """Store this tick's sensor outputs (any may be None = no tick).
 
         A returned measurement with valid=False is a DROPOUT sample: the
         valid flag goes False but the last good value is kept (coast).
+        `star_tracker` is an optional absolute-attitude receipt; existing
+        gyro/magnetometer/Sun callers keep their original interface.
         `sun` is the sun ARRAY receipt (SunArrayMeasurement from
-        simulatesunsensor.py); reconstruction_valid is a separate, softer
+        simulate_sunsensor.py); reconstruction_valid is a separate, softer
         flag -- a valid receipt may still carry reconstructed_body=None
         (eclipse/degenerate geometry), which is NOT a dropout.
         """
+        if star_tracker is not None:
+            self._star_tracker = star_tracker
         if isinstance(gyro, list):
             gyro = self._fuse_units(t_seconds, gyro, 'gyro')
         if isinstance(mag, list):
@@ -261,14 +267,19 @@ class ImuNav:
             else:
                 self._sun_valid = False              # dropout: keep last receipt
 
-    def process_raw_data(self, t_seconds, gyro, mag, sun, config):
+    def process_raw_data(self, t_seconds, gyro, mag, sun, config, star_tracker=None):
         """Decode raw sensors, then pass their SI measurements to navigation."""
+        if not config.enable_star_tracker:
+            # Disabling the tracker must also discard an earlier cached receipt.
+            self._star_tracker = None
+            star_tracker = None
         gyro_measurement = decode_vector_group(gyro, 'gyro', config)
         magnetic_measurement = decode_vector_group(mag, 'mag', config)
         sun_measurement = decode_sun_sample(sun, config.sun_array)
         if sun is not None:
             self.sun_config = config.sun_array
-        self.update(t_seconds, gyro_measurement, magnetic_measurement, sun_measurement)
+        self.update(t_seconds, gyro_measurement, magnetic_measurement, sun_measurement,
+                    star_tracker=star_tracker)
 
 
 
@@ -344,7 +355,8 @@ class ImuNav:
                               self._mag if self.estimator_enabled and self.enable_magnetometer_update and self._mag_valid else None,
                               magnetic_model_eci,
                               self._sun if self.estimator_enabled and self.enable_sun_update and self._sun_valid else None,
-                              sun_model_eci)
+                              sun_model_eci,
+                              star_tracker=self._star_tracker if self.estimator_enabled else None)
 
     def latest_gyro(self):
         """The most recent GOOD GyroMeasurement (None before the first one).
@@ -376,15 +388,38 @@ class ImuNav:
         """Best-known body magnetic field [X, Y, Z] (Tesla) -- SENSOR belief."""
         return self._B.copy()
 
+    def _star_tracker_telemetry(self):
+        measurement = self._star_tracker
+        now = self.estimator._last_t
+        quaternion = (_usable_star_tracker_quaternion(measurement, now, self.fusion_max_age_s)
+                      if now is not None else None)
+        valid = quaternion is not None
+        return {
+            'star_tracker_valid': valid,
+            'star_tracker_mode': 'TRACKING' if valid else 'STANDBY',
+            'star_tracker_used': self.estimator.star_tracker_used_last,
+            'star_tracker_quaternion_eci': (measurement.quaternion_eci.tolist()
+                                            if valid else None),
+            'star_tracker_boresight_eci': (_dcm_bi_from_q(quaternion)[:, 2].tolist()
+                                          if valid else None),
+            'star_tracker_latency_ms': ((measurement.t_arrival_s - measurement.t_meas_s) * 1000
+                                        if valid else None),
+            'star_tracker_noise_arcsec': 0.0 if valid else None,
+        }
+
     def telemetry(self) -> dict:
         """Dashboard dict. Keys exist only via this method (added only when
         the IMU is enabled); values are None until the first good sample."""
         g = self._gyro
         m = self._mag
         s = self._sun
+        navigation_mode = 'ekf' if self.estimator_enabled else 'gyro_only'
+        if self.estimator.star_tracker_used_last:
+            navigation_mode = 'star_tracker'
         return {
+            **self._star_tracker_telemetry(),
             'imu_units': self._unit_status,
-            'imu_navigation_mode': 'ekf' if self.estimator_enabled else 'gyro_only',
+            'imu_navigation_mode': navigation_mode,
             "imu_gyro_valid": bool(self._gyro_valid),
             "imu_mag_valid": bool(self._mag_valid),
             "imu_sun_valid": bool(self._sun_valid),
@@ -460,6 +495,20 @@ def _rotation_quaternion(v):
     return np.r_[np.cos(angle / 2), v * (np.sin(angle / 2) / angle if angle > 1e-12 else 0.5)]
 
 
+def _usable_star_tracker_quaternion(measurement, time_s, max_age_s):
+    """Accept a valid, recent absolute attitude in the simulator's convention."""
+    if measurement is None or not measurement.valid:
+        return None
+    age_s = time_s - measurement.t_meas_s
+    if not 0 <= age_s <= max_age_s:
+        return None
+    quaternion = np.asarray(measurement.quaternion_eci, dtype=float)
+    if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+        return None
+    length = np.linalg.norm(quaternion)
+    return quaternion / length if length > 1e-12 else None
+
+
 class AttitudeEstimator:
     """Six-state multiplicative EKF: body attitude error and gyro bias.
 
@@ -487,6 +536,9 @@ class AttitudeEstimator:
         self._last_mag_t = self._last_sun_t = None
         self.corrections = self.propagations = 0
         self.sun_used_last = False
+        self.star_tracker_used_last = False
+        self.star_tracker_max_age_s = 0.5
+        self._last_star_tracker_t = None
 
     @property
     def q_eci(self):
@@ -525,9 +577,36 @@ class AttitudeEstimator:
         return True
 
     def update(self, t_seconds, omega_belief_body, mag_meas, B_model_eci,
-               sun_meas=None, sun_model_eci=None):
-        """Predict from gyro rate, then correct using fresh magnetic/Sun vectors."""
+               sun_meas=None, sun_model_eci=None, star_tracker=None):
+        """Prefer absolute star attitude; otherwise retain the existing MEKF.
+
+        Flow: fresh ideal star quaternion -> attitude directly.
+              Between star receipts -> gyro prediction.
+              Invalid/stale/absent star receipt -> gyro + magnetic/Sun MEKF.
+
+        The ideal sensor currently has zero error, so blending its reading with
+        noisier vectors would reduce accuracy. No star camera filter is modeled.
+        """
         time_s = float(t_seconds)
+        if self._last_t is not None and time_s < self._last_t:
+            raise ValueError('Estimator time must not move backwards')
+        self.star_tracker_used_last = False
+        self.sun_used_last = False
+        quaternion = _usable_star_tracker_quaternion(
+            star_tracker, time_s, self.star_tracker_max_age_s)
+        if quaternion is not None:
+            if (self._last_star_tracker_t is None
+                    or star_tracker.t_meas_s > self._last_star_tracker_t):
+                self._q = quaternion.copy()
+                # An exact absolute attitude removes attitude uncertainty. Keep
+                # gyro-bias uncertainty for subsequent prediction/fallback.
+                self.P[:3, :] = 0.0
+                self.P[:, :3] = 0.0
+                self._last_t = time_s
+                self._last_star_tracker_t = star_tracker.t_meas_s
+                self.star_tracker_used_last = True
+                self.corrections += 1
+                return
         angular_rate_rad_s = np.asarray(omega_belief_body, dtype=float) - self.bias
         if self._last_t is not None:
             elapsed_time_s = time_s - self._last_t
@@ -537,6 +616,8 @@ class AttitudeEstimator:
                 self._predict(angular_rate_rad_s, elapsed_time_s)
         self._last_t = time_s
         self.sun_used_last = False
+        if quaternion is not None:
+            return  # Coast between star samples without reusing one correction.
         self._use_magnetometer(time_s, angular_rate_rad_s, mag_meas, B_model_eci)
         self._use_sun_sensor(time_s, angular_rate_rad_s, sun_meas, sun_model_eci)
 

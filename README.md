@@ -88,9 +88,9 @@ engine_adcs_bridge.py             # Bridge: ADCS <-> engine orbit provider
 *_pointing.py                     # Controllers (sun, moon, nadir, RW, ...)
 MTR_allocator.py / torque_distribution.py / cross_b_torque.py
 calculate_disturbances.py / spacecraft_surface_physics.py
-simulategps.py / gps_navigation.py
-simulateimu.py / imu_navigation.py
-simulatesunsensor.py / sun_vector_eci.py
+simulate_gps.py / compute_simulated_position.py
+simulate_gyroscope.py / simulate_magnetometer.py / compute_simulated_attitude.py
+simulate_sunsensor.py / sun_vector_eci.py
 firmware_sitl_adapter.py / firmware_sitl_link.py / telemetry.py
 pointing_client.py / control_states.py / store.py
 frontend/                         # Vite + React + Three.js viewer
@@ -269,9 +269,9 @@ Boresight: body -Z to Sun (2 DOF; spin about Sun line is free). Design derivatio
 
 | Chain | Truth -> Measurement -> Belief |
 |-------|-------------------------------|
-| GPS | simulategps.py (bias/wander/noise/latency/dropouts ~1 Hz) -> gps_navigation.py (ECI pos/vel + dead-reckoning). Only ADCS knowledge is GPS-based. |
-| IMU | simulateimu.py (mounts, bias walk, noise, quant) -> imu_navigation.py (sunlight-gated MEKF). Mounts are configured only in backend YAML. See imu_README.md. |
-| Sun | simulatesunsensor.py (6 faces, 90 deg FOV, albedo, penumbra, self-shadowing) -> vector solution (min 3 cells). |
+| GPS | simulate_gps.py (bias/wander/noise/latency/dropouts ~1 Hz) -> compute_simulated_position.py (ECI pos/vel + dead-reckoning). Only ADCS knowledge is GPS-based. |
+| IMU | simulate_gyroscope.py / simulate_magnetometer.py (mounts, bias walk, noise, quant) -> compute_simulated_attitude.py (sunlight-gated MEKF). Mounts are configured only in backend YAML. See imu_README.md. |
+| Sun | simulate_sunsensor.py (6 faces, 90 deg FOV, albedo, penumbra, self-shadowing) -> vector solution (min 3 cells). |
 
 ---
 

@@ -10,16 +10,18 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from satellite_parameters import ImuSimParameters, GpsSimParameters
-from simulateimu import SimulatedIMU, encode_gyro_registers, encode_magnetometer_registers
-from imu_navigation import ImuNav
-from simulatesunsensor import simulate_fine_sensor
+from send_simulated_sensor_data import SimulatedSensors
+from simulate_gyroscope import encode_gyro_registers
+from simulate_magnetometer import encode_magnetometer_registers
+from compute_simulated_attitude import ImuNav
+from simulate_sunsensor import simulate_fine_sensor
 from send_simulated_sensor_data import get_raw_sensor_data, SensorDataSender
 
 
 class HardwareSensorOutputs(unittest.TestCase):
     def test_raw_sun_adc_matches_original_physical_model(self):
-        from simulatesunsensor import SimulatedSunSensorArray
-        from imu_navigation import decode_sun_sample
+        from simulate_sunsensor import SimulatedSunSensorArray
+        from compute_simulated_attitude import decode_sun_sample
         configuration = ImuSimParameters.perfect().sun_array
         original = SimulatedSunSensorArray(configuration)
         raw_sensor = SimulatedSunSensorArray(configuration)
@@ -37,8 +39,8 @@ class HardwareSensorOutputs(unittest.TestCase):
             self.assertLess(error_deg, .05)
 
     def test_sun_navigation_covers_gap_between_fine_sensors(self):
-        from simulatesunsensor import RawSunSample, RawSunCell, RawFineSunSensor
-        from imu_navigation import decode_sun_sample
+        from simulate_sunsensor import RawSunSample, RawSunCell, RawFineSunSensor
+        from compute_simulated_attitude import decode_sun_sample
         configuration = ImuSimParameters.perfect().sun_array
         direction = np.ones(3) / math.sqrt(3)
         counts = 2**configuration.cells[0].adc_bits - 1
@@ -74,7 +76,7 @@ class HardwareSensorOutputs(unittest.TestCase):
 
     def test_raw_navigation_and_hardware_saturation(self):
         config = ImuSimParameters.perfect()
-        hardware = SimulatedIMU(config)
+        hardware = SimulatedSensors(config)
         gyro, magnetometer, sun = hardware.get_raw_data(
             0, [1,0,0,0], [math.radians(1),0,0], [30e-6,0,0], [0,0,1])
         navigation = ImuNav()
@@ -86,7 +88,7 @@ class HardwareSensorOutputs(unittest.TestCase):
         self.assertTrue(saturated.saturated)
         self.assertEqual(saturated.data['X_axis'], 20000)
         wide_range_config = replace(config, gyro_hardware_range_deg_s=450)
-        wide_range = SimulatedIMU(wide_range_config)
+        wide_range = SimulatedSensors(wide_range_config)
         gyro, _, _ = wide_range.get_raw_data(0, [1,0,0,0], [math.radians(300),0,0], [0,0,0])
         self.assertEqual(gyro.data['X_axis'], 12000)
         self.assertFalse(gyro.saturated)
@@ -106,7 +108,7 @@ class HardwareSensorOutputs(unittest.TestCase):
         self.assertEqual(dark['VecZ'], 0)
 
     def test_sender_calls_cached_getters_and_skips_them_when_absent(self):
-        hardware = SimulatedIMU(ImuSimParameters.perfect())
+        hardware = SimulatedSensors(ImuSimParameters.perfect())
         gyro, magnetometer, sun = hardware.get_raw_data(0, [1,0,0,0], [0,0,0], [30e-6,0,0], [0,0,1])
         exported = get_raw_sensor_data(0, gyro=gyro, mag=magnetometer, sun=sun)
         json.dumps(exported, allow_nan=False)
@@ -119,9 +121,42 @@ class HardwareSensorOutputs(unittest.TestCase):
         gps_sensor.get_raw_data.assert_not_called()
         imu_sensor.get_raw_data.assert_not_called()
 
+    def test_independent_sensor_getters_and_caches(self):
+        from simulate_gyroscope import SimulatedGyroscope
+        from simulate_magnetometer import SimulatedMagnetometer
+
+        configuration = ImuSimParameters.perfect()
+        gyro = SimulatedGyroscope(configuration)
+        magnetic = SimulatedMagnetometer(configuration)
+        gyro_reading = gyro.get_raw_data(0, [1, 0, 0, 0], [math.radians(1), 0, 0])
+        magnetic_reading = magnetic.get_raw_data(0, [1, 0, 0, 0], [30e-6, 0, 0])
+        self.assertEqual(gyro_reading.kind, 'gyro')
+        self.assertEqual(gyro_reading.counts, (160, 0, 0))
+        self.assertEqual(magnetic_reading.kind, 'mag')
+        self.assertEqual(magnetic_reading.counts, (200, 0, 0))
+        self.assertIs(gyro.get_raw_data(), gyro_reading)
+        self.assertIs(gyro.get_raw_data(0), gyro_reading)
+        self.assertIs(magnetic.get_raw_data(), magnetic_reading)
+        self.assertIs(magnetic.get_raw_data(0), magnetic_reading)
+        self.assertIsNone(gyro.get_raw_data(.05, [1, 0, 0, 0], [0, 0, 0]))
+        self.assertIsNone(magnetic.get_raw_data(.05, [1, 0, 0, 0], [0, 0, 0]))
+        self.assertEqual(gyro.gyro_samples, 1)
+        self.assertEqual(magnetic.mag_samples, 1)
+
+    def test_collection_preserves_each_sensor_cache(self):
+        hardware = SimulatedSensors(ImuSimParameters.perfect())
+        gyro, magnetic, sun = hardware.get_raw_data(
+            0, [1, 0, 0, 0], [0, 0, 0], [30e-6, 0, 0], [0, 0, 1])
+        self.assertIs(hardware.gyroscope.get_raw_data(), gyro)
+        self.assertIs(hardware.magnetometer.get_raw_data(), magnetic)
+        self.assertIs(hardware.sun_sensor.get_raw_data(), sun)
+        self.assertIs(hardware.get_gyroscope_raw_data(), gyro)
+        self.assertIs(hardware.get_magnetometer_raw_data(), magnetic)
+        self.assertIs(hardware.get_sun_sensor_raw_data(), sun)
+
     def test_orion_integer_fields_and_navigation(self):
-        from simulategps import SimulatedGPS
-        from gps_navigation import GpsNav
+        from simulate_gps import SimulatedGPS
+        from compute_simulated_position import GpsNav
         from org.orekit.frames import FramesFactory
         from org.orekit.utils import IERSConventions
         provider = SimpleNamespace(epoch_utc=datetime(2022,1,1,tzinfo=timezone.utc),

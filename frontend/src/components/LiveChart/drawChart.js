@@ -8,7 +8,8 @@ export const chartDefs = {
   pointing: ['pointing', ['Axis error', 'Δ yaw', 'Δ pitch', 'Δ roll']],
   rates: ['rates', ['X', 'Y', 'Z']],
   acceleration: ['acceleration', ['X', 'Y', 'Z']],
-  estimator: ['estimator', ['Estimate error']]
+  estimator: ['estimator', ['Estimate error']],
+  startracker: ['startracker', ['Boresight residual']]
 };
 export const colours = ['#ff797d', '#4de2a5', '#67b9ff'];
 export function averageChartSamples(samples, periodMs = 1000) {
@@ -30,6 +31,7 @@ export function averageChartSamples(samples, periodMs = 1000) {
     }
     result.pointingError = average(group.map(sample => sample.pointingError));
     result.d.att_est_error_deg = average(group.map(sample => sample.d.att_est_error_deg));
+    result.d.star_tracker_error_arcsec = average(group.map(sample => sample.d.star_tracker_error_arcsec));
     return result;
   });
 }
@@ -61,7 +63,7 @@ export function drawChart(canvas, rawSamples) {
   ctx.lineWidth = 1;
   const type = canvas.dataset.chart,
     [key, names] = chartDefs[type];
-  const values = samples.map(s => key === 'pointing' ? [s.pointingError, ...s.angleError] : key === 'estimator' ? [s.d.att_est_error_deg] : Array.isArray(s[key]) ? s[key] : [s[key]]);
+  const values = samples.map(s => key === 'pointing' ? [s.pointingError, ...s.angleError] : key === 'estimator' ? [s.d.att_est_error_deg] : key === 'startracker' ? [s.d.star_tracker_error_arcsec] : Array.isArray(s[key]) ? s[key] : [s[key]]);
   /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
   const all = values.flat().filter(finite);
   let lo = all.length ? Math.min(...all) : 0,

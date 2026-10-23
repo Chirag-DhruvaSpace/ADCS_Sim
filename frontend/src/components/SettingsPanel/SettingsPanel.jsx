@@ -221,13 +221,17 @@ export default memo(function SettingsPanel() {
         <input id="set-showMag" type="checkbox" defaultChecked={true} />
       </div>
       <div className="set-row">
+        <label htmlFor="set-showStarTracker">Star tracker marker</label>
+        <input id="set-showStarTracker" type="checkbox" defaultChecked={true} />
+      </div>
+      <div className="set-row">
         <label htmlFor="set-sensorGlow">
           {"Measurement glow"}
         </label>
         <input id="set-sensorGlow" type="checkbox" defaultChecked={true} />
       </div>
       <p>
-        {"Sun glow follows measured photocurrent. Gyro and magnetometer glow indicates a valid receipt."}
+        {"Sun glow follows measured photocurrent. Other sensor markers glow when their readings are valid."}
       </p>
     </div>
     <div className="settings-content" data-settings-page="3" hidden={true}>

@@ -1,6 +1,7 @@
-/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
 @import "../MissionCard/MissionCard.css";
-/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-/* The card inherits the shared card rules without changing its appearance. */
 
-
+/* A compact readout leaves room for the star tracker in the same rail. */
+#mission-page-sensors .rail-right .attitude-error-card .card-heading { margin:3px 0 0; border:0; padding:0; }
+#mission-page-sensors .rail-right .attitude-error-card .estimator-metric { padding:2px 7px; }
+#mission-page-sensors .rail-right .attitude-error-card .estimator-metric b { font-size:1.1em; }
+#mission-page-sensors .rail-right .attitude-error-card .quiet { margin-top:1px; font-size:.65em; }

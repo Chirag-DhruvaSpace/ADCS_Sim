@@ -3,13 +3,13 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import app
-from simulateimu import sensor_layout
+from send_simulated_sensor_data import sensor_layout
 from satellite_parameters import IMU_SIM
 import numpy as np
 from engine.astrodynamics.orbit_display import osculating_orbit
 from engine.astrodynamics.constants import EARTH_MU
 from satellite_parameters import SunSensorArrayParameters
-from simulatesunsensor import SimulatedSunSensorArray
+from simulate_sunsensor import SimulatedSunSensorArray
 
 m = SimulatedSunSensorArray(SunSensorArrayParameters.perfect()).update(0, [1,0,0,0], [1,1,1], 1)
 app.latest_telemetry = dict(timestamp='2026-10-01T15:00:00+00:00', latitude_deg=0,
@@ -24,12 +24,16 @@ app.latest_telemetry = dict(timestamp='2026-10-01T15:00:00+00:00', latitude_deg=
     sun_arr_recon_y=.577, sun_arr_recon_z=.577, sun_arr_error_deg=0,
     imu_gyro_valid=True, imu_mag_valid=True,
     orbit_path_ecef_m=osculating_orbit([6871000,0,0],[0,np.sqrt(EARTH_MU/6871000),0]).tolist())
-from simulateimu import SimulatedIMU
+from send_simulated_sensor_data import SimulatedSensors
 from satellite_parameters import ImuSimParameters
-from imu_navigation import ImuNav
+from compute_simulated_attitude import ImuNav
+from simulate_startracker import SimulatedStarTracker
 nav = ImuNav(sun_config=SunSensorArrayParameters.perfect())
-nav.update(0, *SimulatedIMU(ImuSimParameters.perfect()).update(0, [1,0,0,0], [0,0,0], [2e-5,0,0], [1,1,1]))
+nav.update(0, *SimulatedSensors(ImuSimParameters.perfect()).update(0, [1,0,0,0], [0,0,0], [2e-5,0,0], [1,1,1]),
+           star_tracker=SimulatedStarTracker().get_raw_data(0, [1,0,0,0]))
+nav.estimate(0, [2e-5,0,0], [1,1,1])
 app.latest_telemetry.update(nav.telemetry())
+app.latest_telemetry.update(star_tracker_update_rate_hz=10., star_tracker_error_arcsec=0.)
 app.latest_telemetry.update(sun_arr_truth_x=.577, sun_arr_truth_y=.577, sun_arr_truth_z=.577,
     sun_arr_method='least_squares', att_est_quat_w=1, att_est_quat_x=0,
     att_est_quat_y=0, att_est_quat_z=0, att_est_error_deg=0,

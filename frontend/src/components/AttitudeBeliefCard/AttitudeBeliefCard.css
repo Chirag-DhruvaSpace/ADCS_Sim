@@ -4,3 +4,21 @@
 /* The card inherits the shared card rules without changing its appearance. */
 
 
+
+#mission-page-sensors .rail-left .belief-card {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+}
+#mission-page-sensors .rail-left .belief-card .vector-pair span {
+  font-size: .7em;
+}
+#mission-page-sensors .belief-error-chart {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+}
+#mission-page-sensors .belief-error-chart .live-chart { margin: 0; }
+#mission-page-sensors .belief-error-chart canvas { height: 64px; }
+#mission-page-sensors .belief-error-chart .chart-legend { font-size: .64em; }
+@media (min-width:801px) and (max-height:830px) {
+  #mission-page-sensors .belief-error-chart canvas { height: 44px; }
+}

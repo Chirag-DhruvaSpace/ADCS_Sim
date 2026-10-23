@@ -4,8 +4,8 @@
 > The older discussion below describes earlier filter behavior and is retained as historical context.
 
 Physics integrates truth; the default controller now uses simulated sensor estimates.
-`simulateimu.py` is that lying machine for rotation sensing, the same way
-`simulategps.py` is the lying machine for position.
+`simulate_gyroscope.py / simulate_magnetometer.py` is that lying machine for rotation sensing, the same way
+`simulate_gps.py` is the lying machine for position.
 
 ## 1. What the sensors measure (one line each)
 
@@ -14,7 +14,7 @@ Physics integrates truth; the default controller now uses simulated sensor estim
 - MAGNETOMETER = Earth's magnetic field felt ON the body, Tesla (dashboard
   shows nanotesla, nT = Tesla x 1,000,000,000), axes [X, Y, Z].
   It does NOT know attitude either â€” only the field vector.
-- SUN SENSOR ARRAY = six photocells on the hull (simulatesunsensor.py), each
+- SUN SENSOR ARRAY = six photocells on the hull (simulate_sunsensor.py), each
   reading sunlight as a fraction of full scale with a cosine response and a
   60-degree field-of-view cone. The onboard flight computer reconstructs the
   body-frame sun direction by least squares over the active cells. Per-cell
@@ -51,9 +51,9 @@ Physics integrates truth; the default controller now uses simulated sensor estim
 
 TRUE state (X_rot quaternion + rate, engine B_eci)
   fed IN by the main loop each tick (the IMU never fetches truth itself)
-  -> SimulatedIMU.update(t, q, omega, B_eci) adds errors
+  -> SimulatedSensors.update(t, q, omega, B_eci) adds errors
   -> (gyro, mag): None = sensor did not tick, valid=False = dropout
-  -> ImuNav (imu_navigation.py): latest good samples = sensor belief
+  -> ImuNav (compute_simulated_attitude.py): latest good samples = sensor belief
   -> imu_* telemetry keys on the dashboard.
 
 PHYSICS IS UNTOUCHED: dynamics, environment, torques, rendering and truth
@@ -71,7 +71,7 @@ through the controlled switches:
 
 Gyro + magnetometer together STILL do not give attitude by themselves --
 attitude needs an ESTIMATOR that combines them. This project now ships a
-small, honest one (imu_navigation.AttitudeEstimator):
+small, honest one (compute_simulated_attitude.AttitudeEstimator):
 
   PREDICT: every tick, rotate the attitude belief by the measured gyro rate
            (the gyro is the fast, smooth narrator of the motion).
@@ -114,9 +114,9 @@ Presets: .off() = disabled, no new keys; .perfect() = equals truth;
 .stress() = very poor, for robustness testing.
 Each preset carries a matching nested sun array (ImuSimParameters.sun_array,
 a SunSensorArrayParameters with its own off/perfect/nominal/degraded/stress
-presets - see simulatesunsensor.py). Self-test of the array alone:
-    .venv\Scripts\python.exe simulatesunsensor.py            # demo
-    .venv\Scripts\python.exe simulatesunsensor.py validate   # 13 stages, 22 checks
+presets - see simulate_sunsensor.py). Self-test of the array alone:
+    .venv\Scripts\python.exe simulate_sunsensor.py            # demo
+    .venv\Scripts\python.exe simulate_sunsensor.py validate   # 13 stages, 22 checks
 
 Nominal: gyro noise 0.00052 rad/s (0.03 deg/s), startup bias 0.00035,
 wander 0.00020 (tau 100 s), scale 0.001, misalignment 0.001 rad; mag noise
@@ -126,16 +126,16 @@ fastest this loop can tick); latency ~5 ms gyro / ~10 ms mag.
 
 ## 6. Demo, validation, logs
 
-.venv\Scripts\python.exe simulateimu.py            # 10-min demo + stats
-.venv\Scripts\python.exe simulateimu.py validate   # 10 stages, 23 checks
+.venv\Scripts\python.exe -m validation.test_simulated_sensor_models  # sensor demo + stats
+.venv\Scripts\python.exe -m validation.test_simulated_sensor_models validate   # 10 stages, 23 checks
 
 Validation must print 25 PASS, 0 FAIL (nonzero exit otherwise). All randomness
 flows from one seeded generator, so runs are exactly reproducible.
 
 ## 7. Integration Report
 
-ADDED: simulateimu.py (~900 lines: measurements, GaussMarkov, SimulatedIMU
-with ONE rng, demo, validation); imu_navigation.py (~250 lines:
+ADDED: simulate_gyroscope.py / simulate_magnetometer.py (~900 lines: measurements, GaussMarkov, SimulatedSensors
+with ONE rng, demo, validation); compute_simulated_attitude.py (~250 lines:
 ImuNav holder + imu_* telemetry + AttitudeEstimator + quaternion helpers);
 imu_README.md (this file).
 
@@ -150,11 +150,11 @@ only when IMU enabled.
 
 NOT MODIFIED: engine/, engine_adcs_bridge.py, rotational dynamics core,
 torque_distribution, calculate_disturbances, pointing modules, store,
-quat2eul, simulategps.py, gps_navigation.py. GPS behavior unchanged.
+quat2eul, simulate_gps.py, compute_simulated_position.py. GPS behavior unchanged.
 
 ## 8. Estimator status (what exists, what is next)
 
-WHAT EXISTS NOW (imu_navigation.py):
+WHAT EXISTS NOW (compute_simulated_attitude.py):
   * AttitudeEstimator ("satellite's own data" belief) -- PREDICT with the
     measured gyro rate, CORRECT with the magnetometer against the onboard
     IGRF model at the GPS-believed position. Seed = true initial attitude.
@@ -171,6 +171,6 @@ WHAT IS NEXT (documented, NOT built -- deliberate):
     observability and to kill the magnetometer-only about-B residual.
   * A full filter (complementary / EKF / TRIAD / QUEST) if you want
     covariance and gyro-bias estimation.
-No changes inside simulateimu.py are needed for any of these.
+No changes inside simulate_gyroscope.py / simulate_magnetometer.py are needed for any of these.
 
 

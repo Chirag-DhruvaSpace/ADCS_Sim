@@ -14,11 +14,11 @@ Wire format (UDP to 127.0.0.1:5010, little-endian, no padding):
                         reply (FSS.c frame offsets 5..29), one packet per head
 
 The payloads come from the current sensor models unchanged:
-  - GPS: simulategps get_raw_data() -> RawGpsSample.data, the ORION receiver's
+  - GPS: simulate_gps get_raw_data() -> RawGpsSample.data, the ORION receiver's
     scaled integers. The real OBC decodes those before forwarding AdsGpsData
     (UpdateGpsData), so this file does the same decode, with the same scale
-    factors as gps_navigation.decode_orion_fields().
-  - FSS: simulatesunsensor get_raw_data() -> RawSunSample.sensors, one
+    factors as compute_simulated_position.decode_orion_fields().
+  - FSS: simulate_sunsensor get_raw_data() -> RawSunSample.sensors, one
     RawFineSunSensor per head whose .data already holds the GETTLM fields.
     Packed as is. Slave 0x11 + k is cell k of the sun array, so the cell
     order and sensor_roll_rad in the yaml MUST match the firmware's

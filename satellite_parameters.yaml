@@ -2,7 +2,7 @@
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
 pointing:
-  strategy: firmware_sitl          # legacy | custom | firmware_sitl (external UDP actuators)
+  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
   legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
   # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
   # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
@@ -18,11 +18,11 @@ pointing:
 # nominal resets those channels to nominal defaults. Geometry/seeds are retained.
 # Per-unit overrides take precedence; sun profile is independent of IMU.
 sensor_profiles:
-  gps: perfect
-  imu: perfect        # Shared gyro/magnetometer baseline
-  gyroscope: perfect  # Optional independent override of the IMU profile
-  magnetometer: perfect
-  sun_array: perfect
+  gps: custom
+  imu: custom        # Shared gyro/magnetometer baseline
+  gyroscope: custom  # Optional independent override of the IMU profile
+  magnetometer: custom
+  sun_array: custom
 
 # P-30XL simulation configuration. Units are included in field names.
 # =============================================================================
@@ -343,6 +343,7 @@ gps_sim:
 # The YAML values below are the active configuration and currently equal nominal.
 imu_sim:
   enabled: true                       # Master switch; false means no IMU receipts
+  enable_star_tracker: true            # false: use the existing gyro/magnetometer/Sun estimate
   seed: 42                            # Base seed for all IMU randomness
 
   # Attitude-estimator measurement switches. These control whether each sensor

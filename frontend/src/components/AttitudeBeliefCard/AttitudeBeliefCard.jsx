@@ -2,7 +2,7 @@
 import MissionCard from '../MissionCard/MissionCard.jsx';
 import { memo } from 'react';
 import { formatTelemetry } from '../../services/formatTelemetry.js';
-import MiniWorld from '../MiniWorld/MiniWorld.jsx';
+import LiveChart from '../LiveChart/LiveChart.jsx';
 import "./AttitudeBeliefCard.css";
 export default memo(function AttitudeBeliefCard({
   data,
@@ -72,6 +72,8 @@ export default memo(function AttitudeBeliefCard({
           </dd>
         </div>
       </dl>
-      <MiniWorld kind="estimate" caption="Estimated body axes · ECEF" />
+      <div className="belief-error-chart">
+        <LiveChart type="estimator" label="Attitude error" samples={samples} active={active} />
+      </div>
     </MissionCard>;
 });

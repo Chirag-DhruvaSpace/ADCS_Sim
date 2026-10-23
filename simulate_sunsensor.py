@@ -1,4 +1,4 @@
-"""simulatesunsensor.py -- the simulated COARSE SUN SENSOR (CSS) ARRAY.
+"""simulate_sunsensor.py -- the simulated COARSE SUN SENSOR (CSS) ARRAY.
 
 WHAT THIS IS (plain language): a stand-in for a real multi-cell analog coarse
 sun sensor: several photocells on the spacecraft hull, each one reporting
@@ -22,8 +22,8 @@ CONFIGURE (the ONE line, in satellite_parameters.py):
     (the array itself: SunSensorArrayParameters.off/perfect/nominal/degraded/stress)
 
 SELF-TEST (from the project root):
-    python simulatesunsensor.py             # demo: per-cell table + reconstruction
-    python simulatesunsensor.py validate    # staged proof (13 stages)
+    python simulate_sunsensor.py             # demo: per-cell table + reconstruction
+    python simulate_sunsensor.py validate    # staged proof (13 stages)
 
 PLAIN-LANGUAGE GLOSSARY:
     cell           one photocell: mounting normal n_i, cosine response,
@@ -444,7 +444,7 @@ class SimulatedSunSensorArray:
         """Lookback into the buffered truth at a slightly-past moment
         (latency). The attitude quaternion is linearly interpolated
         component-wise then renormalized (fine over millisecond lags),
-        exactly like simulateimu._sample_truth_at. The eclipse fraction and
+        exactly like simulate_magnetometer._sample_truth_at. The eclipse fraction and
         the ECI position change slowly, so they use the BRACKETING nearest
         history value (documented simplification)."""
         times = [h[0] for h in self._history]
@@ -688,7 +688,7 @@ class SimulatedSunSensorArray:
         min_cells_for_solution used cells AND a full-rank A (3 non-coplanar
         normals); normalizes the solution. Returns (unit vector | None,
         valid, method-string)."""
-        from imu_navigation import reconstruct_sun
+        from compute_simulated_attitude import reconstruct_sun
         direction, valid, method, self._used_mask = reconstruct_sun(
             outputs, self._n_nominal, self.cfg.activation_threshold,
             self.cfg.min_cells_for_solution)

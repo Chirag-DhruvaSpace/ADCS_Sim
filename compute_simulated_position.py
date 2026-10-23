@@ -1,7 +1,7 @@
-"""gps_navigation.py -- turns raw GPS receiver messages into what the
+"""compute_simulated_position.py -- turns raw GPS receiver messages into what the
 satellite actually needs, and feeds it to the satellite.
 
-PLAIN LANGUAGE: the receiver (simulategps.SimulatedGPS) speaks "floor book"
+PLAIN LANGUAGE: the receiver (simulate_gps.SimulatedGPS) speaks "floor book"
 coordinates (ECEF) once per second, slightly wrong like a real chip. The
 satellite's attitude controllers think in "star book" coordinates (ECI).
 This file is the little onboard calculator in between:
@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from simulategps import GpsMeasurement
+from simulate_gps import GpsMeasurement
 
 
 def decode_orion_fields(raw, epoch_utc, earth_fixed_frame):
     """Convert ORION integers into metres, m/s, degrees and seconds."""
-    from simulategps import absolute_date, ReceiverMeasurement, enu_frame_at
+    from simulate_gps import absolute_date, ReceiverMeasurement, enu_frame_at
     from org.orekit.bodies import OneAxisEllipsoid
     from org.orekit.utils import Constants
 
@@ -55,7 +55,7 @@ def decode_orion_fields(raw, epoch_utc, earth_fixed_frame):
 def decode_gps_data(raw, epoch_utc, inertial_frame, earth_fixed_frame):
     """Decode one receiver fix, then transform position and velocity to ECI."""
     from dataclasses import asdict
-    from simulategps import absolute_date, ecef_to_eci_pv
+    from simulate_gps import absolute_date, ecef_to_eci_pv
     measurement = raw
     if hasattr(raw, 'data'):
         measurement = decode_orion_fields(raw, epoch_utc, earth_fixed_frame)

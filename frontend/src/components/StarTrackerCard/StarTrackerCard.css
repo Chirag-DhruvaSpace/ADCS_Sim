@@ -1,0 +1,53 @@
+@import "../MissionCard/MissionCard.css";
+
+.star-tracker-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 0;
+}
+.star-tracker-card .tracker-model {
+  color: #a6c6d9;
+  font-size: .61em;
+  letter-spacing: .08em;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.star-tracker-card .tracker-metrics { font-size: .77em; line-height: 1.35; }
+#mission-page-sensors .star-tracker-card .tracker-metrics > div { padding: 3px 0; gap: 12px; }
+.star-tracker-card .tracker-metrics dd { white-space: nowrap; }
+.star-tracker-optics { margin: 0; width: clamp(90px, 12dvh, 132px); }
+.star-tracker-views svg { display: block; width: 100%; height: auto; aspect-ratio: 1; }
+.star-tracker-fov rect { fill: #07131dc2; stroke: #b6ddf32b; }
+.tracker-grid { fill: none; stroke: #9bd4f214; stroke-width: .5; }
+.tracker-reticle { fill: none; stroke: #b2e2f64a; stroke-width: .8; }
+.tracker-star { fill: #eff9ff; }
+.tracker-match { fill: none; stroke: #55e8aa; stroke-width: .8; }
+.star-tracker-views text { fill: #98b7ca; font: 6px system-ui; letter-spacing: .25px; }
+.star-tracker-optics figcaption {
+  font-size: .6em;
+  color: var(--mission-muted);
+  text-align: center;
+  margin-top: 5px;
+  line-height: 1.3;
+}
+.tracker-output {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid #d7edff13;
+  padding-top: 7px;
+  margin-top: 5px;
+  font-size: .75em;
+  line-height: 1.3;
+}
+.tracker-output span { color: var(--mission-muted); }
+.tracker-output b {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 420px) {
+  .star-tracker-body { gap: 12px; }
+  .star-tracker-card .tracker-model { letter-spacing: 0; }
+}

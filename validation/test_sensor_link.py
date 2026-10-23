@@ -18,8 +18,8 @@ import pytest
 
 import satellite_parameters as config
 import sensor_link
-from simulategps import RawGpsSample
-from simulatesunsensor import SimulatedSunSensorArray, sensor_to_body_matrix, _dcm_bi_from_q
+from simulate_gps import RawGpsSample
+from simulate_sunsensor import SimulatedSunSensorArray, sensor_to_body_matrix, _dcm_bi_from_q
 
 FIRMWARE_REL_DCM_DEG = (
     ((90, 0, 90), (0, 90, 90), (90, 90, 180)),        # FSS1 -Z

@@ -134,7 +134,7 @@ export async function startSimulationEngine(configuration) {
     });
     saveSettings();
   }
-  for (const key of ['showSun', 'showGyro', 'showMag', 'sensorGlow', 'smoothAttitude']) {
+  for (const key of ['showSun', 'showGyro', 'showMag', 'showStarTracker', 'sensorGlow', 'smoothAttitude']) {
     if (SETTINGS[key] === undefined) SETTINGS[key] = true;
     document.getElementById('set-' + key).checked = SETTINGS[key];
     listen(document.getElementById('set-' + key), 'change', e => {
@@ -428,7 +428,7 @@ export async function startSimulationEngine(configuration) {
     L.setEndpoints(ZERO, SCRATCH.copy(dir).multiplyScalar(CONFIG.AXIS_LEN));
     satGroup.add(L.line);
     axes.push(L);
-    addLabel(labelText, cssColor, bodyDirPos(dir, CONFIG.AXIS_LEN), () => axesVisible);
+    addLabel(labelText, cssColor, bodyDirPos(dir, CONFIG.AXIS_LEN), () => axesVisible && !overviewView);
   }
   addBodyAxis(new THREE.Vector3(-1, 0, 0), '+Y', 0x00c800, '#7fff7f');
   addBodyAxis(new THREE.Vector3(0, 1, 0), '+X', 0xd00000, '#ff7f7f');
@@ -1335,18 +1335,19 @@ export async function startSimulationEngine(configuration) {
       if (el && el.parentElement) el.parentElement.style.display = mode === m ? "flex" : "none";
     }
   }
-  setInterval(() => {
+  function updateDirectionVisibility() {
     const m = latestMode;
-    const sunOn = m === "POINTING" || m === "SUN_POINTING" || m === "SUN_POINTING_RW";
+    for (const axis of axes) axis.line.visible = axesVisible && !overviewView;
+    const sunOn = !overviewView && (m === "POINTING" || m === "SUN_POINTING" || m === "SUN_POINTING_RW");
     sunLine.line.visible = sunOn;
     panelNormalLine.line.visible = sunOn;
-    const moonOn = m === "MOON";
+    const moonOn = !overviewView && m === "MOON";
     moonLine.line.visible = moonOn && !!moonDirEcef;
     moonPanelLine.line.visible = moonOn;
-    const nadirMode = m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS";
+    const nadirMode = !overviewView && (m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS");
     nadirLine.line.visible = nadirMode && !!nadirDirEcef;
-    sweepLine.line.visible = m === "SUN_SWEEP" && !!sweepDirEcef;
-  }, updateInterval);
+    sweepLine.line.visible = !overviewView && m === "SUN_SWEEP" && !!sweepDirEcef;
+  }
   setInterval(fetchTelemetry, updateInterval);
   fetchTelemetry();
 
@@ -1839,7 +1840,8 @@ export async function startSimulationEngine(configuration) {
     sweepLine.line.scale.setScalar(directionGuideScale);
     panelNormalLine.line.scale.setScalar(directionGuideScale);
     moonPanelLine.line.scale.setScalar(directionGuideScale);
-    paintSensorMarkers();
+    updateDirectionVisibility();
+    paintSensorMarkers(!overviewView);
     const camAlt = camLogical.length() - EARTH_R_MEAN;
     const atmoF = sstep(85000, 150000, camAlt);
     atmoMesh.visible = atmoF > 0.01;

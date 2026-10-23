@@ -46,6 +46,15 @@ export function createSpacecraftLoader({
     gltfLoader.load(url, async gltf => {
       if (version !== modelLoadVersion) return;
       reportLoading(65, 'Preparing spacecraft geometry');
+      // Read the optical aperture before batching removes individual CAD nodes.
+      // Both deployed and stowed exports identify this same baffle plate.
+      gltf.scene.updateMatrixWorld(true);
+      gltf.scene.traverse(part => {
+        if (part.isMesh && part.name.includes('SGT-ARC-0010-Baffle_plate')) {
+          gltf.scene.userData.starTrackerPositionBodyM = new THREE.Box3()
+            .setFromObject(part).getCenter(new THREE.Vector3()).toArray();
+        }
+      });
       window.spacecraftBatchStats = await batchStaticCADAsync(gltf.scene);
       if (version !== modelLoadVersion) return;
       modelHolder.clear();
@@ -57,6 +66,11 @@ export function createSpacecraftLoader({
         gltf.scene.updateMatrixWorld(true);
         const center = new THREE.Box3().setFromObject(gltf.scene).getCenter(new THREE.Vector3());
         gltf.scene.position.sub(center);
+        const trackerPosition = gltf.scene.userData.starTrackerPositionBodyM;
+        if (trackerPosition) {
+          gltf.scene.userData.starTrackerPositionBodyM = new THREE.Vector3(...trackerPosition)
+            .multiplyScalar(CONFIG.MODEL_SCALE * .001).sub(center).toArray();
+        }
       }
       gltf.scene.position.sub(new THREE.Vector3(...com));
       // Exported component materials already distinguish structure and hardware.

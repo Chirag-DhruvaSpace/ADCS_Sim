@@ -6,6 +6,7 @@ import GyroscopeCard from "../../components/GyroscopeCard/GyroscopeCard.jsx";
 import MagnetometerCard from "../../components/MagnetometerCard/MagnetometerCard.jsx";
 import AttitudeErrorCard from "../../components/AttitudeErrorCard/AttitudeErrorCard.jsx";
 import SunSensorsCard from "../../components/SunSensorsCard/SunSensorsCard.jsx";
+import StarTrackerCard from "../../components/StarTrackerCard/StarTrackerCard.jsx";
 import "./SensorsPage.css";
 export default memo(function SensorsPage({
   active,
@@ -26,6 +27,7 @@ export default memo(function SensorsPage({
     </div>
     <div className="mission-rail rail-right">
       <AttitudeErrorCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
+      <StarTrackerCard data={data} derived={derived} samples={samples} active={active} />
       <SunSensorsCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
     </div>
   </section>;

@@ -34,6 +34,14 @@
 #mission-page-pointing .live-chart figcaption { display:none; }
 
 /* Sensor column: attitude belief, GPS, gyro, magnetometer. */
+#mission-page-sensors .rail-left { gap:4px; }
+#mission-page-sensors .rail-left .mission-card { padding:6px 10px; }
+#mission-page-sensors .gps-card .gps-layout .metric-list { display:block; }
+#mission-page-sensors .gps-card .gps-layout .metric-list>div {
+  display:flex; flex-direction:row; align-items:baseline;
+  flex-wrap:nowrap; gap:6px; line-height:1.25;
+}
+#mission-page-sensors .gps-card .gps-layout .metric-list dd { white-space:nowrap; }
 #mission-page-sensors .belief-card { display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:3px 8px;align-items:center; }
 #mission-page-sensors .belief-card .card-heading { grid-column:1/-1; }
 #mission-page-sensors .belief-card .vector-pair { grid-column:1;grid-row:2;margin:0;gap:3px; }
@@ -47,7 +55,7 @@
 #mission-page-sensors .gps-card .gps-layout .metric-list { font-size:.77em; }
 #mission-page-sensors .gps-card .gps-layout .metric-list>div { padding:2px 0; }
 #mission-page-sensors .gps-card .mini-world canvas { height:130px; }
-#mission-page-sensors .gps-card>.metric-list { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;font-size:.7em;margin-top:3px; }
+#mission-page-sensors .gps-card>.metric-list { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;font-size:.7em;margin-top:3px;padding:4px 6px; }
 #mission-page-sensors .gps-card>.metric-list>div { display:block;padding:3px 4px; }
 #mission-page-sensors .gps-card>.metric-list dd { text-align:left;white-space:nowrap; }
 #mission-page-sensors .gps-card .metric-highlight { margin-top:4px;padding:4px 6px; }
@@ -55,12 +63,23 @@
 #mission-page-sensors .vector-sensor-card .sensor-split { display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr);gap:5px;align-items:center; }
 #mission-page-sensors .vector-sensor-card .sensor-table { font-size:.72em; }
 #mission-page-sensors .vector-sensor-card .sensor-table th,
-#mission-page-sensors .vector-sensor-card .sensor-table td { padding:3px 2px; }
+#mission-page-sensors .vector-sensor-card .sensor-table td { padding:2px; }
 #mission-page-sensors .vector-sensor-card .live-chart { margin:0;min-width:0; }
 #mission-page-sensors .vector-sensor-card .live-chart canvas { height:63px; }
 #mission-page-sensors .vector-sensor-card .chart-legend { gap:4px;font-size:.64em; }
 
-/* Sensor column: estimate error, solar sensors, then trend and Euler belief. */
+/* Right column: error readout, star tracker, and solar sensors. */
+#mission-page-sensors .rail-right { gap:8px; }
+#mission-page-sensors .rail-right .star-tracker-card,
+#mission-page-sensors .rail-right .sun-card { padding:8px 10px; }
+#mission-page-sensors .rail-right .card-heading { margin-bottom:6px; padding-bottom:5px; }
+#mission-page-sensors .rail-right .sun-card .sensor-table th,
+#mission-page-sensors .rail-right .sun-card .sensor-table td { padding:3px 4px; }
+#mission-page-sensors .rail-right .sun-card .mini-world canvas { height:116px; }
+@media (min-width:801px) and (max-height:950px) {
+  #mission-page-sensors .rail-right .sun-card .sensor-table th,
+  #mission-page-sensors .rail-right .sun-card .sensor-table td { padding:2px 4px; }
+}
 #mission-page-sensors .attitude-error-card .estimator-metric { padding:4px 7px; }
 #mission-page-sensors .attitude-error-card .estimator-metric b { font-size:1.35em; }
 #mission-page-sensors .attitude-error-card .quiet { margin:2px 0 0;font-size:.7em; }
@@ -248,12 +267,19 @@
 @media (min-width:801px) and (max-height:830px) {
   #mission-page-sensors .mission-rail { gap:2px; }
   #mission-page-sensors .mission-card { padding:3px 8px; }
+  #mission-page-sensors .rail-left .mission-card { padding:3px 8px; }
+  #mission-page-sensors .rail-right .sun-card .mini-world canvas { height:88px; }
   #mission-page-sensors .card-heading { margin-bottom:1px;padding-bottom:1px; }
   #mission-page-sensors .belief-card .mini-world canvas { height:60px; }
   #mission-page-sensors .gps-card .mini-world canvas { height:84px; }
   #mission-page-sensors .vector-sensor-card .live-chart canvas { height:40px; }
   #mission-page-sensors .sun-card .mini-world canvas { height:96px; }
   #mission-page-sensors .attitude-error-card .attitude-trend-card .live-chart canvas { height:56px; }
+}
+@media (min-width:801px) and (max-height:760px) {
+  #mission-page-sensors .rail-right .star-tracker-card,
+  #mission-page-sensors .rail-right .sun-card { padding:6px 10px; }
+  #mission-page-sensors .rail-right .sun-card .mini-world canvas { height:60px; }
 }
 @media (min-width:801px) and (max-width:1150px) {
   :root { --mission-font:clamp(13px,1.27vw,15px); }

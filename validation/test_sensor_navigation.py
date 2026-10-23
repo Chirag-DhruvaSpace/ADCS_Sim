@@ -4,9 +4,9 @@ from dataclasses import replace
 from types import SimpleNamespace
 import numpy as np
 from satellite_parameters import SunSensorArrayParameters, ImuSimParameters, VectorSensorParameters
-from simulatesunsensor import SimulatedSunSensorArray, earth_albedo_fractions
-from simulateimu import SimulatedIMU
-from imu_navigation import ImuNav, AttitudeEstimator, _dcm_bi_from_q, _rotation_quaternion, quat_angle_deg
+from simulate_sunsensor import SimulatedSunSensorArray, earth_albedo_fractions
+from send_simulated_sensor_data import SimulatedSensors
+from compute_simulated_attitude import ImuNav, AttitudeEstimator, _dcm_bi_from_q, _rotation_quaternion, quat_angle_deg
 from engine.astrodynamics.orbit_display import osculating_orbit
 from engine.astrodynamics.constants import EARTH_MU
 
@@ -18,7 +18,7 @@ class Sensors(unittest.TestCase):
                                    calibration_bias=(.01, 0., 0.)),
             VectorSensorParameters('B'), VectorSensorParameters('Off', enabled=False)),
             magnetometers=(VectorSensorParameters('M1'), VectorSensorParameters('M2')))
-        g, m, _ = SimulatedIMU(cfg).update(0, [1,0,0,0], [.1,.2,.3], [1e-5,2e-5,3e-5])
+        g, m, _ = SimulatedSensors(cfg).update(0, [1,0,0,0], [.1,.2,.3], [1e-5,2e-5,3e-5])
         self.assertEqual(len(g), 2)
         self.assertEqual(len(m), 2)
         nav = ImuNav()
@@ -33,17 +33,17 @@ class Sensors(unittest.TestCase):
         cfg = replace(ImuSimParameters.perfect(), gyros=(
             VectorSensorParameters('Clipped', overrides=(('gyro_range_rad_s', .01),)),
             VectorSensorParameters('Good')))
-        g,m,_ = SimulatedIMU(cfg).update(0, [1,0,0,0], [.1,0,0], [2e-5,0,0])
+        g,m,_ = SimulatedSensors(cfg).update(0, [1,0,0,0], [.1,0,0], [2e-5,0,0])
         nav = ImuNav(); nav.update(0,g,m)
         np.testing.assert_allclose(nav.omega_body(), [.1,0,0])
         self.assertFalse(nav._unit_status['gyro'][0]['used'])
         cfg = replace(ImuSimParameters.nominal(), gyros=(VectorSensorParameters('A'),VectorSensorParameters('B')))
-        g,_,_ = SimulatedIMU(cfg).update(0,[1,0,0,0],[.1,0,0],[2e-5,0,0])
+        g,_,_ = SimulatedSensors(cfg).update(0,[1,0,0,0],[.1,0,0],[2e-5,0,0])
         self.assertFalse(np.array_equal(g[0][1].omega_body_rad_s,g[1][1].omega_body_rad_s))
 
     def test_ekf_off_propagates_without_vector_corrections(self):
         nav = ImuNav(estimator_enabled=False)
-        sim = SimulatedIMU(ImuSimParameters.perfect())
+        sim = SimulatedSensors(ImuSimParameters.perfect())
         for t in np.arange(0, 1.01, .1):
             g,m,s = sim.update(t,[1,0,0,0],[0,0,.1],[2e-5,0,0])
             nav.update(t,g,m,s); nav.estimate(t,[2e-5,0,0],[1,0,0])
@@ -70,14 +70,14 @@ class Sensors(unittest.TestCase):
     def test_mount_rotation_preserves_perfect_measurements(self):
         q = tuple(_rotation_quaternion(np.array([.3, -.8, .5])))
         cfg = replace(ImuSimParameters.perfect(), gyro_mount_quaternion=q, mag_mount_quaternion=q)
-        g, m, _ = SimulatedIMU(cfg).update(0, [1,0,0,0], [.1,.2,.3], [1e-5,2e-5,3e-5])
+        g, m, _ = SimulatedSensors(cfg).update(0, [1,0,0,0], [.1,.2,.3], [1e-5,2e-5,3e-5])
         np.testing.assert_allclose(g.omega_body_rad_s, [.1,.2,.3], atol=1e-14)
         np.testing.assert_allclose(m.magnetic_field_body_t, [1e-5,2e-5,3e-5], atol=1e-14)
 
     def test_position_gradient(self):
         cfg = replace(ImuSimParameters.perfect(), mag_position_body_m=(1,0,0),
                       mag_gradient_body_t_per_m=((1e-6,0,0),(0,0,0),(0,0,0)))
-        _, m, _ = SimulatedIMU(cfg).update(0, [1,0,0,0], [0,0,0], [2e-5,0,0])
+        _, m, _ = SimulatedSensors(cfg).update(0, [1,0,0,0], [0,0,0], [2e-5,0,0])
         np.testing.assert_allclose(m.magnetic_field_body_t, [2.1e-5,0,0])
 
     def test_albedo_dayside_nightside(self):
@@ -130,7 +130,7 @@ class Sensors(unittest.TestCase):
         self.assertTrue(.95 < coverage < .96, coverage)
 
     def test_rotating_filter(self):
-        from imu_navigation import _quat_multiply
+        from compute_simulated_attitude import _quat_multiply
         omega = np.array([.015,-.02,.03])
         q0 = _rotation_quaternion(np.array([.3,-.2,.4]))
         est = AttitudeEstimator(_quat_multiply(_rotation_quaternion(np.array([.04,.03,-.02])), q0))
