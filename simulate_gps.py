@@ -15,12 +15,12 @@ The satellite's onboard belief of where it is comes from this receiver (see
 compute_simulated_position.py); the orbit truth keeps driving the physics unchanged, so
 the two can always be compared and scored.
 
-CONFIGURE (the ONE line, in satellite_parameters.py):
-    GPS_SIM = GpsSimParameters.nominal()    # realistic (default)
-    GPS_SIM = GpsSimParameters.off()        # behave exactly like before GPS
-    GPS_SIM = GpsSimParameters.perfect()    # zero error (plumbing check)
-    GPS_SIM = GpsSimParameters.degraded()   # errors x2.5, 5% dropouts
-    GPS_SIM = GpsSimParameters.stress()     # errors x5, 15% dropouts, 30 s silence
+CONFIGURE (satellite_parameters.yaml):
+    gps.enabled: true                 # one master switch; false means no output
+    sensor_profiles.gps: custom       # use the values in the gps section
+    Profiles: off / perfect / nominal / degraded / stress / custom.
+    perfect removes modeled errors; nominal uses standard errors; degraded
+    increases errors and outages; stress has 5x errors and a 30 s cold start.
 
 SELF-TEST (from the project root):
     python simulate_gps.py            # 600 s demo, prints the first 20 messages

@@ -1,6 +1,6 @@
 # IMU and viewer changes
 
-The default flight path is sensor-driven: physical truth feeds `SimulatedSensors`,
+The default flight path is sensor-driven: physical truth feeds each independent sensor directly,
 receipts feed `ImuNav`, and its reconstructed Sun vector and six-state
 multiplicative EKF feed the controller. The EKF estimates attitude and gyro
 bias. Magnetic references use the GPS-believed position; solar ephemerides
@@ -40,7 +40,7 @@ visibility/glow switches and a live mount editor. Positions are body-frame metre
 Sun normals and FOV are editable. Runtime edits apply at the next tick and
 restart sensor calibration, without rewriting permanent configuration.
 
-Permanent settings are under `imu_sim` in `satellite_parameters.yaml`: positions,
+Permanent settings are under each sensor section in `satellite_parameters.yaml`: positions,
 scalar-first mounting quaternions, Sun array parameters and a 3Ãƒâ€”3 local magnetic
 gradient in T/m. Gyro rate is independent of position on a rigid body. Magnetic
 position dependence uses the configured linear gradient, not an electromagnetic
@@ -77,12 +77,12 @@ and [NASA magnetometer/gyro attitude estimation](https://ntrs.nasa.gov/citations
 
 ## Optional multiple sensors and canonical configuration
 
-`satellite_parameters.py` defines `VectorSensorParameters`; `satellite_parameters.yaml` sets `imu_sim.gyros` and
-`IMU_SIM.magnetometers`. Empty tuples retain the existing single-chip defaults
-and random sequence. Nonempty tuples instantiate independently seeded hardware;
+`satellite_parameters.py` defines `VectorSensorParameters`; `satellite_parameters.yaml` sets `gyroscope.units` and
+`magnetometer.units`. Empty lists retain the existing single-chip defaults
+and random sequence. Nonempty lists instantiate independently seeded hardware;
 each unit can inherit or override its family's sampling, latency, noise, range,
 response matrix, fixed bias, mounting, and magnetic-gradient settings. An
-explicit tuple whose members are all disabled produces no readings.
+explicit list whose members are all disabled produces no readings.
 
 `ImuNav` applies only supplied onboard calibration to returned body vectors.
 It excludes invalid, saturated, stale and excessively time-skewed units, then
@@ -104,7 +104,7 @@ truth-based comparison modes. Turning ONLY the EKF off now means gyro-only
 propagation, not truth feedback. Its innovation gate, bias bound and initial
 covariance are wired to the canonical parameters.
 
-Sensor locations, mount orientations and field gradients are configured in backend YAML. Optional `imu_mount_defaults` entries are applied at startup. Restart the simulation after editing them; no frontend mounting editor or mounting API remains.
+Sensor locations, mount orientations and field gradients are configured in backend YAML. Optional per-sensor `mount_overrides` entries are applied at startup. Restart the simulation after editing them; no frontend mounting editor or mounting API remains.
 
 ## Viewer and verification scope
 

@@ -1,4 +1,4 @@
-"""Historical sensor-model checks, moved intact from the combined simulator.
+"""Independent sensor-model checks using each sensor directly.
 
 Run: python -m validation.test_simulated_sensor_models validate
 Demo: python -m validation.test_simulated_sensor_models
@@ -9,7 +9,9 @@ from dataclasses import replace
 
 import numpy as np
 
-from send_simulated_sensor_data import SimulatedSensors
+from simulate_gyroscope import SimulatedGyroscope
+from simulate_magnetometer import SimulatedMagnetometer
+from simulate_sunsensor import SimulatedSunSensorArray
 from simulate_magnetometer import _dcm_bi_from_q
 
 
@@ -79,30 +81,30 @@ def run_demo() -> None:
     import satellite_parameters as config
     from sun_vector_eci import sun_vector_eci
     from datetime import timedelta
-    imu = SimulatedSensors(config.IMU_SIM)
+    imu = (SimulatedGyroscope(config.IMU_SIM), SimulatedMagnetometer(config.IMU_SIM), SimulatedSunSensorArray((config.IMU_SIM).sun_array))
 
     t0 = time.perf_counter()
     for t, q, omega, B_eci in _real_truth_driver(provider, dt=0.1, t_end=120.0):
         # the Sun's ECI direction is known from the GPS clock (CLAUDE.md §5)
         sun = sun_vector_eci(config.EPOCH_UTC + timedelta(seconds=t))
-        imu.update(t, q, omega, B_eci, sun)
+        (imu[0].update(t, q, omega), imu[1].update(t, q, B_eci), imu[2].update(t, q, sun, 1.0))
     wall = time.perf_counter() - t0
 
     print(f"flew 120 s in {wall:.1f} s wall clock; "
-          f"{imu.gyro_samples} gyro, {imu.mag_samples} mag, "
-          f"{imu.sun_samples} sun-sensor outputs")
-    print(f"  gyro outputs / valid : {imu.gyro_samples} / "
-          f"{sum(1 for kind, r in imu.records if kind == 'gyro' and r['valid'])}")
-    print(f"  mag  outputs / valid : {imu.mag_samples} / "
-          f"{sum(1 for kind, r in imu.records if kind == 'mag' and r['valid'])}")
-    if imu.sun_sensor is not None:
-        srecs = imu.sun_sensor.records
-        print(f"  sun  outputs / valid : {imu.sun_samples} / "
+          f"{imu[0].gyro_samples} gyro, {imu[1].mag_samples} mag, "
+          f"{len(imu[2].records)} sun-sensor outputs")
+    print(f"  gyro outputs / valid : {imu[0].gyro_samples} / "
+          f"{sum(1 for kind, r in (imu[0].records + imu[1].records) if kind == 'gyro' and r['valid'])}")
+    print(f"  mag  outputs / valid : {imu[1].mag_samples} / "
+          f"{sum(1 for kind, r in (imu[0].records + imu[1].records) if kind == 'mag' and r['valid'])}")
+    if imu[2] is not None:
+        srecs = imu[2].records
+        print(f"  sun  outputs / valid : {len(imu[2].records)} / "
               f"{sum(1 for r in srecs if r['valid'])} "
               f"({sum(1 for r in srecs if r['reconstruction_valid'])} reconstructions solved)")
 
-    ge = np.array([r["meas"] - r["truth"] for kind, r in imu.records if kind == "gyro" and r["valid"]])
-    me = np.array([r["meas"] - r["truth"] for kind, r in imu.records if kind == "mag" and r["valid"]])
+    ge = np.array([r["meas"] - r["truth"] for kind, r in (imu[0].records + imu[1].records) if kind == "gyro" and r["valid"]])
+    me = np.array([r["meas"] - r["truth"] for kind, r in (imu[0].records + imu[1].records) if kind == "mag" and r["valid"]])
     if len(ge):
         print("\nsummary statistics (NOMINAL profile):")
         print(f"  gyro error std  X/Y/Z : "
@@ -118,13 +120,13 @@ def run_demo() -> None:
         print(f"  mag error mean X/Y/Z : "
               f"{me[:, 0].mean() * 1e9:+.1f} / {me[:, 1].mean() * 1e9:+.1f} / "
               f"{me[:, 2].mean() * 1e9:+.1f} nT")
-    if imu.sun_sensor is not None:
-        good = [r for r in imu.sun_sensor.records if r["reconstruction_valid"]]
+    if imu[2] is not None:
+        good = [r for r in imu[2].records if r["reconstruction_valid"]]
         if good:
             angs = np.array([np.degrees(np.arccos(np.clip(
                 float(np.dot(r["meas"], r["truth"])), -1.0, 1.0))) for r in good])
             print(f"  sun recon error mean/std : {angs.mean():.3f} / {angs.std():.3f} deg "
-                  f"({len(good)}/{len(imu.sun_sensor.records)} receipts solved)")
+                  f"({len(good)}/{len(imu[2].records)} receipts solved)")
     print("\ndone.")
 
 # --- validation harness ------------------------------------------------------
@@ -153,7 +155,7 @@ def _synthetic_gyro_loop(imu, duration_s=600.0, omega=None, dt=None):
     # onboard least-squares reconstruction needs >=3 non-coplanar cells)
     sun_eci = np.array([1.0, 1.0, 1.0]); sun_eci /= np.linalg.norm(sun_eci)
     for i in range(1, int(round(duration_s / dt)) + 1):
-        imu.update(i * dt, q_ident, omega, B_eci, sun_eci)
+        (imu[0].update(i * dt, q_ident, omega), imu[1].update(i * dt, q_ident, B_eci), imu[2].update(i * dt, q_ident, sun_eci, 1.0))
     return imu
 
 
@@ -161,7 +163,7 @@ def _finalize(cfg_factory, seed=42, duration=600.0):
     from satellite_parameters import ImuSimParameters
     cfg = cfg_factory()
     cfg = replace(cfg, seed=seed)
-    imu = SimulatedSensors(cfg)
+    imu = (SimulatedGyroscope(cfg), SimulatedMagnetometer(cfg), SimulatedSunSensorArray((cfg).sun_array))
     _synthetic_gyro_loop(imu, duration_s=duration)
     return imu
 
@@ -170,8 +172,8 @@ def _finalize(cfg_factory, seed=42, duration=600.0):
 def _check_perfect() -> None:
     from satellite_parameters import ImuSimParameters
     imu = _finalize(ImuSimParameters.perfect)
-    grecs = [r for k, r in imu.records if k == "gyro"]
-    mrecs = [r for k, r in imu.records if k == "mag"]
+    grecs = [r for k, r in (imu[0].records + imu[1].records) if k == "gyro"]
+    mrecs = [r for k, r in (imu[0].records + imu[1].records) if k == "mag"]
     if not grecs or not mrecs:
         _check("PERFECT", "samples exist", False, "no gyro/mag records")
         return
@@ -186,8 +188,8 @@ def _check_perfect() -> None:
     _check("PERFECT", "2 mag == truth", mmax < 1e-12,
            f"max |meas-truth| = {mmax:.3e} T (< 1e-12)  [X,Y,Z, Tesla]")
     # (2b) sun ARRAY reconstruction == true body unit direction (dimensionless)
-    if imu.sun_sensor is not None:
-        srecs = imu.sun_sensor.records
+    if imu[2] is not None:
+        srecs = imu[2].records
         good = [r for r in srecs if r["reconstruction_valid"]]
         se = (np.array([r["meas"] - r["truth"] for r in good])
               if good else np.zeros((0, 3)))
@@ -224,10 +226,10 @@ def _check_white() -> None:
                    gyro_white_noise_sigma_rad_s=0.00052,
                    mag_white_noise_sigma_t=80e-9,
                    sun_array=_sun_white)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(imu, duration_s=600.0)
-    ge = np.array([r["meas"] - r["truth"] for k, r in imu.records if k == "gyro"])
-    me = np.array([r["meas"] - r["truth"] for k, r in imu.records if k == "mag"])
+    ge = np.array([r["meas"] - r["truth"] for k, r in (imu[0].records + imu[1].records) if k == "gyro"])
+    me = np.array([r["meas"] - r["truth"] for k, r in (imu[0].records + imu[1].records) if k == "mag"])
     tgt = cfg0.gyro_white_noise_sigma_rad_s
     ok_g = all(abs(ge[:, i].std() - tgt) < 0.25 * tgt for i in range(3))
     _check("WHITE", "6 gyro noise std", ok_g,
@@ -241,8 +243,8 @@ def _check_white() -> None:
     # (7b) sun ARRAY white noise: with everything else perfect and a constant
     # truth, the per-cell output scatter equals the configured fraction-of-
     # full-scale sigma (0.003 here), measured on a mid-scale cell.
-    if imu.sun_sensor is not None:
-        sa = imu.sun_sensor
+    if imu[2] is not None:
+        sa = imu[2]
         i = sa._names.index("+Z")
         outs = np.array([r["outputs"][i] for r in sa.records])
         sstd = float(outs.std())
@@ -256,9 +258,9 @@ def _check_white() -> None:
 def _check_bias() -> None:
     from satellite_parameters import ImuSimParameters
     cfg0 = replace(ImuSimParameters.perfect(), gyro_bias_sigma_rad_s=0.005)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(imu, duration_s=600.0)
-    ge = np.array([r["meas"] - r["truth"] for k, r in imu.records if k == "gyro"])
+    ge = np.array([r["meas"] - r["truth"] for k, r in (imu[0].records + imu[1].records) if k == "gyro"])
     means = ge.mean(axis=0)
     # a bias is a PERSISTENT offset: |mean| clearly nonzero on every axis
     # (white noise is zero here, so any persistent offset proves the bias)
@@ -279,9 +281,9 @@ def _check_wander() -> None:
     # wander only: fixed bias OFF, white OFF, wander large so it's measurable
     cfg0 = replace(ImuSimParameters.perfect(),
                    gyro_wander_sigma_rad_s=0.001, gyro_wander_tau_s=50.0)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(imu, duration_s=1000.0)
-    ge = np.array([r["meas"] - r["truth"] for k, r in imu.records if k == "gyro"])
+    ge = np.array([r["meas"] - r["truth"] for k, r in (imu[0].records + imu[1].records) if k == "gyro"])
     if len(ge) < 300:
         _check("WANDER", "10 samples", False, "not enough samples")
         return
@@ -305,11 +307,11 @@ def _check_scale() -> None:
     from satellite_parameters import ImuSimParameters
     cfg0 = replace(ImuSimParameters.perfect(), gyro_scale_error=0.2,
                    mag_scale_error=0.2)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     # truth along a single axis so the per-axis scale is directly measured
     _synthetic_gyro_loop(imu, duration_s=200.0, omega=np.array([1.0, 0.0, 0.0]))
-    grecs = [r for k, r in imu.records if k == "gyro"]
-    mrecs = [r for k, r in imu.records if k == "mag"]
+    grecs = [r for k, r in (imu[0].records + imu[1].records) if k == "gyro"]
+    mrecs = [r for k, r in (imu[0].records + imu[1].records) if k == "mag"]
     rx = np.array([r["meas"][0] / r["truth"][0] for r in grecs])
     ratio = float(np.median(rx))
     ok = 0.05 < abs(ratio - 1.0) < 0.7
@@ -330,12 +332,12 @@ def _check_misalignment() -> None:
     from satellite_parameters import ImuSimParameters
     cfg0 = replace(ImuSimParameters.perfect(), gyro_misalignment_rad=0.5,
                    mag_misalignment_rad=0.5)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     # truth is a PURE Z spin / PURE Z field: any X/Y measured content proves
     # cross-axis coupling (misalignment), not scale (scale on Z only stretches Z).
     _synthetic_gyro_loop(imu, duration_s=100.0, omega=np.array([0.0, 0.0, 1.0]))
-    grecs = [r for k, r in imu.records if k == "gyro"]
-    mrecs = [r for k, r in imu.records if k == "mag"]
+    grecs = [r for k, r in (imu[0].records + imu[1].records) if k == "gyro"]
+    mrecs = [r for k, r in (imu[0].records + imu[1].records) if k == "mag"]
     gx = np.median([r["meas"][0] for r in grecs])   # X leak from pure Z truth
     gy = np.median([r["meas"][1] for r in grecs])
     gz = np.median([r["meas"][2] for r in grecs])
@@ -353,7 +355,7 @@ def _check_misalignment() -> None:
 # ---- STAGE 7: MAGNETOMETER BODY-FRAME CONVENTION ----------------------------
 def _check_mag_frame() -> None:
     from satellite_parameters import ImuSimParameters
-    imu = SimulatedSensors(ImuSimParameters.perfect())
+    imu = (SimulatedGyroscope(ImuSimParameters.perfect()), SimulatedMagnetometer(ImuSimParameters.perfect()), SimulatedSunSensorArray((ImuSimParameters.perfect()).sun_array))
     # Known rotation: q = [cos45, 0, 0, sin45] is +90 deg about Z. Feeding
     # B_eci = [B,0,0] through the repo's own C_bi formula gives
     # B_body = [0,+B,0] (checked numerically against _dcm_bi_from_q -- the
@@ -363,8 +365,8 @@ def _check_mag_frame() -> None:
     # (using C_bi instead of C_bi.T) would give a DIFFERENT vector and fail.
     B = 2.0e-5
     q = np.array([np.cos(np.pi / 4.0), 0.0, 0.0, np.sin(np.pi / 4.0)])
-    imu.update(0.1, q, np.zeros(3), np.array([B, 0.0, 0.0]))
-    mrecs = [r for k, r in imu.records if k == "mag" and r["valid"]]
+    (imu[0].update(0.1, q, np.zeros(3)), imu[1].update(0.1, q, np.array([B, 0.0, 0.0])), None)
+    mrecs = [r for k, r in (imu[0].records + imu[1].records) if k == "mag" and r["valid"]]
     if not mrecs:
         _check("FRAME", "16 90deg body field", False, "no mag record")
         return
@@ -376,14 +378,21 @@ def _check_mag_frame() -> None:
            f"[{meas[0]:+.2e}, {meas[1]:+.2e}, {meas[2]:+.2e}] T (expect [0, +{B:.0e}, 0])")
     # identity attitude: body field == ECI field (use zero latency so the
     # buffered truth is exactly this sample, no interpolation lag)
-    imu2 = SimulatedSensors(replace(ImuSimParameters.perfect(), gyro_latency_mean_s=0.0,
+    imu2 = (SimulatedGyroscope(replace(ImuSimParameters.perfect(), gyro_latency_mean_s=0.0,
                                 gyro_latency_sigma_s=0.0, gyro_latency_min_s=0.0,
                                 gyro_latency_max_s=0.0, mag_latency_mean_s=0.0,
                                 mag_latency_sigma_s=0.0, mag_latency_min_s=0.0,
-                                mag_latency_max_s=0.0))
-    imu2.update(0.1, np.array([1.0, 0.0, 0.0, 0.0]), np.zeros(3),
-                np.array([0.0, 1.0e-5, 0.5e-5]))
-    m2 = [r for k, r in imu2.records if k == "mag" and r["valid"]][-1]["meas"]
+                                mag_latency_max_s=0.0)), SimulatedMagnetometer(replace(ImuSimParameters.perfect(), gyro_latency_mean_s=0.0,
+                                gyro_latency_sigma_s=0.0, gyro_latency_min_s=0.0,
+                                gyro_latency_max_s=0.0, mag_latency_mean_s=0.0,
+                                mag_latency_sigma_s=0.0, mag_latency_min_s=0.0,
+                                mag_latency_max_s=0.0)), SimulatedSunSensorArray((replace(ImuSimParameters.perfect(), gyro_latency_mean_s=0.0,
+                                gyro_latency_sigma_s=0.0, gyro_latency_min_s=0.0,
+                                gyro_latency_max_s=0.0, mag_latency_mean_s=0.0,
+                                mag_latency_sigma_s=0.0, mag_latency_min_s=0.0,
+                                mag_latency_max_s=0.0)).sun_array))
+    (imu2[0].update(0.1, np.array([1.0, 0.0, 0.0, 0.0]), np.zeros(3)), imu2[1].update(0.1, np.array([1.0, 0.0, 0.0, 0.0]), np.array([0.0, 1.0e-5, 0.5e-5])), None)
+    m2 = [r for k, r in (imu2[0].records + imu2[1].records) if k == "mag" and r["valid"]][-1]["meas"]
     ok_id = float(np.linalg.norm(m2 - np.array([0.0, 1.0e-5, 0.5e-5]))) < 1e-12
     _check("FRAME", "17 identity body field", ok_id,
            f"id attitude -> body == ECI: max diff "
@@ -396,10 +405,10 @@ def _check_saturation() -> None:
     # blows past them on every sample.
     cfg0 = replace(ImuSimParameters.perfect(), gyro_range_rad_s=0.05,
                    mag_range_t=1.0e-6)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(imu, duration_s=100.0)
-    grecs = [r for k, r in imu.records if k == "gyro"]
-    mrecs = [r for k, r in imu.records if k == "mag"]
+    grecs = [r for k, r in (imu[0].records + imu[1].records) if k == "gyro"]
+    mrecs = [r for k, r in (imu[0].records + imu[1].records) if k == "mag"]
     ok_g = (bool(grecs) and all(r["saturated"] for r in grecs)
             and all(float(np.max(np.abs(r["meas"]))) <= 0.05 + 1e-12 for r in grecs))
     _check("SAT", "18 gyro clipped+flagged", ok_g,
@@ -420,10 +429,10 @@ def _check_dropout() -> None:
     p = 0.05
     cfg0 = replace(ImuSimParameters.perfect(), gyro_dropout_probability=p,
                    mag_dropout_probability=p)
-    imu = SimulatedSensors(cfg0)
+    imu = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(imu, duration_s=600.0)   # 6000 samples per sensor
-    grecs = [r for k, r in imu.records if k == "gyro"]
-    mrecs = [r for k, r in imu.records if k == "mag"]
+    grecs = [r for k, r in (imu[0].records + imu[1].records) if k == "gyro"]
+    mrecs = [r for k, r in (imu[0].records + imu[1].records) if k == "mag"]
     fg = sum(1 for r in grecs if not r["valid"]) / max(len(grecs), 1)
     fm = sum(1 for r in mrecs if not r["valid"]) / max(len(mrecs), 1)
     ok_g = abs(fg - p) < 0.02
@@ -440,14 +449,14 @@ def _check_dropout() -> None:
 def _check_determinism() -> None:
     from satellite_parameters import ImuSimParameters
     cfg0 = ImuSimParameters.nominal()
-    a = SimulatedSensors(cfg0)
+    a = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(a, duration_s=100.0)
-    b = SimulatedSensors(cfg0)
+    b = (SimulatedGyroscope(cfg0), SimulatedMagnetometer(cfg0), SimulatedSunSensorArray((cfg0).sun_array))
     _synthetic_gyro_loop(b, duration_s=100.0)
-    ga = np.array([r["meas"] for k, r in a.records if k == "gyro"])
-    gb = np.array([r["meas"] for k, r in b.records if k == "gyro"])
-    ma = np.array([r["meas"] for k, r in a.records if k == "mag"])
-    mb = np.array([r["meas"] for k, r in b.records if k == "mag"])
+    ga = np.array([r["meas"] for k, r in (a[0].records + a[1].records) if k == "gyro"])
+    gb = np.array([r["meas"] for k, r in (b[0].records + b[1].records) if k == "gyro"])
+    ma = np.array([r["meas"] for k, r in (a[0].records + a[1].records) if k == "mag"])
+    mb = np.array([r["meas"] for k, r in (b[0].records + b[1].records) if k == "mag"])
     ok_same = (ga.shape == gb.shape and ma.shape == mb.shape
                and float(np.max(np.abs(ga - gb))) == 0.0
                and float(np.max(np.abs(ma - mb))) == 0.0)
@@ -455,9 +464,9 @@ def _check_determinism() -> None:
            f"gyro max diff {float(np.max(np.abs(ga - gb))):.1e}, "
            f"mag max diff {float(np.max(np.abs(ma - mb))):.1e} (expect exactly 0)")
     cfg1 = replace(cfg0, seed=cfg0.seed + 1)
-    c = SimulatedSensors(cfg1)
+    c = (SimulatedGyroscope(cfg1), SimulatedMagnetometer(cfg1), SimulatedSunSensorArray((cfg1).sun_array))
     _synthetic_gyro_loop(c, duration_s=100.0)
-    gc = np.array([r["meas"] for k, r in c.records if k == "gyro"])
+    gc = np.array([r["meas"] for k, r in (c[0].records + c[1].records) if k == "gyro"])
     ok_diff = float(np.max(np.abs(ga - gc))) > 0.0
     _check("DETERM", "23 different seed differs", ok_diff,
            f"gyro max diff vs seed+1 = {float(np.max(np.abs(ga - gc))):.3e} (expect > 0)")

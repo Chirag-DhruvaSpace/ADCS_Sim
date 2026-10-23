@@ -2,14 +2,14 @@
 
 CONFIGURATION (satellite_parameters.yaml)
 ---------------------------------------
-sensor_profiles.gyroscope selects the preset; imu_sim contains custom settings.
+sensor_profiles.gyroscope selects the preset; gyroscope contains custom settings.
   custom   : use the configured YAML error values.
   off      : produce no sensor receipts.
   perfect  : remove modeled errors and delivery delays.
   nominal  : use the standard sensor-error preset.
   degraded : increase errors and delivery problems.
   stress   : use the largest preset errors and dropout probability.
-The shared IMU profile supplies defaults; a sensor profile can override it.
+Each sensor has its own enabled master switch; false overrides every profile.
 
 MODELED ERRORS
 --------------
@@ -19,7 +19,7 @@ MODELED ERRORS
   - Scale error and axis misalignment: gain and mounting imperfections.
   - Quantization and saturation: finite resolution and measurement range.
   - Latency/jitter and dropouts: delayed or missing sensor receipts.
-Each effect uses the corresponding gyro_* or mag_* configuration fields.
+Each effect uses the corresponding settings in this sensor's YAML section.
 A seeded random generator makes repeated runs reproducible. Hardware register
 conversion still applies in perfect mode: ideal physics has finite device counts.
 
@@ -154,7 +154,8 @@ class SimulatedGyroscope:
     def __init__(self, config, epoch_utc=None, record_history=True, random_generator=None):
         self.cfg = config
         self.epoch_utc = epoch_utc
-        self.rng = (np.random.default_rng(config.seed)
+        seed = config.seed if config.gyro_seed is None else config.gyro_seed
+        self.rng = (np.random.default_rng(seed)
                     if random_generator is None else random_generator)
         self._gyro_mount = _dcm_bi_from_q(config.gyro_mount_quaternion)
         self._M_gyro = self._build_calibration_matrix(

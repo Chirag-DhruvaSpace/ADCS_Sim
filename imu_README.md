@@ -51,7 +51,7 @@ Physics integrates truth; the default controller now uses simulated sensor estim
 
 TRUE state (X_rot quaternion + rate, engine B_eci)
   fed IN by the main loop each tick (the IMU never fetches truth itself)
-  -> SimulatedSensors.update(t, q, omega, B_eci) adds errors
+  -> independent sensor update functions add errors
   -> (gyro, mag): None = sensor did not tick, valid=False = dropout
   -> ImuNav (compute_simulated_attitude.py): latest good samples = sensor belief
   -> imu_* telemetry keys on the dashboard.
@@ -134,7 +134,7 @@ flows from one seeded generator, so runs are exactly reproducible.
 
 ## 7. Integration Report
 
-ADDED: simulate_gyroscope.py / simulate_magnetometer.py (~900 lines: measurements, GaussMarkov, SimulatedSensors
+ADDED: simulate_gyroscope.py / simulate_magnetometer.py (~900 lines: measurements, GaussMarkov, independent sensor models
 with ONE rng, demo, validation); compute_simulated_attitude.py (~250 lines:
 ImuNav holder + imu_* telemetry + AttitudeEstimator + quaternion helpers);
 imu_README.md (this file).

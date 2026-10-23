@@ -219,13 +219,15 @@ Values: custom / off / perfect / nominal / degraded / stress.
 ```yaml
 sensor_profiles:
   gps: custom
-  imu: stress
   gyroscope: custom
   magnetometer: custom
-  sun_array: custom
+  sun_sensor: custom
+  star_tracker: perfect
 ```
 
-Flags use_gyro_for_control, use_mag_for_control, use_attitude_estimate_for_control, render_estimated_attitude toggle estimate-vs-truth for A/B tests.
+Each sensor has its own `enabled` master switch and settings under `gps`, `gyroscope`, `magnetometer`, `sun_sensor`, or `star_tracker`. A false master switch overrides its profile. Star tracker profiles are custom (ideal), perfect, and off.
+
+`gyroscope.use_for_control`, `magnetometer.use_for_control`, `attitude_navigation.use_for_control`, and `attitude_navigation.render_estimated_attitude` select sensor belief versus truth for A/B tests.
 
 ### Simulation speed
 

@@ -17,13 +17,13 @@ class StarTrackerTests(unittest.TestCase):
         import satellite_parameters as configuration
 
         data = yaml.safe_load(Path(configuration.__file__).with_suffix('.yaml').read_text(encoding='utf-8'))
-        data['imu_sim']['enable_star_tracker'] = False
+        data['star_tracker']['enabled'] = False
         data['use_advanced_satellite_model'] = False
         with TemporaryDirectory() as directory:
             source = Path(directory) / 'satellite_parameters.yaml'
             for profile in ('custom', 'nominal', 'perfect', 'degraded', 'stress', 'off'):
                 with self.subTest(profile=profile):
-                    data['sensor_profiles']['imu'] = profile
+                    data['sensor_profiles']['gyroscope'] = profile
                     source.write_text(yaml.safe_dump(data), encoding='utf-8')
                     self.assertFalse(configuration._load_configuration(source)[10].enable_star_tracker)
 

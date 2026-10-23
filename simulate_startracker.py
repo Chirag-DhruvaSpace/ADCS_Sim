@@ -2,7 +2,7 @@
 
 CONFIGURATION (satellite_parameters.yaml)
 ---------------------------------------
-imu_sim.enable_star_tracker:
+star_tracker.enabled:
   true  : return the supplied truth quaternion unchanged.
   false : return no reading; navigation uses its existing sensor fallback.
 Restart the simulation after changing YAML, as with other sensor settings.

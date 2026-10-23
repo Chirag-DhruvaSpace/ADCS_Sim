@@ -54,7 +54,7 @@ class PointingInputs(unittest.TestCase):
     def test_independent_profiles_load_from_yaml(self):
         data = yaml.safe_load(Path(config.__file__).with_suffix('.yaml').read_text(encoding='utf-8'))
         data['use_advanced_satellite_model'] = False
-        data['sensor_profiles'].update(imu='nominal', gyroscope='stress', magnetometer='perfect', sun_array='off')
+        data['sensor_profiles'].update(gyroscope='stress', magnetometer='perfect', sun_sensor='off')
         with TemporaryDirectory() as directory:
             source = Path(directory) / 'satellite_parameters.yaml'
             source.write_text(yaml.safe_dump(data), encoding='utf-8')
@@ -63,6 +63,26 @@ class PointingInputs(unittest.TestCase):
         self.assertEqual(imu.mag_white_noise_sigma_t, 0)
         self.assertFalse(imu.sun_array.enabled)
         self.assertTrue(imu.enabled)
+
+    def test_sensor_master_switches_win_over_profiles(self):
+        data = yaml.safe_load(Path(config.__file__).with_suffix('.yaml').read_text(encoding='utf-8'))
+        data['use_advanced_satellite_model'] = False
+        for sensor in ('gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker'):
+            data[sensor]['enabled'] = False
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / 'satellite_parameters.yaml'
+            for profile in ('custom', 'off', 'perfect', 'nominal', 'degraded', 'stress'):
+                with self.subTest(profile=profile):
+                    for sensor in ('gps', 'gyroscope', 'magnetometer', 'sun_sensor'):
+                        data['sensor_profiles'][sensor] = profile
+                    source.write_text(yaml.safe_dump(data), encoding='utf-8')
+                    loaded = config._load_configuration(source)
+                    sensors = loaded[10]
+                    self.assertFalse(loaded[9].enabled)
+                    self.assertFalse(sensors.enable_gyro)
+                    self.assertFalse(sensors.enable_magnetometer)
+                    self.assertFalse(sensors.sun_array.enabled)
+                    self.assertFalse(sensors.enable_star_tracker)
 
     def test_legacy_and_custom_ui_and_commands_are_separate(self):
         client = app.app.test_client()

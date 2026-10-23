@@ -688,6 +688,8 @@ class ImuSimParameters:
     enabled: bool = True                     # master switch (False = no IMU at all)
     enable_star_tracker: bool = True         # ideal absolute-attitude sensor
     seed: int = 42                           # RNG seed (all randomness flows from this)
+    gyro_seed: int | None = None             # Independent YAML sensor seeds
+    mag_seed: int | None = None
 
     # Flight-software switches: all live in this single configuration object.
     enable_attitude_estimator: bool = True
@@ -864,6 +866,7 @@ class ImuSimParameters:
         overrides[kind + '_mount_quaternion'] = (unit.mount_quaternion if unit.mount_quaternion is not None
                                                 else getattr(self, kind + '_mount_quaternion'))
         return replace(self, **overrides, gyros=(), magnetometers=(), enable_sun_sensor=False,
+                       gyro_seed=None, mag_seed=None,
                        seed=unit.seed if unit.seed is not None else self.seed + index*1009 + (0 if kind == 'gyro' else 100003),
                        enable_gyro=kind == 'gyro', enable_magnetometer=kind == 'mag')
 
@@ -1033,18 +1036,26 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
         raise ValueError(f"Expected a YAML mapping in {source}")
     expected = {'spacecraft', 'orbit', 'attitude', 'model_data', 'control',
                 'disturbances', 'geometry', 'reaction_wheels', 'simulation',
-                'gps_sim', 'imu_sim', 'imu_mount_defaults', 'viewer', 'use_advanced_satellite_model', 'pointing', 'sensor_profiles'}
+                'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker',
+                'attitude_navigation', 'viewer', 'use_advanced_satellite_model', 'pointing', 'sensor_profiles'}
     if set(data) != expected:
         raise ValueError(f"YAML sections differ from expected: {sorted(set(data) ^ expected)}")
     profiles = data['sensor_profiles']
-    if not isinstance(profiles, dict) or set(profiles) != {'gps', 'imu', 'gyroscope', 'magnetometer', 'sun_array'}:
-        raise ValueError('sensor_profiles must specify gps, imu, gyroscope, magnetometer, sun_array')
+    if not isinstance(profiles, dict) or set(profiles) != {'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker'}:
+        raise ValueError('sensor_profiles must specify gps, gyroscope, magnetometer, sun_sensor, star_tracker')
     # YAML 1.1 reads an unquoted 'off' as False. Keep this human-friendly
     # profile spelling usable without changing the meaning of the setting.
     profiles = {name: 'off' if value is False else value for name, value in profiles.items()}
     data['sensor_profiles'] = profiles
     if any(value not in ('custom', 'off', 'perfect', 'nominal', 'degraded', 'stress') for value in profiles.values()):
         raise ValueError('Unknown sensor profile')
+    if profiles['star_tracker'] not in ('custom', 'perfect', 'off'):
+        raise ValueError('Star tracker supports only custom (ideal), perfect, and off profiles')
+    for name in ('gps', 'gyroscope', 'magnetometer', 'sun_sensor'):
+        if not isinstance(data[name], dict):
+            raise ValueError(f'{name} must be a YAML mapping')
+        if not isinstance(data[name].get('enabled'), bool):
+            raise ValueError(f'{name}.enabled must be true or false')
     validate_pointing_configuration(data['pointing'])
     def section(name, cls):
         values = data[name]
@@ -1091,34 +1102,77 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     geometry_data['surfaces'] = tuple(_from_yaml(SurfaceParameters, item) for item in geometry_data['surfaces'])
     geometry_data['blockers'] = tuple(_from_yaml(ShadowBlockerParameters, item) for item in geometry_data.get('blockers', []))
     geometry = _from_yaml(GeometryParameters, geometry_data)
-    imu_data = dict(data['imu_sim'])
-    sun_data = dict(imu_data['sun_array'])
-    base_cells = {c['name']: c for c in sun_data['cells']}
+    # YAML describes independent sensors. The existing runtime bundle remains
+    # an internal adapter so acquisition/navigation and firmware SITL stay stable.
+    imu_data = {}
+    mounts = {}
+    from dataclasses import fields
+    runtime_fields = {item.name for item in fields(ImuSimParameters)}
+    for name, prefix, flag, group, update, control in (
+        ('gyroscope', 'gyro_', 'enable_gyro', 'gyros', 'enable_gyro_update', 'use_gyro_for_control'),
+        ('magnetometer', 'mag_', 'enable_magnetometer', 'magnetometers', 'enable_magnetometer_update', 'use_mag_for_control'),
+    ):
+        values = dict(data[name])
+        imu_data[flag] = values.pop('enabled')
+        imu_data[prefix + 'seed'] = values.pop('seed')
+        imu_data[update] = values.pop('use_for_attitude')
+        imu_data[control] = values.pop('use_for_control')
+        imu_data[group] = tuple(_from_yaml(VectorSensorParameters, item) for item in values.pop('units'))
+        mounts.update(values.pop('mount_overrides', {}))
+        if name == 'magnetometer':
+            imu_data['estimator_mag_sigma_deg'] = values.pop('attitude_sigma_deg')
+        for key, value in values.items():
+            target = prefix + key
+            if target not in runtime_fields:
+                raise ValueError(f'Unknown {name} setting: {key}')
+            imu_data[target] = value
+    sun_data = dict(data['sun_sensor'])
+    imu_data['enable_sun_update'] = sun_data.pop('use_for_attitude')
+    imu_data['estimator_sun_sigma_deg'] = sun_data.pop('attitude_sigma_deg')
+    mounts.update(sun_data.pop('mount_overrides', {}))
+    base_cells = {cell['name']: cell for cell in sun_data['cells']}
     sun_data.update(selected.get('sun_array', {}))
     if advanced:
         sun_data['blockers'] = geometry_data['blockers']
-    sun_data['cells'] = [{**base_cells.get(c['name'], {}), **c} for c in sun_data['cells']]
+    sun_data['cells'] = [{**base_cells.get(cell['name'], {}), **cell} for cell in sun_data['cells']]
     sun_data['cells'] = tuple(_from_yaml(SunSensorCellParameters, item) for item in sun_data['cells'])
     sun_data['blockers'] = tuple(item if isinstance(item, ShadowBlockerParameters) else
                                  _from_yaml(ShadowBlockerParameters, item) for item in sun_data['blockers'])
-    imu_data['sun_array'] = _from_yaml(SunSensorArrayParameters, sun_data)
-    for group in ('gyros', 'magnetometers'):
-        imu_data[group] = tuple(_from_yaml(VectorSensorParameters, item) for item in imu_data[group])
+    sun = _apply_sensor_profile(_from_yaml(SunSensorArrayParameters, sun_data), profiles['sun_sensor'])
+    sun = replace(sun, enabled=data['sun_sensor']['enabled'] and sun.enabled)
+    imu_data['sun_array'] = sun
+    imu_data['enable_sun_sensor'] = sun.enabled
+    tracker = data['star_tracker']
+    if set(tracker) != {'enabled'} or not isinstance(tracker['enabled'], bool):
+        raise ValueError('star_tracker requires a boolean enabled switch')
+    imu_data['enable_star_tracker'] = tracker['enabled'] and profiles['star_tracker'] != 'off'
+    navigation_aliases = {
+        'enabled': 'enable_attitude_estimator',
+        'initial_estimate_quaternion': 'initial_estimate_quaternion',
+        'innovation_gate_chi2': 'estimator_innovation_gate_chi2',
+        'max_bias_rad_s': 'estimator_max_bias_rad_s',
+        'initial_attitude_sigma_deg': 'estimator_initial_attitude_sigma_deg',
+        'initial_bias_sigma_rad_s': 'estimator_initial_bias_sigma_rad_s',
+        'fusion_max_age_s': 'fusion_max_age_s',
+        'fusion_max_time_skew_s': 'fusion_max_time_skew_s',
+        'use_for_control': 'use_attitude_estimate_for_control',
+        'render_estimated_attitude': 'render_estimated_attitude',
+    }
+    for key, value in data['attitude_navigation'].items():
+        if key not in navigation_aliases:
+            raise ValueError(f'Unknown attitude_navigation setting: {key}')
+        imu_data[navigation_aliases[key]] = value
     imu_data.update(selected.get('sensor_mounts', {}))
-    imu = _apply_sensor_profile(_from_yaml(ImuSimParameters, imu_data), data['sensor_profiles']['imu'])
-    for key, prefix, flag in (('gyroscope', 'gyro_', 'enable_gyro'), ('magnetometer', 'mag_', 'enable_magnetometer')):
-        profile = profiles[key]
-        if profile != 'custom':
-            selected_profile = _apply_sensor_profile(imu, profile)
-            from dataclasses import fields
-            changes = {f.name: getattr(selected_profile, f.name) for f in fields(imu)
-                       if f.name.startswith(prefix) and 'position_body' not in f.name and 'mount_quaternion' not in f.name}
-            changes[flag] = profile != 'off'
-            imu = replace(imu, **changes)
-    imu = replace(imu, sun_array=_apply_sensor_profile(imu.sun_array, profiles['sun_array']))
-    mounts = data['imu_mount_defaults'] or {}
-    if not isinstance(mounts, dict):
-        raise ValueError('imu_mount_defaults must be a mapping')
+    imu = _from_yaml(ImuSimParameters, imu_data)
+    for name, prefix, flag in (('gyroscope', 'gyro_', 'enable_gyro'), ('magnetometer', 'mag_', 'enable_magnetometer')):
+        selected_profile = _apply_sensor_profile(imu, profiles[name])
+        changes = {field.name: getattr(selected_profile, field.name) for field in fields(imu)
+                   if field.name.startswith(prefix) and 'position_body' not in field.name
+                   and 'mount_quaternion' not in field.name}
+        changes[flag] = getattr(imu, flag) and profiles[name] != 'off'
+        imu = replace(imu, **changes)
+    gps = _apply_sensor_profile(section('gps', GpsSimParameters), profiles['gps'])
+    gps = replace(gps, enabled=data['gps']['enabled'] and gps.enabled)
     wheel_settings = {**data['reaction_wheels'], **selected.get('reaction_wheels', {})}
     if 'axis_matrix_body' in selected.get('reaction_wheels', {}):
         wheel_settings.pop('axis_matrix_assembly', None)
@@ -1127,7 +1181,7 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
             _from_yaml(ModelDataParameters, model_data), section('control', ControlParameters),
             section('disturbances', DisturbanceParameters), geometry,
             wheels,
-            section('simulation', SimulationParameters), _apply_sensor_profile(section('gps_sim', GpsSimParameters), data['sensor_profiles']['gps']),
+            section('simulation', SimulationParameters), gps,
             apply_imu_mount_defaults(imu, mounts), mounts)
 
 

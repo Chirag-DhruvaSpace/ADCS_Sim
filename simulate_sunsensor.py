@@ -16,10 +16,13 @@ the environment hitting the hardware: gradual eclipse (penumbra), Earth
 albedo on the nadir-facing cells, self-shadowing by bus/panel boxes,
 measurement latency and occasional whole-receipt dropouts.
 
-CONFIGURE (the ONE line, in satellite_parameters.py):
-    IMU_SIM = ImuSimParameters.nominal()    # carries sun_array=...nominal()
-    IMU_SIM = ImuSimParameters.off()        # no IMU at all (legacy behavior)
-    (the array itself: SunSensorArrayParameters.off/perfect/nominal/degraded/stress)
+CONFIGURE (satellite_parameters.yaml):
+    sun_sensor.enabled: true          # one master switch; false means no output
+    sensor_profiles.sun_sensor: custom
+    All head geometry, electronics and error settings live under sun_sensor.
+    Profiles: off / perfect / nominal / degraded / stress / custom.
+    perfect removes modeled sensor errors; nominal uses standard errors;
+    degraded and stress increase the noise, drift and delivery problems.
 
 SELF-TEST (from the project root):
     python simulate_sunsensor.py             # demo: per-cell table + reconstruction

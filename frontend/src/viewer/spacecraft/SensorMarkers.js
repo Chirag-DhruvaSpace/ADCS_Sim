@@ -16,6 +16,8 @@ export function createSensorMarkers({
     canvas.height = 96;
     const context = canvas.getContext('2d');
     context.font = 'bold 48px sans-serif';
+    const fontSize = Math.min(48, Math.floor(48 * 240 / context.measureText(text).width));
+    context.font = `bold ${fontSize}px sans-serif`;
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.lineWidth = 8;
@@ -56,8 +58,9 @@ export function createSensorMarkers({
           toneMapped: false
         }));
         mesh.renderOrder = 500;
-        if (item.kind === 'Sun') mesh.add(createSensorLabel(`FSS${sunSensorNumber}`));
-        if (item.kind === 'StarTracker') mesh.add(createSensorLabel('ST'));
+        const label = item.kind === 'Sun' ? `FSS${sunSensorNumber}`
+          : item.kind === 'StarTracker' ? 'Star tracker' : item.name;
+        mesh.add(createSensorLabel(label));
         satGroup.add(mesh);
         sensorMarkers.set(item.name, mesh);
       }
@@ -79,7 +82,7 @@ export function createSensorMarkers({
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;
       mesh.userData.active = item.kind === 'Sun' ? sunUsed : level > 0;
       mesh.userData.color = item.kind === 'Sun' ? (sunUsed ? 0xff8800 : 0xffe600)
-        : item.kind === 'StarTracker' ? 0x66dfff : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
+        : item.kind === 'StarTracker' ? 0x2986ff : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
     }
     for (const [name, mesh] of sensorMarkers) if (!alive.has(name)) {
       satGroup.remove(mesh);
@@ -100,7 +103,10 @@ export function createSensorMarkers({
     for (const mesh of sensorMarkers.values()) {
       mesh.visible = visible && SETTINGS['show' + mesh.userData.kind];
       const illuminated = mesh.userData.kind === 'Sun' && mesh.userData.level > 0;
-      if (mesh.userData.kind === 'Sun' && (illuminated || mesh.userData.active)) {
+      if (mesh.userData.kind === 'StarTracker') {
+        // The tracker stays identifiable in blue even without a valid reading.
+        mesh.material.color.setHex(mesh.userData.color);
+      } else if (mesh.userData.kind === 'Sun' && (illuminated || mesh.userData.active)) {
         // Keep selected sensors orange; sunlight controls the other sensors' brightness.
         mesh.material.color.setHex(mesh.userData.color);
         if (!mesh.userData.active) mesh.material.color.lerp(inactiveColor, 1 - mesh.userData.level);

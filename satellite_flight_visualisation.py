@@ -50,20 +50,37 @@ _orbit_provider = engine_bridge.get_orbit_provider(epoch_utc)
 # SRP, sun/moon directions, true pointing-error metrics, rendering) keep using
 # the TRUE r_vec/v_vec -- only the ADCS's position/velocity KNOWLEDGE is
 # GPS-based. Turn GPS off / change intensity with the ONE line in
-# satellite_parameters.py:
-#   GPS_SIM = GpsSimParameters.off() / .perfect() / .nominal() / .degraded() / .stress()
+# satellite_parameters.yaml: gps.enabled and sensor_profiles.gps.
 from simulate_gps import SimulatedGPS
 from compute_simulated_position import GpsNav
 _gps_sim = SimulatedGPS(_orbit_provider, config.GPS_SIM) if config.GPS_SIM.enabled else None
 _gps_nav = GpsNav(*_orbit_provider.initial_state())   # launch-vehicle-provided start
 
-# ---- Simulated IMU (gyroscope + magnetometer) -- see simulate_gyroscope.py and simulate_magnetometer.py --------
+# ---- Independent simulated sensors (gyroscope + magnetometer) -- see simulate_gyroscope.py and simulate_magnetometer.py --------
 # Hardware receives environment truth. ImuNav reconstructs sunlight and runs
 # the attitude/bias MEKF from receipts and onboard reference models only.
 # Control uses that belief; true state remains in plant physics and diagnostics.
-from send_simulated_sensor_data import SimulatedSensors
+from simulate_gyroscope import SimulatedGyroscope
+from simulate_magnetometer import SimulatedMagnetometer
+from simulate_sunsensor import SimulatedSunSensorArray
+from simulate_startracker import SimulatedStarTracker
+
+# Preserve the existing seeded sequence when both sensor seeds match.
+_gyro_seed = config.IMU_SIM.seed if config.IMU_SIM.gyro_seed is None else config.IMU_SIM.gyro_seed
+_mag_seed = config.IMU_SIM.seed if config.IMU_SIM.mag_seed is None else config.IMU_SIM.mag_seed
+_gyro_random = np.random.default_rng(_gyro_seed)
+_mag_random = _gyro_random if _gyro_seed == _mag_seed else np.random.default_rng(_mag_seed)
+_gyroscope = SimulatedGyroscope(config.IMU_SIM, record_history=False, random_generator=_gyro_random)
+_magnetometer = SimulatedMagnetometer(config.IMU_SIM, record_history=False, random_generator=_mag_random)
+_gyro_units = [(unit, SimulatedGyroscope(config.IMU_SIM.unit_config('gyro', unit, index), record_history=False))
+               for index, unit in enumerate(config.IMU_SIM.gyros) if unit.enabled]
+_mag_units = [(unit, SimulatedMagnetometer(config.IMU_SIM.unit_config('mag', unit, index), record_history=False))
+              for index, unit in enumerate(config.IMU_SIM.magnetometers) if unit.enabled]
+_sun_sensor = (SimulatedSunSensorArray(config.IMU_SIM.sun_array, record_history=False)
+               if config.IMU_SIM.enabled and config.IMU_SIM.enable_sun_sensor and config.IMU_SIM.sun_array.enabled else None)
+_star_tracker = SimulatedStarTracker(enabled=config.IMU_SIM.enabled and config.IMU_SIM.enable_star_tracker)
+
 from compute_simulated_attitude import ImuNav
-_sensor_sim = SimulatedSensors(config.IMU_SIM, record_history=False) if config.IMU_SIM.enabled else None
 _imu_nav = ImuNav(initial_quaternion=config.IMU_SIM.initial_estimate_quaternion,
                   sun_config=config.IMU_SIM.sun_array,
                   filter_options=dict(
@@ -138,15 +155,20 @@ state0 = np.concatenate((r0, v0))          # [x, y, z, vx, vy, vz]
 # one every 300 simulated seconds) so a wheel sitting near its momentum limit
 # doesn't print one line per second for hours. The huge negative start value
 # lets the first warning fire immediately.
-from send_simulated_sensor_data import sensor_layout
-_sensor_layout = sensor_layout(config.IMU_SIM)
+_sensor_layout = [dict(name=cell.name, kind='Sun', position=list(cell.position_body_m),
+                       normal=list(cell.normal_body), fov=cell.fov_half_angle_deg)
+                  for cell in config.IMU_SIM.sun_array.cells]
+for _kind, _label in [('gyro', 'Gyro'), ('mag', 'Mag')]:
+    for _unit in config.IMU_SIM.sensor_units(_kind):
+        _position = _unit.position_body_m
+        if _position is None:
+            _position = getattr(config.IMU_SIM, _kind + '_position_body_m')
+        _sensor_layout.append(dict(name=_unit.name, kind=_label,
+                                   position=list(_position), enabled=_unit.enabled))
 
 
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
-    global _sensor_sim, _telemetry_sequence
-
-    from send_simulated_sensor_data import SensorDataSender
-    sensor_sender = SensorDataSender()
+    global _telemetry_sequence
 
     firmware = None
     if config.POINTING['strategy'] == 'firmware_sitl':
@@ -253,14 +275,26 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # FSS heads see the Sun where the firmware expects it, without
         # touching the models. Non-SITL runs keep the MBD convention.
         q_sensor = X_rot[:4] if firmware is None else X_rot[:4] * np.array([1.0, -1.0, -1.0, -1.0])
-        if _sensor_sim is not None:
-            _gyro_msg, _mag_msg, _sun_msg = _sensor_sim.get_raw_data(
-                t, q_sensor, X_rot[4:7], B_eci, sun_eci,
-                eclipse_fraction=srp_result.eclipse_fraction,
-                position_eci=r_vec)
+        if config.IMU_SIM.enabled:
+            # Acquire each sensor directly; navigation receives only their outputs.
+            # Prepare both chips before reading to retain the seeded noise order.
+            _gyroscope.prepare_sample(t, q_sensor, X_rot[4:7])
+            _magnetometer.prepare_sample(t, q_sensor, B_eci)
+            if config.IMU_SIM.gyros:
+                _gyro_msg = [(unit, sensor.get_raw_data(t, q_sensor, X_rot[4:7]))
+                             for unit, sensor in _gyro_units] if config.IMU_SIM.enable_gyro else []
+            else:
+                _gyro_msg = _gyroscope.read_sample(raw_output=True)
+            if config.IMU_SIM.magnetometers:
+                _mag_msg = [(unit, sensor.get_raw_data(t, q_sensor, B_eci))
+                            for unit, sensor in _mag_units] if config.IMU_SIM.enable_magnetometer else []
+            else:
+                _mag_msg = _magnetometer.read_sample(raw_output=True)
+            _sun_msg = (_sun_sensor.get_raw_data(t, q_sensor, sun_eci,
+                            srp_result.eclipse_fraction, r_vec) if _sun_sensor is not None else None)
             # The ideal star tracker is a separate sensor. Firmware SITL keeps
             # its own attitude processing and receives no simulated star input.
-            _star_msg = (_sensor_sim.star_tracker.get_raw_data(t, X_rot[:4])
+            _star_msg = (_star_tracker.get_raw_data(t, X_rot[:4])
                          if firmware is None else None)
             _imu_nav.process_raw_data(t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM,
                                       star_tracker=_star_msg)
@@ -297,7 +331,6 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                                    use_attitude=config.IMU_SIM.use_attitude_estimate_for_control)
         else:
             srd.set_imu_adcs_input(False, use_attitude=False)
-        sensor_sender.send_from_sensors(t, _gps_sim, _sensor_sim)
 
         # ---- ROTATION STEP (LIVE CONTROLS READ HERE) ----
         
@@ -499,7 +532,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # SITL displays the plant attitude: the external firmware, rather than
         # this Python estimator, controls the satellite in that mode.
         C_bi_render = C_bi
-        if (store.mode != 'FIRMWARE_SITL' and _sensor_sim is not None
+        if (store.mode != 'FIRMWARE_SITL' and config.IMU_SIM.enabled
                 and config.IMU_SIM.render_estimated_attitude):
             C_bi_render = srd._dcm_bi_from_q(_att_est.q_eci)
         C_body2ecef = C_eci2ecef @ C_bi_render
@@ -520,7 +553,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # nadir = -r_vec, moon = spacecraft-to-moon) so this block can never
         # NameError on a first-tick ordering change. Values are identical to
         # the ones used below (same provider calls, same formulas).
-        if _sensor_sim is not None:
+        if config.IMU_SIM.enabled:
             q_est = _att_est.q_eci
             q_tgt = None
             # NOTE: store.mode is the LIVE mode the dynamics just set this tick
@@ -600,7 +633,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         else:
             imu_own_axis_error_deg = None
 
-        if store.mode == 'CUSTOM' and _sensor_sim is not None:
+        if store.mode == 'CUSTOM' and config.IMU_SIM.enabled:
             imu_own_axis_error_deg = imu_att_pointing_error_deg
 
         # ---- SUN-POINTING ACCURACY ----
@@ -865,10 +898,10 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         data_to_send['orbit_path_ecef_m'] = (osculating_orbit(r_vec, v_vec) @ C_eci2ecef.T).tolist()
 
         # ---- IMU sensor belief (only when IMU enabled; no new keys when off)
-        if _sensor_sim is not None:
+        if config.IMU_SIM.enabled:
             data_to_send.update(_imu_nav.telemetry())
             if firmware is None and _star_msg is not None:
-                data_to_send['star_tracker_update_rate_hz'] = _sensor_sim.star_tracker.update_rate_hz
+                data_to_send['star_tracker_update_rate_hz'] = _star_tracker.update_rate_hz
                 # Operator-only comparison, separate from navigation updates.
                 observed_boresight = srd._dcm_bi_from_q(_star_msg.quaternion_eci)[:, 2]
                 true_boresight = srd._dcm_bi_from_q(X_rot[:4])[:, 2]
@@ -913,7 +946,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             if _sun_rec is not None:
                 # Physical illumination/shadow diagnostics are operator truth,
                 # separate from ADC packets and navigation's reconstructed data.
-                _sun_diagnostics = getattr(_sensor_sim.sun_sensor, '_last_cell_diagnostics', {})
+                _sun_diagnostics = getattr(_sun_sensor, '_last_cell_diagnostics', {})
                 def _sun_diagnostic(name, field, scale=1.0):
                     value = getattr(_sun_diagnostics.get(name), field, None)
                     return None if value is None else (value if scale == 1.0 else value * scale)
@@ -980,7 +1013,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
 
         from dashboard_telemetry import enrich_dashboard
         _active_forces = {type(force).__name__ for force in _orbit_provider.universe.force_model.forces}
-        _imu_cfg = _sensor_sim.cfg if _sensor_sim is not None else None
+        _imu_cfg = config.IMU_SIM if config.IMU_SIM.enabled else None
         enrich_dashboard(
             data_to_send, t=t, position_eci=r_vec, velocity_eci=v_vec,
             sun_eci_m=_orbit_provider.sun_position_eci(), eci_to_ecef=C_eci2ecef,
@@ -994,7 +1027,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                                   (not _imu_cfg.gyros or any(unit.enabled for unit in _imu_cfg.gyros))),
                 'Magnetometer': bool(_imu_cfg and _imu_cfg.enable_magnetometer and
                                      (not _imu_cfg.magnetometers or any(unit.enabled for unit in _imu_cfg.magnetometers))),
-                'Sun sensor array': bool(_sensor_sim and _sensor_sim.sun_sensor is not None),
+                'Sun sensor array': bool(_sun_sensor is not None),
             },
             models={
                 'Propagator': 'Orekit / DOP853',
@@ -1027,7 +1060,6 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         X_rot = X_rot_next
         t += dt
 
-    sensor_sender.close()
 
 
 

@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import app
-from send_simulated_sensor_data import sensor_layout
 from satellite_parameters import IMU_SIM
 import numpy as np
 from engine.astrodynamics.orbit_display import osculating_orbit
@@ -15,7 +14,7 @@ m = SimulatedSunSensorArray(SunSensorArrayParameters.perfect()).update(0, [1,0,0
 app.latest_telemetry = dict(timestamp='2026-10-01T15:00:00+00:00', latitude_deg=0,
     longitude_deg=0, altitude_m=500000, yaw_deg=0, pitch_deg=0, roll_deg=0,
     body_rate_x=0, body_rate_y=0, body_rate_z=0, alpha_x=0, alpha_y=0, alpha_z=0,
-    quat_w=1, quat_x=0, quat_y=0, quat_z=0, imu_mounts=sensor_layout(IMU_SIM),
+    quat_w=1, quat_x=0, quat_y=0, quat_z=0, imu_mounts=[dict(name=c.name, kind="Sun", position=c.position_body_m, normal=c.normal_body, fov=c.fov_half_angle_deg) for c in IMU_SIM.sun_array.cells] + [dict(name="Gyroscope", kind="Gyro", position=IMU_SIM.gyro_position_body_m), dict(name="Magnetometer", kind="Mag", position=IMU_SIM.mag_position_body_m)],
     sun_arr_cells=[dict(name=c.name, output_pct=c.output_pct, adc_counts=c.adc_counts,
         angle_deg=c.angle_deg, used=c.used, in_fov=c.in_fov, shadowed=c.shadowed,
         saturated=c.saturated, eclipse_factor=1, albedo_pct=0) for c in m.cells],
@@ -24,12 +23,14 @@ app.latest_telemetry = dict(timestamp='2026-10-01T15:00:00+00:00', latitude_deg=
     sun_arr_recon_y=.577, sun_arr_recon_z=.577, sun_arr_error_deg=0,
     imu_gyro_valid=True, imu_mag_valid=True,
     orbit_path_ecef_m=osculating_orbit([6871000,0,0],[0,np.sqrt(EARTH_MU/6871000),0]).tolist())
-from send_simulated_sensor_data import SimulatedSensors
+from simulate_gyroscope import SimulatedGyroscope
+from simulate_magnetometer import SimulatedMagnetometer
 from satellite_parameters import ImuSimParameters
 from compute_simulated_attitude import ImuNav
 from simulate_startracker import SimulatedStarTracker
 nav = ImuNav(sun_config=SunSensorArrayParameters.perfect())
-nav.update(0, *SimulatedSensors(ImuSimParameters.perfect()).update(0, [1,0,0,0], [0,0,0], [2e-5,0,0], [1,1,1]),
+nav.update(0, SimulatedGyroscope(ImuSimParameters.perfect()).update(0, [1,0,0,0], [0,0,0]),
+           SimulatedMagnetometer(ImuSimParameters.perfect()).update(0, [1,0,0,0], [2e-5,0,0]), m,
            star_tracker=SimulatedStarTracker().get_raw_data(0, [1,0,0,0]))
 nav.estimate(0, [2e-5,0,0], [1,1,1])
 app.latest_telemetry.update(nav.telemetry())
