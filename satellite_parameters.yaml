@@ -571,7 +571,7 @@ sun_sensor:
 # STAR TRACKER - ideal truth-quaternion measurement
 # =============================================================================
 star_tracker:
-  enabled: true                             # false selects the existing navigation fallback
+  enabled: false                             # false selects the existing navigation fallback
   # No added noise, blinding, catalog matching, rate limit, or latency yet.
 
 # =============================================================================
