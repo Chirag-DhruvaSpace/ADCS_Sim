@@ -38,10 +38,10 @@
 #mission-page-sensors .rail-left .mission-card { padding:6px 10px; }
 #mission-page-sensors .gps-card .gps-layout .metric-list { display:block; }
 #mission-page-sensors .gps-card .gps-layout .metric-list>div {
-  display:flex; flex-direction:row; align-items:baseline;
-  flex-wrap:nowrap; gap:6px; line-height:1.25;
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,.8fr);
+  align-items:baseline; gap:4px 8px; line-height:1.35;
 }
-#mission-page-sensors .gps-card .gps-layout .metric-list dd { white-space:nowrap; }
+#mission-page-sensors .gps-card .gps-layout .metric-list dd { white-space:normal; overflow-wrap:anywhere; }
 #mission-page-sensors .belief-card { display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:3px 8px;align-items:center; }
 #mission-page-sensors .belief-card .card-heading { grid-column:1/-1; }
 #mission-page-sensors .belief-card .vector-pair { grid-column:1;grid-row:2;margin:0;gap:3px; }
@@ -51,13 +51,12 @@
 #mission-page-sensors .belief-card .mini-world canvas { height:91px; }
 #mission-page-sensors .belief-card .metric-list { grid-column:1/-1;grid-row:3;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.72em; }
 #mission-page-sensors .belief-card .metric-list>div { border:0; }
-#mission-page-sensors .gps-card .gps-layout { grid-template-columns:1.12fr .88fr;gap:5px; }
 #mission-page-sensors .gps-card .gps-layout .metric-list { font-size:.77em; }
 #mission-page-sensors .gps-card .gps-layout .metric-list>div { padding:2px 0; }
 #mission-page-sensors .gps-card .mini-world canvas { height:130px; }
 #mission-page-sensors .gps-card>.metric-list { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;font-size:.7em;margin-top:3px;padding:4px 6px; }
 #mission-page-sensors .gps-card>.metric-list>div { display:block;padding:3px 4px; }
-#mission-page-sensors .gps-card>.metric-list dd { text-align:left;white-space:nowrap; }
+#mission-page-sensors .gps-card>.metric-list dd { text-align:left;white-space:normal;overflow-wrap:anywhere; }
 #mission-page-sensors .gps-card .metric-highlight { margin-top:4px;padding:4px 6px; }
 #mission-page-sensors .gps-card #gps-links-status { margin:3px 0 0;font-size:.7em; }
 #mission-page-sensors .vector-sensor-card .sensor-split { display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,.8fr);gap:5px;align-items:center; }

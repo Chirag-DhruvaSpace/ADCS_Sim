@@ -677,6 +677,138 @@ class VectorSensorParameters:
 
 
 @dataclass(frozen=True)
+class StarTrackerParameters:
+    """Single-head tracker settings; all angular sigmas are per-axis 1-sigma."""
+
+    enabled: bool = True
+    seed: int = 73
+    profile: str = 'custom'
+    update_rate_hz: float = 10.0
+    mount_quaternion: tuple = (1.0, 0.0, 0.0, 0.0)
+    detector_temperature_c: float = 20.0
+    thermal_reference_temperature_c: float = 20.0
+    earth_limb_radius_km: float = 6478.137
+    enable_nea: bool = True
+    enable_lfse: bool = True
+    enable_bias: bool = True
+    enable_thermal: bool = True
+    enable_star_count: bool = True
+    enable_temperature_rate_inflation: bool = True
+    enable_straylight: bool = True
+    enable_sky_position: bool = False
+    enable_blinding: bool = True
+    enable_kinematic_limits: bool = True
+    enable_latency: bool = True
+    enable_dropouts: bool = True
+    enable_outliers: bool = True
+    nea_sigma_arcsec: tuple = (4.3, 4.3, 26.0)
+    lfse_sigma_arcsec: tuple = (3.0, 3.0, 17.0)
+    lfse_tau_s: float = 300.0
+    lfse_slew_scale_deg_s: float = 0.3
+    bias_sigma_arcsec: tuple = (20.0, 20.0, 17.0)
+    thermal_slope_arcsec_per_deg_c: tuple = (0.5, 0.5, 0.0)
+    star_count_walk_sigma_per_sqrt_s: float = 0.08
+    sky_position_period_s: float = 2400.0
+    latency_mean_s: float = 0.150
+    latency_sigma_s: float = 0.015
+    latency_min_s: float = 0.080
+    latency_max_s: float = 0.250
+    timestamp_sigma_s: float = 0.0000333333333333
+    dropout_probability: float = 0.001
+    burst_start_probability: float = 0.0
+    burst_duration_s: float = 1.0
+    outlier_probability: float = 0.001
+    outlier_multiplier_min: float = 20.0
+    outlier_multiplier_max: float = 50.0
+    tracking_rate_limit_deg_s: float = 3.0
+    tracking_acceleration_limit_deg_s2: float = 2.5
+    reacquisition_rate_limit_deg_s: float = 0.3
+    reacquisition_s: float = 4.0
+    reacquisition_jitter_s: float = 0.0
+    cold_start_s: float = 4.0
+    low_trust_packets: int = 5
+    sun_hard_off_deg: float = 33.0
+    sun_exclusion_deg: float = 35.0
+    sun_clean_deg: float = 45.0
+    earth_exclusion_deg: float = 22.0
+    earth_clean_deg: float = 30.0
+    outages_s: tuple = ()
+
+    def __post_init__(self):
+        from dataclasses import fields
+        if self.profile not in ('off', 'perfect', 'nominal', 'degraded', 'stress', 'custom'):
+            raise ValueError('Unknown star tracker profile')
+        if self.update_rate_hz not in (5, 8, 10):
+            raise ValueError('Star tracker update_rate_hz must be 5, 8, or 10')
+        for setting in fields(self):
+            value = getattr(self, setting.name)
+            if setting.name.startswith('enable') and not isinstance(value, bool):
+                raise ValueError(f'{setting.name} must be boolean')
+            if isinstance(value, (float, int)) and not isinstance(value, bool):
+                if not np.isfinite(value):
+                    raise ValueError(f'{setting.name} must be finite')
+                if setting.name not in ('detector_temperature_c', 'thermal_reference_temperature_c') and value < 0:
+                    raise ValueError(f'{setting.name} must be nonnegative')
+        for name in ('nea_sigma_arcsec', 'lfse_sigma_arcsec', 'bias_sigma_arcsec', 'thermal_slope_arcsec_per_deg_c'):
+            values = np.asarray(getattr(self, name), dtype=float)
+            if values.shape != (3,) or not np.all(np.isfinite(values)) or np.any(values < 0):
+                raise ValueError(f'{name} must contain three nonnegative finite values')
+        mount = np.asarray(self.mount_quaternion, dtype=float)
+        if mount.shape != (4,) or not np.all(np.isfinite(mount)) or np.linalg.norm(mount) < 1e-12:
+            raise ValueError('Star tracker mount must be a finite nonzero quaternion')
+        for name in ('dropout_probability', 'burst_start_probability', 'outlier_probability'):
+            if getattr(self, name) > 1:
+                raise ValueError(f'{name} must be at most one')
+        for name in ('lfse_tau_s', 'lfse_slew_scale_deg_s', 'sky_position_period_s',
+                     'earth_limb_radius_km', 'tracking_rate_limit_deg_s', 'tracking_acceleration_limit_deg_s2'):
+            if getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be positive')
+        if not self.latency_min_s <= self.latency_mean_s <= self.latency_max_s:
+            raise ValueError('Star tracker latency bounds must contain the mean')
+        if not self.sun_hard_off_deg < self.sun_exclusion_deg < self.sun_clean_deg <= 180:
+            raise ValueError('Star tracker Sun angles must increase within 180 degrees')
+        if not self.earth_exclusion_deg < self.earth_clean_deg <= 180:
+            raise ValueError('Star tracker Earth angles must increase within 180 degrees')
+        if self.reacquisition_rate_limit_deg_s >= self.tracking_rate_limit_deg_s:
+            raise ValueError('Reacquisition rate must be below tracking rate')
+        if self.outlier_multiplier_min < 1 or self.outlier_multiplier_max < self.outlier_multiplier_min:
+            raise ValueError('Invalid star tracker outlier multiplier bounds')
+        if not isinstance(self.seed, int) or not isinstance(self.low_trust_packets, int):
+            raise ValueError('Star tracker seed and low_trust_packets must be integers')
+        for interval in self.outages_s:
+            if len(interval) != 2 or not np.all(np.isfinite(interval)) or not 0 <= interval[0] < interval[1]:
+                raise ValueError('Star tracker outages must be [start_s, end_s] intervals')
+
+    @classmethod
+    def perfect(cls):
+        return cls(profile='perfect')
+
+    @classmethod
+    def off(cls):
+        return cls(enabled=False, profile='off')
+
+    @classmethod
+    def nominal(cls):
+        return cls(profile='nominal')
+
+    @classmethod
+    def degraded(cls):
+        return cls(profile='degraded', nea_sigma_arcsec=(8.6, 8.6, 52),
+                   lfse_sigma_arcsec=(6, 6, 34), bias_sigma_arcsec=(40, 40, 34),
+                   detector_temperature_c=40, latency_mean_s=.25, dropout_probability=.01,
+                   tracking_rate_limit_deg_s=2, reacquisition_s=6, cold_start_s=6)
+
+    @classmethod
+    def stress(cls):
+        return cls(profile='stress', nea_sigma_arcsec=(12.9, 12.9, 78),
+                   lfse_sigma_arcsec=(6, 6, 34), bias_sigma_arcsec=(40, 40, 34),
+                   detector_temperature_c=55, latency_mean_s=.25, latency_sigma_s=.04,
+                   dropout_probability=.03, burst_start_probability=.003,
+                   tracking_rate_limit_deg_s=1.5, reacquisition_s=8,
+                   reacquisition_jitter_s=22, cold_start_s=8)
+
+
+@dataclass(frozen=True)
 class ImuSimParameters:
     """Configuration of the simulated IMU (gyroscope + magnetometer).
 
@@ -686,7 +818,8 @@ class ImuSimParameters:
     """
 
     enabled: bool = True                     # master switch (False = no IMU at all)
-    enable_star_tracker: bool = True         # ideal absolute-attitude sensor
+    enable_star_tracker: bool = True         # absolute-attitude sensor
+    star_tracker: StarTrackerParameters = field(default_factory=StarTrackerParameters.perfect)
     seed: int = 42                           # RNG seed (all randomness flows from this)
     gyro_seed: int | None = None             # Independent YAML sensor seeds
     mag_seed: int | None = None
@@ -1049,8 +1182,6 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     data['sensor_profiles'] = profiles
     if any(value not in ('custom', 'off', 'perfect', 'nominal', 'degraded', 'stress') for value in profiles.values()):
         raise ValueError('Unknown sensor profile')
-    if profiles['star_tracker'] not in ('custom', 'perfect', 'off'):
-        raise ValueError('Star tracker supports only custom (ideal), perfect, and off profiles')
     for name in ('gps', 'gyroscope', 'magnetometer', 'sun_sensor'):
         if not isinstance(data[name], dict):
             raise ValueError(f'{name} must be a YAML mapping')
@@ -1142,10 +1273,24 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     sun = replace(sun, enabled=data['sun_sensor']['enabled'] and sun.enabled)
     imu_data['sun_array'] = sun
     imu_data['enable_sun_sensor'] = sun.enabled
-    tracker = data['star_tracker']
-    if set(tracker) != {'enabled'} or not isinstance(tracker['enabled'], bool):
-        raise ValueError('star_tracker requires a boolean enabled switch')
-    imu_data['enable_star_tracker'] = tracker['enabled'] and profiles['star_tracker'] != 'off'
+    tracker_values = dict(data['star_tracker'])
+    tracker = _from_yaml(StarTrackerParameters, tracker_values)
+    tracker_profile = profiles['star_tracker']
+    if tracker_profile != 'custom':
+        preset = getattr(StarTrackerParameters, tracker_profile)()
+        nominal = StarTrackerParameters.nominal()
+        error_fields = set()
+        for profile_name in ('degraded', 'stress'):
+            comparison = getattr(StarTrackerParameters, profile_name)()
+            for setting in fields(nominal):
+                if getattr(comparison, setting.name) != getattr(nominal, setting.name):
+                    error_fields.add(setting.name)
+        changes = {name: getattr(preset, name) for name in error_fields}
+        changes['profile'] = tracker_profile
+        tracker = replace(tracker, **changes)
+    tracker = replace(tracker, enabled=tracker.enabled and tracker_profile != 'off')
+    imu_data['star_tracker'] = tracker
+    imu_data['enable_star_tracker'] = tracker.enabled
     navigation_aliases = {
         'enabled': 'enable_attitude_estimator',
         'initial_estimate_quaternion': 'initial_estimate_quaternion',

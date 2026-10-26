@@ -30,3 +30,28 @@ def enrich_dashboard(data, *, t, position_eci, velocity_eci, sun_eci_m,
         gps_satellites=[],
     )
     return data
+
+
+def select_star_tracker_view(history, measurement, timestamp_tolerance_s=0.001):
+    """Match operator camera truth to a delivered receipt, including invalid ones.
+
+    Sensor timestamps have small clock noise. Select the nearest sampled tick
+    within that noise tolerance; never substitute estimated attitude or fetch
+    past engine truth. The bounded history belongs only to the dashboard.
+    """
+    if not history:
+        return None
+    current_view = history[-1]
+    selected_view = current_view
+    aligned = False
+    if measurement is not None:
+        nearest = min(history, key=lambda view: abs(view['time_s'] - measurement.t_meas_s))
+        if abs(nearest['time_s'] - measurement.t_meas_s) <= timestamp_tolerance_s:
+            selected_view = nearest
+            aligned = True
+    result = dict(selected_view)
+    result['receipt_aligned'] = aligned
+    result['receipt_time_s'] = measurement.t_meas_s if measurement is not None else None
+    result['receipt_reason'] = measurement.reason if measurement is not None else None
+    result['earth_limb_angle_deg'] = measurement.earth_limb_angle_deg if aligned else None
+    return result

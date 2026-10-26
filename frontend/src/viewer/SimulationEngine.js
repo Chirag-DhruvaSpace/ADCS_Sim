@@ -423,12 +423,16 @@ export async function startSimulationEngine(configuration) {
   };
   const axes = [];
   let axesVisible = false;
+  let guideOpacity = 0;
+  let axisOpacity = 0;
   function addBodyAxis(dir, labelText, colorHex, cssColor) {
     const L = new DirLine(colorHex);
     L.setEndpoints(ZERO, SCRATCH.copy(dir).multiplyScalar(CONFIG.AXIS_LEN));
     satGroup.add(L.line);
     axes.push(L);
-    addLabel(labelText, cssColor, bodyDirPos(dir, CONFIG.AXIS_LEN), () => axesVisible && !overviewView);
+    const label = addLabel(labelText, cssColor, bodyDirPos(dir, CONFIG.AXIS_LEN),
+      () => axisOpacity > .001);
+    label.getOpacity = () => axisOpacity;
   }
   addBodyAxis(new THREE.Vector3(-1, 0, 0), '+Y', 0x00c800, '#7fff7f');
   addBodyAxis(new THREE.Vector3(0, 1, 0), '+X', 0xd00000, '#ff7f7f');
@@ -459,6 +463,11 @@ export async function startSimulationEngine(configuration) {
   addLabel('Moon Panel Normal(-Y)', '#ff8c1a', bodyDirPos(MPN_LOCAL, CONFIG.DIRLINE_LEN * 0.8), () => moonPanelLine.line.visible);
   addLabel('To Nadir', '#ffffff', worldDirPos(() => nadirDirEcef, CONFIG.DIRLINE_LEN), () => nadirLine.line.visible);
   addLabel('Sun Sweep', '#ff77ff', worldDirPos(() => sweepDirEcef, CONFIG.DIRLINE_LEN), () => sweepLine.line.visible);
+
+  for (const label of labels) {
+    if (label === satelliteNameLabel || label.el.textContent.includes('We are here')) continue;
+    if (!label.getOpacity) label.getOpacity = () => guideOpacity;
+  }
 
   /* =====================================================================
      Camera-relative placement (floating origin)
@@ -661,8 +670,12 @@ export async function startSimulationEngine(configuration) {
       if (!next) {
         const destinationCamera = camera.clone();
         const destination = new THREE.Vector3();
-        if (cameraMode === 'payload') computePayloadPose(destination, destinationCamera);
-        else { destination.copy(satLogical).add(chaseOffsetWorld); destinationCamera.quaternion.copy(chaseQuatWorld); }
+        if (cameraMode === 'payload') {
+          computePayloadPose(destination, destinationCamera);
+        } else {
+          destination.copy(satLogical).add(chaseOffsetWorld);
+          destinationCamera.quaternion.copy(chaseQuatWorld);
+        }
         updateTiles(performance.now(), destination, destinationCamera);
       }
       overviewView = next;
@@ -1333,16 +1346,17 @@ export async function startSimulationEngine(configuration) {
   }
   function updateDirectionVisibility() {
     const m = latestMode;
-    for (const axis of axes) axis.line.visible = axesVisible && !overviewView;
-    const sunOn = !overviewView && (m === "POINTING" || m === "SUN_POINTING" || m === "SUN_POINTING_RW");
+    const guidesVisible = guideOpacity > .001;
+    for (const axis of axes) axis.line.visible = axisOpacity > .001;
+    const sunOn = guidesVisible && (m === "POINTING" || m === "SUN_POINTING" || m === "SUN_POINTING_RW");
     sunLine.line.visible = sunOn;
     panelNormalLine.line.visible = sunOn;
-    const moonOn = !overviewView && m === "MOON";
+    const moonOn = guidesVisible && m === "MOON";
     moonLine.line.visible = moonOn && !!moonDirEcef;
     moonPanelLine.line.visible = moonOn;
-    const nadirMode = !overviewView && (m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS");
+    const nadirMode = guidesVisible && (m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS");
     nadirLine.line.visible = nadirMode && !!nadirDirEcef;
-    sweepLine.line.visible = !overviewView && m === "SUN_SWEEP" && !!sweepDirEcef;
+    sweepLine.line.visible = guidesVisible && m === "SUN_SWEEP" && !!sweepDirEcef;
   }
   setInterval(fetchTelemetry, updateInterval);
   fetchTelemetry();
@@ -1386,11 +1400,10 @@ export async function startSimulationEngine(configuration) {
   });
   listen($("axis-toggle"), 'click', () => {
     axesVisible = !axesVisible;
-    const tickEl = $("tick");
-    tickEl.textContent = axesVisible ? '✓' : '';
-    tickEl.style.background = axesVisible ? '#4CAF50' : '#333';
-    $("axis-toggle").classList.toggle('on', axesVisible);
-    for (const a of axes) a.line.visible = axesVisible;
+    const button = $("axis-toggle");
+    button.classList.toggle('on', axesVisible);
+    button.setAttribute('aria-pressed', String(axesVisible));
+    updateDirectionVisibility();
   });
   listen(window, 'resize', () => {
     camera.aspect = container.clientWidth / container.clientHeight;
@@ -1708,7 +1721,7 @@ export async function startSimulationEngine(configuration) {
     const w = window.innerWidth,
       h = window.innerHeight;
     for (const L of labels) {
-      if (!L.el.textContent.includes('We are here') && L !== satelliteNameLabel && camLogical.distanceTo(satLogical) > 30000 || !L.isVisible()) {
+      if (!L.isVisible() || (L.getOpacity && L.getOpacity() <= .001)) {
         L.el.style.display = 'none';
         continue;
       }
@@ -1724,8 +1737,10 @@ export async function startSimulationEngine(configuration) {
         continue;
       }
       L.el.style.display = 'block';
-      L.el.style.left = (LPOS.x * 0.5 + 0.5) * w + 'px';
-      L.el.style.top = (-LPOS.y * 0.5 + 0.5) * h + 'px';
+      L.el.style.opacity = L.getOpacity ? String(L.getOpacity()) : '1';
+      const screenX = (LPOS.x * .5 + .5) * w;
+      const screenY = (-LPOS.y * .5 + .5) * h;
+      L.el.style.transform = `translate3d(${screenX}px, ${screenY}px, 0) translate(-50%, -130%)`;
     }
   }
   let bootFaded = false;
@@ -1829,6 +1844,24 @@ export async function startSimulationEngine(configuration) {
     // In overview the display mesh is enlarged. Keep guides outside that mesh,
     // without changing any physical coordinates or telemetry directions.
     const directionGuideScale = guideScale();
+    const flightProgress = THREE.MathUtils.clamp(cameraTransitionElapsed / 1.05, 0, 1);
+    let flightGuideOpacity = overviewView ? 0 : 1;
+    if (cameraTransition) {
+      flightGuideOpacity = overviewView
+        ? 1 - THREE.MathUtils.smoothstep(flightProgress, 0, .75)
+        : THREE.MathUtils.smoothstep(flightProgress, .25, 1);
+    }
+    const guideHeightPixels = CONFIG.AXIS_LEN * directionGuideScale * renderer.domElement.clientHeight /
+      (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * Math.max(.1, camLogical.distanceTo(satLogical)));
+    guideOpacity = flightGuideOpacity * THREE.MathUtils.smoothstep(guideHeightPixels, 3, 18);
+    const targetAxisOpacity = axesVisible ? guideOpacity : 0;
+    // Follow camera-driven opacity directly; only button toggles need smoothing.
+    if (cameraTransition) axisOpacity = targetAxisOpacity;
+    else axisOpacity += (targetAxisOpacity - axisOpacity) * (1 - Math.exp(-dt * 16));
+    for (const axis of axes) axis.mat.opacity = axisOpacity;
+    for (const guide of [sunLine, moonLine, nadirLine, sweepLine, panelNormalLine, moonPanelLine]) {
+      guide.mat.opacity = guideOpacity;
+    }
     for (const axis of axes) axis.line.scale.setScalar(directionGuideScale);
     sunLine.line.scale.setScalar(directionGuideScale);
     moonLine.line.scale.setScalar(directionGuideScale);

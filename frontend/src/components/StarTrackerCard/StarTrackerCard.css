@@ -16,15 +16,8 @@
 }
 .star-tracker-card .tracker-metrics { font-size: .77em; line-height: 1.35; }
 #mission-page-sensors .star-tracker-card .tracker-metrics > div { padding: 3px 0; gap: 12px; }
-.star-tracker-card .tracker-metrics dd { white-space: nowrap; }
+.star-tracker-card .tracker-metrics dd { white-space: normal; overflow-wrap: anywhere; }
 .star-tracker-optics { margin: 0; width: clamp(90px, 12dvh, 132px); }
-.star-tracker-views svg { display: block; width: 100%; height: auto; aspect-ratio: 1; }
-.star-tracker-fov rect { fill: #07131dc2; stroke: #b6ddf32b; }
-.tracker-grid { fill: none; stroke: #9bd4f214; stroke-width: .5; }
-.tracker-reticle { fill: none; stroke: #b2e2f64a; stroke-width: .8; }
-.tracker-star { fill: #eff9ff; }
-.tracker-match { fill: none; stroke: #55e8aa; stroke-width: .8; }
-.star-tracker-views text { fill: #98b7ca; font: 6px system-ui; letter-spacing: .25px; }
 .star-tracker-optics figcaption {
   font-size: .6em;
   color: var(--mission-muted);
@@ -50,4 +43,24 @@
 @media (max-width: 420px) {
   .star-tracker-body { gap: 12px; }
   .star-tracker-card .tracker-model { letter-spacing: 0; }
+}
+
+.star-tracker-card .star-tracker-fov {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid #b6ddf344;
+  border-radius: 7px;
+  background: #03070e;
+}
+.tracker-view-unavailable {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 1px solid #b6ddf32b;
+  border-radius: 7px;
+  color: var(--mission-muted);
+  padding: 8px;
+  text-align: center;
+  font-size: .65em;
 }

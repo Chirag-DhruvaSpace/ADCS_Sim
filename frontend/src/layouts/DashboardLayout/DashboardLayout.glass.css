@@ -94,6 +94,10 @@ body[data-quality=low] .glass,body[data-economy=true] .glass {
 /* Eye mode hides workspace tabs while keeping the clock and actions visible. */
 .mission-header .mission-clock,.mission-header .mission-tabs,.mission-header .mission-action { transition: transform .45s ease,opacity .45s ease; }
 .mission-clear-active .mission-header .mission-tabs { transform:translateY(-120%);opacity:0;pointer-events:none; }
-.mission-clear-active .mission-header .mission-clear { border-color:#ff777b88!important;background:rgb(80 24 28 / .35)!important; }
+.mission-header .mission-action[aria-pressed=true],
+.mission-header .mission-action[aria-expanded=true] {
+  border-color: #ff777b88 !important;
+  background: rgb(80 24 28 / .35) !important;
+}
 .mission-clear-active .mission-header .mission-clear svg { stroke:#ff989c; }
 @media(prefers-reduced-motion:reduce){.mission-header .mission-clock,.mission-header .mission-tabs,.mission-header .mission-action{transition:none;}}

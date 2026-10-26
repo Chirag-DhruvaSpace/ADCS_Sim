@@ -1,4 +1,5 @@
 import numpy as np
+from collections import deque
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from scipy.integrate import solve_ivp
@@ -78,7 +79,10 @@ _mag_units = [(unit, SimulatedMagnetometer(config.IMU_SIM.unit_config('mag', uni
               for index, unit in enumerate(config.IMU_SIM.magnetometers) if unit.enabled]
 _sun_sensor = (SimulatedSunSensorArray(config.IMU_SIM.sun_array, record_history=False)
                if config.IMU_SIM.enabled and config.IMU_SIM.enable_sun_sensor and config.IMU_SIM.sun_array.enabled else None)
-_star_tracker = SimulatedStarTracker(enabled=config.IMU_SIM.enabled and config.IMU_SIM.enable_star_tracker)
+_star_tracker = SimulatedStarTracker(
+    enabled=config.IMU_SIM.enabled and config.IMU_SIM.enable_star_tracker,
+    config=config.IMU_SIM.star_tracker)
+_star_tracker_view_history = deque(maxlen=64)
 
 from compute_simulated_attitude import ImuNav
 _imu_nav = ImuNav(initial_quaternion=config.IMU_SIM.initial_estimate_quaternion,
@@ -292,9 +296,10 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 _mag_msg = _magnetometer.read_sample(raw_output=True)
             _sun_msg = (_sun_sensor.get_raw_data(t, q_sensor, sun_eci,
                             srp_result.eclipse_fraction, r_vec) if _sun_sensor is not None else None)
-            # The ideal star tracker is a separate sensor. Firmware SITL keeps
+            # The star tracker is a separate sensor. Firmware SITL keeps
             # its own attitude processing and receives no simulated star input.
-            _star_msg = (_star_tracker.get_raw_data(t, X_rot[:4])
+            _star_msg = (_star_tracker.get_raw_data(
+                            t, X_rot[:4], r_vec, sun_eci, X_rot[4:7])
                          if firmware is None else None)
             _imu_nav.process_raw_data(t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM,
                                       star_tracker=_star_msg)
@@ -903,8 +908,9 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             if firmware is None and _star_msg is not None:
                 data_to_send['star_tracker_update_rate_hz'] = _star_tracker.update_rate_hz
                 # Operator-only comparison, separate from navigation updates.
-                observed_boresight = srd._dcm_bi_from_q(_star_msg.quaternion_eci)[:, 2]
-                true_boresight = srd._dcm_bi_from_q(X_rot[:4])[:, 2]
+                tracker_axis_body = _star_tracker.mount_rotation[:, 2]
+                observed_boresight = srd._dcm_bi_from_q(_star_msg.quaternion_eci) @ tracker_axis_body
+                true_boresight = srd._dcm_bi_from_q(X_rot[:4]) @ tracker_axis_body
                 chord = np.linalg.norm(observed_boresight - true_boresight)
                 data_to_send['star_tracker_error_arcsec'] = float(
                     np.degrees(2 * np.arcsin(np.clip(chord / 2, 0, 1))) * 3600)
@@ -1011,9 +1017,49 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             data_to_send["att_est_sun_used"] = bool(_att_est.sun_used_last)
         
 
-        from dashboard_telemetry import enrich_dashboard
+        from dashboard_telemetry import enrich_dashboard, select_star_tracker_view
         _active_forces = {type(force).__name__ for force in _orbit_provider.universe.force_model.forces}
         _imu_cfg = config.IMU_SIM if config.IMU_SIM.enabled else None
+        # Operator-only camera geometry remains available while the detector
+        # is blinded. It is never supplied to onboard navigation or control.
+        tracker_to_eci = C_bi @ _star_tracker.mount_rotation
+        tracker_to_ecef = C_eci2ecef @ tracker_to_eci
+        sun_direction_ecef = C_eci2ecef @ sun_eci
+        current_tracker_view = {
+            'tracker_to_eci': tracker_to_eci.tolist(),
+            'tracker_to_ecef': tracker_to_ecef.tolist(),
+            'position_ecef_m': (C_eci2ecef @ r_vec).tolist(),
+            'sun_direction_eci': sun_eci.tolist(),
+            'sun_direction_ecef': sun_direction_ecef.tolist(),
+            # Display only: lunar geometry never enters tracker acquisition.
+            'moon_position_ecef_m': data_to_send['moon_position_ecef_m'],
+            'field_of_view_deg': 30.0,
+            'time_s': float(t),
+            'earth_exclusion_deg': config.IMU_SIM.star_tracker.earth_exclusion_deg,
+        }
+        _star_tracker_view_history.append(current_tracker_view)
+        tracker_receipt = _star_tracker.get_raw_data() if firmware is None else None
+        data_to_send['star_tracker_view'] = select_star_tracker_view(
+            _star_tracker_view_history, tracker_receipt)
+        tracker_parameters = config.IMU_SIM.star_tracker
+        data_to_send['star_tracker_sun_exclusion_deg'] = tracker_parameters.sun_exclusion_deg
+        data_to_send['star_tracker_earth_exclusion_deg'] = tracker_parameters.earth_exclusion_deg
+        if data_to_send.get('star_tracker_rate_limit_deg_s') is None:
+            data_to_send['star_tracker_rate_limit_deg_s'] = tracker_parameters.tracking_rate_limit_deg_s
+        # Perfect passthrough receipts do not calculate exclusions internally;
+        # publish the physical angles as display diagnostics in that mode too.
+        if data_to_send.get('star_tracker_sun_angle_deg') is None:
+            boresight_eci = tracker_to_eci[:, 2]
+            data_to_send['star_tracker_sun_angle_deg'] = float(np.degrees(
+                np.arccos(np.clip(np.dot(boresight_eci, sun_eci), -1, 1))))
+            orbit_radius_m = np.linalg.norm(r_vec)
+            nadir_angle_rad = np.arccos(np.clip(
+                np.dot(boresight_eci, -r_vec / orbit_radius_m), -1, 1))
+            earth_radius_rad = np.arcsin(np.clip(
+                tracker_parameters.earth_limb_radius_km * 1000 / orbit_radius_m, 0, 1))
+            data_to_send['star_tracker_earth_limb_angle_deg'] = float(
+                np.degrees(nadir_angle_rad - earth_radius_rad))
+
         enrich_dashboard(
             data_to_send, t=t, position_eci=r_vec, velocity_eci=v_vec,
             sun_eci_m=_orbit_provider.sun_position_eci(), eci_to_ecef=C_eci2ecef,
@@ -1028,6 +1074,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 'Magnetometer': bool(_imu_cfg and _imu_cfg.enable_magnetometer and
                                      (not _imu_cfg.magnetometers or any(unit.enabled for unit in _imu_cfg.magnetometers))),
                 'Sun sensor array': bool(_sun_sensor is not None),
+                'Star tracker': bool(_star_tracker.enabled and firmware is None),
             },
             models={
                 'Propagator': 'Orekit / DOP853',

@@ -4,7 +4,7 @@ import './TelemetryRows.css';
 export function HealthRows({
   data
 }) {
-  return ['GPS receiver', 'Gyroscope', 'Magnetometer', 'Sun sensor array'].map(label => {
+  return ['GPS receiver', 'Gyroscope', 'Magnetometer', 'Sun sensor array', 'Star tracker'].map(label => {
     const enabled = data.sensor_activation?.[label];
     return <div className="health-row" key={label}><i className="health-dot" data-valid={String(enabled === true)} /><span>{label}</span><b>{typeof enabled === 'boolean' ? enabled ? 'Enabled' : 'Off' : 'Unavailable'}</b></div>;
   });

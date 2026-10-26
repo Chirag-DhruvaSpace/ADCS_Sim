@@ -334,6 +334,7 @@ export function startDiagramRenderer() {
       rendering = false,
       rerender = false;
     function schedule() {
+      if (document.hidden || document.body.classList.contains('mission-clear-active')) return;
       if (rendering) {
         rerender = true;
         return;
@@ -499,6 +500,7 @@ export function startDiagramRenderer() {
     async function render() {
       pending = false;
       lastRender = performance.now();
+      if (document.hidden || document.body.classList.contains('mission-clear-active')) return;
       // Keep the last diagram image while the main camera flies, then draw the latest receipt.
       if (modelWarmup || window.missionCameraState?.().transitioning) {
         schedule();
@@ -513,6 +515,7 @@ export function startDiagramRenderer() {
       try {
         const d = window.MissionDashboard?.latest;
         for (const canvas of document.querySelectorAll('.mission-page:not([hidden]) [data-globe]')) {
+          if (document.body.classList.contains('mission-clear-active')) break;
           const rect = canvas.getBoundingClientRect();
           if (!rect.width || !rect.height) continue;
           // Skip diagrams scrolled out of their rail to avoid wasted GPU work.
@@ -536,6 +539,7 @@ export function startDiagramRenderer() {
           const ctx = staging.getContext('2d');
           ctx.clearRect(0, 0, w, h);
           const commit = () => {
+            if (document.body.classList.contains('mission-clear-active')) return;
             if (canvas.width !== w || canvas.height !== h) {
               canvas.width = w;
               canvas.height = h;
@@ -659,6 +663,7 @@ export function startDiagramRenderer() {
               draw.toneMapping = previousTone;
             }
             await readback;
+            if (document.body.classList.contains('mission-clear-active')) break;
             const image = ctx.createImageData(w, h),
               stride = w * 4;
             for (let row = 0; row < h; row++) image.data.set(pixels.subarray((h - 1 - row) * stride, (h - row) * stride), row * stride);
@@ -687,6 +692,14 @@ export function startDiagramRenderer() {
         }
       }
     }
+    listen(window, 'telemetry-visibility', event => {
+      if (event.detail) schedule();
+      else {
+        clearTimeout(timer);
+        pending = false;
+        rerender = false;
+      }
+    });
     listen(window, 'dashboard-render', schedule);
     listen(window, 'dashboard-tab', schedule);
     listen(window, 'resize', schedule);

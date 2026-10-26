@@ -1,9 +1,28 @@
-/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-.gps-layout { display:grid; grid-template-columns:minmax(0, .85fr) minmax(0, 1.15fr); gap:4px; align-items:center; }
-.gps-layout .metric-list { font-size:.85em; }
-/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-.gps-layout .mini-world canvas { height:180px; }
-.gps-layout .metric-list>div { flex-wrap:wrap; gap:2px; }
-.gps-layout .metric-list dd { margin-left:auto; }
-
-
+/* Keep each metric and the orbit diagram inside independent grid cells. */
+.gps-card { min-width: 0; container-type: inline-size; }
+.gps-card .gps-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(100px, .85fr);
+  gap: 12px;
+  align-items: start;
+}
+.gps-card .gps-layout > * { min-width: 0; }
+.gps-card .metric-list { min-width: 0; font-size: .85em; }
+.gps-card .metric-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.gps-card .metric-list dt { overflow-wrap: anywhere; }
+.gps-card .metric-list dd { margin: 0; max-width: 100%; }
+.gps-card .gps-layout .mini-world { margin: 0; width: 100%; }
+.gps-card .mini-world canvas { max-width: 100%; }
+.gps-card .mini-world figcaption { line-height: 1.4; overflow-wrap: anywhere; }
+.gps-card .metric-highlight { flex-wrap: wrap; line-height: 1.4; }
+.gps-card .metric-highlight b { margin-left: auto; white-space: normal; overflow-wrap: anywhere; }
+.gps-card .quiet { line-height: 1.45; overflow-wrap: anywhere; margin-bottom: 0; }
+@container (max-width: 330px) {
+  .gps-card .gps-layout { grid-template-columns: minmax(0, 1fr); }
+  .gps-card .gps-layout .mini-world { max-width: 180px; justify-self: center; }
+}

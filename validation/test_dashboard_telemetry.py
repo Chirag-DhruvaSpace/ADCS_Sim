@@ -1,10 +1,33 @@
 # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
 import unittest
 import numpy as np
-from dashboard_telemetry import enrich_dashboard
+from dashboard_telemetry import enrich_dashboard, select_star_tracker_view
 
 
 class DashboardSnapshotTests(unittest.TestCase):
+    def test_tracker_view_matches_delayed_invalid_receipt_with_clock_noise(self):
+        from types import SimpleNamespace
+        history = [{'time_s': 1.0, 'direction': 'Earth exclusion'},
+                   {'time_s': 1.1, 'direction': 'clear'},
+                   {'time_s': 1.2, 'direction': 'clear'}]
+        measurement = SimpleNamespace(t_meas_s=1.00003, reason='EARTH_EXCLUSION',
+                                      earth_limb_angle_deg=20.0)
+        view = select_star_tracker_view(history, measurement)
+        self.assertTrue(view['receipt_aligned'])
+        self.assertEqual(view['time_s'], 1.0)
+        self.assertEqual(view['direction'], 'Earth exclusion')
+        self.assertEqual(view['earth_limb_angle_deg'], 20.0)
+        self.assertNotIn('receipt_aligned', history[0])
+
+    def test_tracker_view_does_not_claim_alignment_without_matching_history(self):
+        from types import SimpleNamespace
+        history = [{'time_s': 2.0}]
+        receipt = SimpleNamespace(t_meas_s=1.0, reason='EARTH_EXCLUSION')
+        view = select_star_tracker_view(history, receipt)
+        self.assertFalse(view['receipt_aligned'])
+        self.assertEqual(view['time_s'], 2.0)
+        self.assertIsNone(select_star_tracker_view([], None))
+
     # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
     def test_magnetorquer_endpoint_does_not_publish_total_actuator_torque(self):
         from unittest.mock import patch

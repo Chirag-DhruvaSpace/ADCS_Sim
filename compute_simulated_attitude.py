@@ -393,18 +393,30 @@ class ImuNav:
         now = self.estimator._last_t
         quaternion = (_usable_star_tracker_quaternion(measurement, now, self.fusion_max_age_s)
                       if now is not None else None)
-        valid = quaternion is not None
+        valid = (measurement is not None and measurement.valid and now is not None
+                 and measurement.t_arrival_s <= now
+                 and 0 <= now - measurement.t_meas_s <= self.fusion_max_age_s)
+        if valid and quaternion is None:
+            quaternion = measurement.quaternion_eci
         return {
             'star_tracker_valid': valid,
-            'star_tracker_mode': 'TRACKING' if valid else 'STANDBY',
+            'star_tracker_mode': measurement.mode if measurement is not None else 'STANDBY',
+            'star_tracker_num_stars': measurement.num_stars if measurement is not None else None,
+            'star_tracker_quality': measurement.quality if measurement is not None else None,
+            'star_tracker_reason': measurement.reason if measurement is not None else None,
+            'star_tracker_trusted': measurement.trusted if measurement is not None else False,
+            'star_tracker_sun_angle_deg': measurement.sun_angle_deg if measurement is not None else None,
+            'star_tracker_earth_limb_angle_deg': measurement.earth_limb_angle_deg if measurement is not None else None,
+            'star_tracker_rate_deg_s': measurement.rate_deg_s if measurement is not None else None,
+            'star_tracker_rate_limit_deg_s': measurement.rate_limit_deg_s if measurement is not None else None,
             'star_tracker_used': self.estimator.star_tracker_used_last,
             'star_tracker_quaternion_eci': (measurement.quaternion_eci.tolist()
                                             if valid else None),
-            'star_tracker_boresight_eci': (_dcm_bi_from_q(quaternion)[:, 2].tolist()
+            'star_tracker_boresight_eci': ((_dcm_bi_from_q(quaternion) @ _dcm_bi_from_q(measurement.mount_quaternion)[:, 2]).tolist()
                                           if valid else None),
             'star_tracker_latency_ms': ((measurement.t_arrival_s - measurement.t_meas_s) * 1000
-                                        if valid else None),
-            'star_tracker_noise_arcsec': 0.0 if valid else None,
+                                        if measurement is not None else None),
+            'star_tracker_noise_arcsec': measurement.noise_arcsec.tolist() if measurement is not None else None,
         }
 
     def telemetry(self) -> dict:
@@ -497,7 +509,9 @@ def _rotation_quaternion(v):
 
 def _usable_star_tracker_quaternion(measurement, time_s, max_age_s):
     """Accept a valid, recent absolute attitude in the simulator's convention."""
-    if measurement is None or not measurement.valid:
+    if measurement is None or not measurement.valid or not getattr(measurement, 'trusted', True):
+        return None
+    if measurement.t_arrival_s > time_s:
         return None
     age_s = time_s - measurement.t_meas_s
     if not 0 <= age_s <= max_age_s:
@@ -584,8 +598,8 @@ class AttitudeEstimator:
               Between star receipts -> gyro prediction.
               Invalid/stale/absent star receipt -> gyro + magnetic/Sun MEKF.
 
-        The ideal sensor currently has zero error, so blending its reading with
-        noisier vectors would reduce accuracy. No star camera filter is modeled.
+        Perfect receipts keep the exact legacy path. Realistic receipts use
+        delayed, anisotropic, innovation-gated absolute attitude corrections.
         """
         time_s = float(t_seconds)
         if self._last_t is not None and time_s < self._last_t:
@@ -594,7 +608,7 @@ class AttitudeEstimator:
         self.sun_used_last = False
         quaternion = _usable_star_tracker_quaternion(
             star_tracker, time_s, self.star_tracker_max_age_s)
-        if quaternion is not None:
+        if quaternion is not None and getattr(star_tracker, 'perfect', True):
             if (self._last_star_tracker_t is None
                     or star_tracker.t_meas_s > self._last_star_tracker_t):
                 self._q = quaternion.copy()
@@ -617,9 +631,59 @@ class AttitudeEstimator:
         self._last_t = time_s
         self.sun_used_last = False
         if quaternion is not None:
-            return  # Coast between star samples without reusing one correction.
+            if not getattr(star_tracker, 'perfect', True):
+                if self._last_star_tracker_t is None or star_tracker.t_meas_s > self._last_star_tracker_t:
+                    self._last_star_tracker_t = star_tracker.t_meas_s
+                    self.star_tracker_used_last = self._correct_star_tracker(
+                        star_tracker, quaternion, time_s, angular_rate_rad_s)
+            if self.star_tracker_used_last or getattr(star_tracker, 'perfect', True):
+                return
         self._use_magnetometer(time_s, angular_rate_rad_s, mag_meas, B_model_eci)
         self._use_sun_sensor(time_s, angular_rate_rad_s, sun_meas, sun_model_eci)
+
+    def _correct_star_tracker(self, measurement, quaternion, time_s, angular_rate_rad_s):
+        """Transport capture attitude using measured rate, then gate a 3-axis update.
+
+        This is the same constant-rate delay approximation used for vector
+        sensors. No truth or injected error realization enters this update.
+        R contains reported NEA/LFSE variances, including operating inflation;
+        fixed bias, thermal offset and unknown valid outliers stay outside R.
+        """
+        age_s = time_s - measurement.t_meas_s
+        aligned_quaternion = _quat_multiply(
+            quaternion, _rotation_quaternion(angular_rate_rad_s * age_s))
+        inverse_estimate = self._q * np.array([1.0, -1.0, -1.0, -1.0])
+        error_quaternion = _quat_multiply(aligned_quaternion, inverse_estimate)
+        if error_quaternion[0] < 0:
+            error_quaternion = -error_quaternion
+        vector_length = np.linalg.norm(error_quaternion[1:])
+        if vector_length < 1e-12:
+            innovation = 2 * error_quaternion[1:]
+        else:
+            angle_rad = 2 * np.arctan2(vector_length, error_quaternion[0])
+            innovation = error_quaternion[1:] * angle_rad / vector_length
+        # Right propagation leaves the left error tangent unchanged.
+        measurement_covariance = np.array(measurement.covariance_body_rad2, copy=True)
+        measurement_covariance += np.eye(3) * 1e-20
+        observation_matrix = np.zeros((3, 6))
+        observation_matrix[:, :3] = np.eye(3)
+        innovation_covariance = observation_matrix @ self.P @ observation_matrix.T + measurement_covariance
+        normalized_innovation = float(innovation @ np.linalg.solve(innovation_covariance, innovation))
+        if normalized_innovation > self.innovation_gate_chi2:
+            return False
+        kalman_gain = np.linalg.solve(innovation_covariance, observation_matrix @ self.P).T
+        correction = kalman_gain @ innovation
+        self._q = _quat_multiply(_rotation_quaternion(correction[:3]), self._q)
+        self._q /= np.linalg.norm(self._q)
+        self.bias = np.clip(self.bias + correction[3:], -self.max_bias_rad_s, self.max_bias_rad_s)
+        residual_projection = np.eye(6) - kalman_gain @ observation_matrix
+        self.P = residual_projection @ self.P @ residual_projection.T + kalman_gain @ measurement_covariance @ kalman_gain.T
+        reset_jacobian = np.eye(6)
+        reset_jacobian[:3, :3] -= .5 * _skew(correction[:3])
+        self.P = reset_jacobian @ self.P @ reset_jacobian.T
+        self.P = (self.P + self.P.T) / 2
+        self.corrections += 1
+        return True
 
     def _predict(self, angular_rate_rad_s, elapsed_time_s):
         """Propagate quaternion and uncertainty from the measured body rate."""

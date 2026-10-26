@@ -78,12 +78,12 @@ export function createSensorMarkers({
       const unit = (data.imu_units?.[item.kind === 'Gyro' ? 'gyro' : 'mag'] || []).find(u => u.name === item.name);
       /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
       const level = item.kind === 'Sun' ? (cell?.output_pct || 0) / 100
-        : item.kind === 'StarTracker' ? Number(data.star_tracker_valid)
+        : item.kind === 'StarTracker' ? Number(data.star_tracker_used === true)
         : Number(unit ? unit.used : item.kind === 'Gyro' ? data.imu_gyro_valid : data.imu_mag_valid);
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;
       mesh.userData.active = item.kind === 'Sun' ? sunUsed : level > 0;
       mesh.userData.color = item.kind === 'Sun' ? (sunUsed ? 0xff8800 : 0xffe600)
-        : item.kind === 'StarTracker' ? 0x2986ff : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
+        : item.kind === 'StarTracker' ? (data.star_tracker_used === true ? 0x1565c0 : 0x9bdcff) : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
     }
     for (const [name, mesh] of sensorMarkers) if (!alive.has(name)) {
       satGroup.remove(mesh);
@@ -110,7 +110,7 @@ export function createSensorMarkers({
       }
       const illuminated = mesh.userData.kind === 'Sun' && mesh.userData.level > 0;
       if (mesh.userData.kind === 'StarTracker') {
-        // The tracker stays identifiable in blue even without a valid reading.
+        // Light blue when idle; dark blue only when navigation uses a receipt.
         mesh.material.color.setHex(mesh.userData.color);
       } else if (mesh.userData.kind === 'Sun' && (illuminated || mesh.userData.active)) {
         // Keep selected sensors orange; sunlight controls the other sensors' brightness.

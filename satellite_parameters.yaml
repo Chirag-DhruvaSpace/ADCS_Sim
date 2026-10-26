@@ -23,7 +23,7 @@ sensor_profiles:
   gyroscope: custom
   magnetometer: custom
   sun_sensor: custom
-  star_tracker: perfect  # Only custom (ideal), perfect, and off are implemented
+  star_tracker: custom  # off / perfect / nominal / degraded / stress / custom
 
 # P-30XL simulation configuration. Units are included in field names.
 # =============================================================================
@@ -568,11 +568,61 @@ sun_sensor:
   latency_max_s: 0.05
 
 # =============================================================================
-# STAR TRACKER - ideal truth-quaternion measurement
+# STAR TRACKER - single-head quaternion acquisition; all sigmas are 1-sigma
 # =============================================================================
 star_tracker:
-  enabled: false                             # false selects the existing navigation fallback
-  # No added noise, blinding, catalog matching, rate limit, or latency yet.
+  enabled: true                            # Master switch overrides every profile
+  seed: 73                                  # Independent of every other sensor
+  update_rate_hz: 10                         # 5 / 8 / 10; accuracy does not scale
+  mount_quaternion: [1.0, 0.0, 0.0, 0.0]     # Tracker axes into body, house convention
+  detector_temperature_c: 20.0
+  thermal_reference_temperature_c: 20.0
+  earth_limb_radius_km: 6478.137              # Earth radius plus 100 km atmosphere
+  enable_nea: true
+  enable_lfse: true
+  enable_bias: true
+  enable_thermal: true
+  enable_star_count: true
+  enable_temperature_rate_inflation: true
+  enable_straylight: true
+  enable_sky_position: false
+  enable_blinding: true
+  enable_kinematic_limits: true
+  enable_latency: true
+  enable_dropouts: true
+  enable_outliers: true
+  nea_sigma_arcsec: [4.3, 4.3, 26.0]         # X/Y tilt; Z roll about boresight
+  lfse_sigma_arcsec: [3.0, 3.0, 17.0]
+  lfse_tau_s: 300.0
+  lfse_slew_scale_deg_s: 0.3
+  bias_sigma_arcsec: [20.0, 20.0, 17.0]
+  thermal_slope_arcsec_per_deg_c: [0.5, 0.5, 0.0]
+  star_count_walk_sigma_per_sqrt_s: 0.08
+  sky_position_period_s: 2400.0
+  latency_mean_s: 0.150
+  latency_sigma_s: 0.015
+  latency_min_s: 0.080
+  latency_max_s: 0.250
+  timestamp_sigma_s: 0.0000333333333333      # 100 microseconds at 3-sigma
+  dropout_probability: 0.001
+  burst_start_probability: 0.0
+  burst_duration_s: 1.0
+  outlier_probability: 0.001
+  outlier_multiplier_min: 20.0
+  outlier_multiplier_max: 50.0
+  tracking_rate_limit_deg_s: 3.0
+  tracking_acceleration_limit_deg_s2: 2.5
+  reacquisition_rate_limit_deg_s: 0.3
+  reacquisition_s: 4.0
+  reacquisition_jitter_s: 0.0                 # Uniform extra TFS; stress preset uses 22 s
+  cold_start_s: 4.0
+  low_trust_packets: 5
+  sun_hard_off_deg: 33.0
+  sun_exclusion_deg: 35.0
+  sun_clean_deg: 45.0
+  earth_exclusion_deg: 22.0
+  earth_clean_deg: 30.0
+  outages_s: []                              # Explicit [start_s, end_s] outages
 
 # =============================================================================
 # ATTITUDE NAVIGATION - processing after independent sensor acquisition
