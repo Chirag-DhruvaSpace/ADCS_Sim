@@ -59,7 +59,8 @@ export function createSensorMarkers({
         }));
         mesh.renderOrder = 500;
         const label = item.kind === 'Sun' ? `FSS${sunSensorNumber}`
-          : item.kind === 'StarTracker' ? 'Star tracker' : item.name;
+          : item.kind === 'StarTracker' ? 'ST'
+          : item.kind === 'Gyro' ? 'Gyro' : item.kind === 'Mag' ? 'Mag' : item.name;
         mesh.add(createSensorLabel(label));
         satGroup.add(mesh);
         sensorMarkers.set(item.name, mesh);
@@ -95,13 +96,18 @@ export function createSensorMarkers({
       sensorMarkers.delete(name);
     }
   }
-  function paintSensorMarkers(visible = true) {
+  function paintSensorMarkers(visible = true, labelOpacity = 1) {
     // A model can finish loading after the last telemetry receipt.
     if (trackerPosition !== modelHolder.children[0]?.userData.starTrackerPositionBodyM) {
       updateSensorMarkers(latestData);
     }
     for (const mesh of sensorMarkers.values()) {
       mesh.visible = visible && SETTINGS['show' + mesh.userData.kind];
+      for (const label of mesh.children) {
+        label.material.opacity = labelOpacity;
+        // Skip label draw calls entirely once the text is too small to read.
+        label.visible = labelOpacity > 0.001;
+      }
       const illuminated = mesh.userData.kind === 'Sun' && mesh.userData.level > 0;
       if (mesh.userData.kind === 'StarTracker') {
         // The tracker stays identifiable in blue even without a valid reading.

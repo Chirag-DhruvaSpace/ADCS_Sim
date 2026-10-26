@@ -980,15 +980,11 @@ export async function startSimulationEngine(configuration) {
   }
   let bundledActuators = false;
   let telemetryETag = null;
-  let lastTelemetryFetch = -Infinity;
-  listen(window, 'telemetry-visibility', event => { if (event.detail) { lastTelemetryFetch = -Infinity; fetchTelemetry(); } });
+  listen(window, 'telemetry-visibility', event => { if (event.detail) fetchTelemetry(); });
   function fetchTelemetry() {
-    const clearView = document.body.classList.contains('mission-clear-active');
-    const now = performance.now();
-    if (clearView && now - lastTelemetryFetch < 1000) return;
+    // The scene needs fresh pose data even while dashboard cards are suspended.
     if (telemetryRequestInFlight) return;
     telemetryRequestInFlight = true;
-    lastTelemetryFetch = now;
     /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
     fetch('/api/latest', {
       cache: 'no-store',
@@ -1689,7 +1685,7 @@ export async function startSimulationEngine(configuration) {
       if (hasBodyQuat) satGroup.quaternion.copy(satQuatTarget);
       return;
     }
-    const k = 1 - Math.exp(-dt * (document.body.classList.contains('mission-clear-active') ? Math.min(1.5, CONFIG.SMOOTH) : CONFIG.SMOOTH));
+    const k = 1 - Math.exp(-dt * CONFIG.SMOOTH);
     // Follow the orbital arc instead of a chord that can pass through Earth.
     interpolateOrbitalPosition(satLogical, satLogicalTarget, k);
     if (hasBodyQuat) {
@@ -1841,7 +1837,11 @@ export async function startSimulationEngine(configuration) {
     panelNormalLine.line.scale.setScalar(directionGuideScale);
     moonPanelLine.line.scale.setScalar(directionGuideScale);
     updateDirectionVisibility();
-    paintSensorMarkers(!overviewView);
+    // Fade text by its screen size, so zoom/FOV and viewport height agree.
+    // Marker balls retain their existing visibility, color and opacity.
+    const labelHeightPixels = .06 * modelHolder.scale.x * renderer.domElement.clientHeight /
+      (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * Math.max(.1, camLogical.distanceTo(satLogical)));
+    paintSensorMarkers(!overviewView, THREE.MathUtils.smoothstep(labelHeightPixels, 3, 9));
     const camAlt = camLogical.length() - EARTH_R_MEAN;
     const atmoF = sstep(85000, 150000, camAlt);
     atmoMesh.visible = atmoF > 0.01;

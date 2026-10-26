@@ -210,7 +210,7 @@ try {
   }
   const beforeClearSequence = sequence;
   await page.waitForTimeout(2200);
-  assert(sequence - beforeClearSequence <= 3, 'eye mode should poll telemetry at most once per second');
+  assert(sequence - beforeClearSequence > 3, 'eye mode must keep scene telemetry updating faster than once per second');
   assert.equal(await page.locator('#mission-page-sensors').getAttribute('hidden'), null,
     'eye mode must retain panel layout while stopping subscriptions');
   await page.click('.mission-clear');
