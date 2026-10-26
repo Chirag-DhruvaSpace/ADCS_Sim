@@ -3,10 +3,72 @@
 import os
 import signal
 import socket
+import sys
 import threading
 from threading import Thread
 
 VIEWER_PORT = 5000
+
+
+CONSOLE_COLORS = {
+    'cyan': '\033[96m',
+    'blue': '\033[94m',
+    'purple': '\033[95m',
+    'green': '\033[92m',
+    'amber': '\033[93m',
+    'muted': '\033[90m',
+}
+
+
+def _enable_console_colors():
+    """Use terminal colors when supported; keep redirected boot logs plain."""
+    if not sys.stdout.isatty() or 'NO_COLOR' in os.environ:
+        return False
+    if os.name != 'nt':
+        return os.environ.get('TERM') != 'dumb'
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.GetStdHandle.argtypes = [wintypes.DWORD]
+        kernel.GetStdHandle.restype = wintypes.HANDLE
+        kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        handle = kernel.GetStdHandle(-11)
+        mode = wintypes.DWORD()
+        if not kernel.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel.SetConsoleMode(handle, mode.value | 0x0004))
+    except (AttributeError, OSError):
+        return False
+
+
+_console_colors_enabled = False
+
+
+def _console_line(message='', color=None):
+    if _console_colors_enabled and color in CONSOLE_COLORS:
+        print(CONSOLE_COLORS[color] + message + '\033[0m', flush=True)
+    else:
+        print(message, flush=True)
+
+
+def _startup_banner():
+    """Text only: no image generation, redraw loop or extra startup work."""
+    _console_line()
+    border = '  +' + '-' * 60 + '+'
+    rows = [
+        ('D H R U V A   S P A C E', 'cyan'),
+        ('', 'blue'),
+        ('L E A P - 2   /   A D C S', 'purple'),
+        ('ATTITUDE DETERMINATION + CONTROL SIMULATOR', 'cyan'),
+    ]
+    _console_line(border, 'blue')
+    for title, color in rows:
+        _console_line('  | ' + title.ljust(58) + ' |', color)
+    _console_line(border, 'blue')
+    _console_line('     PHYSICS  /  NAVIGATION  /  CONTROL  /  LIVE TELEMETRY', 'amber')
+    _console_line()
 
 
 def _ensure_java():
@@ -38,11 +100,13 @@ def _heartbeat():
     n = 0
     while not _stop_heartbeat.wait(10):
         n += 10
-        print(f'  ... still starting up ({n}s) - normal, wait for the '
-              f'"Viewer:" line', flush=True)
+        _console_line(f'  [ WORKING ] Physics initialization | {n}s elapsed', 'amber')
 
 
 def main():
+    global _console_colors_enabled
+    _console_colors_enabled = _enable_console_colors()
+    _startup_banner()
     if _already_running():
         print(f'LEAP-2 sim: ALREADY RUNNING in another window '
               f'(port {VIEWER_PORT} answers).', flush=True)
@@ -51,9 +115,9 @@ def main():
         print('     close the other sim window/terminal and run this again.',
               flush=True)
         raise SystemExit(0)
-    print('LEAP-2 sim booting: importing the physics stack (heartbeat below; '
-          'can take 1-3 min on corporate laptops). Ctrl+C is ignored until '
-          'the sim is up.', flush=True)
+    _console_line('  [ 1 / 3 ] Preparing the runtime', 'cyan')
+    _console_line('  First startup can take 1-3 minutes. Progress appears below.', 'muted')
+    _console_line('  Startup is protected; Ctrl+C becomes available when ready.', 'muted')
     _ensure_java()
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -62,6 +126,7 @@ def main():
     threading.Thread(target=_heartbeat, name='boot-heartbeat',
                      daemon=True).start()
     try:
+        _console_line('  [ 2 / 3 ] Loading physics and navigation', 'purple')
         # Keep JVM/physics initialization and propagation on the main thread.
         from satellite_flight_visualisation import run_simulation, _telemetry_publisher
         from app import app, accept_telemetry_snapshot
@@ -79,8 +144,12 @@ def main():
     except ImportError:
         server = lambda: app.run(host='127.0.0.1', port=VIEWER_PORT,
                                  threaded=True, debug=False, use_reloader=False)
+    _console_line('  [ 3 / 3 ] Starting the viewer and simulation', 'cyan')
     Thread(target=server, name='viewer-http', daemon=True).start()
-    print(f'Viewer: http://127.0.0.1:{VIEWER_PORT}', flush=True)
+    _console_line()
+    _console_line(f'Viewer: http://127.0.0.1:{VIEWER_PORT}', 'green')
+    _console_line('  Open the viewer in your browser. Ctrl+C stops the simulation.', 'muted')
+    _console_line()
     try:
         run_simulation()
     except OSError as e:
