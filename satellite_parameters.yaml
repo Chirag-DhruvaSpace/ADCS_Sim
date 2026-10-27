@@ -326,8 +326,10 @@ gyroscope:
   # Mounting in body coordinates
   position_body_m:
     [0.0, 0.0, 0.0]
+  # Chip axes as mounted, matching the firmware's RelDCM[AdisGyro] (ADS main.c /
+  # flight resetDefaults()): body X = sensor Y, body Y = sensor X, body Z = -sensor Z.
   mount_quaternion:
-    [1.0, 0.0, 0.0, 0.0]
+    [0.0, 0.7071067811865476, 0.7071067811865476, 0.0]
 
   # Sampling and sensor errors
   update_rate_hz: 10.0                      # Equals the current 0.1 s ADCS loop
@@ -376,8 +378,10 @@ magnetometer:
   # Mounting and local field gradient
   position_body_m:
     [0.0, 0.0, 0.2]
+  # Chip axes as mounted, matching the firmware's RelDCM[Magnetometer] (ADS main.c /
+  # flight resetDefaults()): body X = X, body Y = -Y, body Z = -Z.
   mount_quaternion:
-    [1.0, 0.0, 0.0, 0.0]
+    [0.0, 1.0, 0.0, 0.0]
   gradient_body_t_per_m:
     - [0.0, 0.0, 0.0]
     - [0.0, 0.0, 0.0]

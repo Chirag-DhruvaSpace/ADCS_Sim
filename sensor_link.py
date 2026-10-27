@@ -12,6 +12,10 @@ Wire format (UDP to 127.0.0.1:5010, little-endian, no padding):
     SENSOR_ID_GPS = 1 : AdsGpsData (base_shared.h, #pragma pack(1)), 134 bytes
     SENSOR_ID_FSS = 2 : uint8 slaveId + the 25 data bytes of the FSS GETTLM
                         reply (FSS.c frame offsets 5..29), one packet per head
+    SENSOR_ID_GYRO = 3: ADIS_GYRO_Typedef, 3 x int16 -- the signed high words
+                        ADIS_READ_GYRO() returns (ADIS16545.c)
+    SENSOR_ID_MAG = 4 : ICM_MAG_Typedef, 3 x int16 -- the signed AK09916
+                        counts ICM_READ_MAG() returns (ICM20948.c)
 
 The payloads come from the current sensor models unchanged:
   - GPS: simulate_gps get_raw_data() -> RawGpsSample.data, the ORION receiver's
@@ -24,6 +28,13 @@ The payloads come from the current sensor models unchanged:
     order and sensor_roll_rad in the yaml MUST match the firmware's
     AdsConfigStruct.RelDCM (main.c): FSS1..FSS6 = -Z, -X, +Y(15 deg to +Z),
     +X, -Y(15 deg to +Z), +Z.
+  - Gyro / magnetometer: simulate_gyroscope / simulate_magnetometer
+    get_raw_data() -> RawGyroscopeSample / RawMagnetometerSample .data,
+    already the chip's register words in its own axes. Packed as is. The
+    yaml gyroscope/magnetometer mount_quaternion MUST reproduce the firmware's
+    RelDCM[AdisGyro] / RelDCM[Magnetometer], and in SITL the magnetometer
+    carries the board error magApplyCal() removes (ADIS16545.c; see
+    firmware_sitl_adapter.with_board_magnetometer).
 
 UDP, fire-and-forget: only the latest sample matters, exactly as on the bus.
 """
@@ -37,6 +48,11 @@ ADS_SENSOR_PORT = 5010   # matches main.c's ADS_SENSOR_UDP_PORT
 
 SENSOR_ID_GPS = 1
 SENSOR_ID_FSS = 2
+SENSOR_ID_GYRO = 3
+SENSOR_ID_MAG = 4
+
+IMU_PACKET_FORMAT = "<B3h"      # id, X_axis, Y_axis, Z_axis
+assert struct.calcsize(IMU_PACKET_FORMAT) == 1 + 6
 
 # AdsGpsData, field for field:
 #   B fix_mode, B num_SV, H GNSS_Week, d GNSS_TOW,
@@ -140,3 +156,29 @@ def send_fss(sock, raw, cells=()):
 
     last_fss_heads = heads
     return heads
+
+
+def _imu_sample(reading):
+    """The raw sample to send from one gyro/magnetometer reading: the sample
+    itself, or the first unit's when several units are configured (the
+    firmware reads one ADIS16545 and one AK09916). None when the sensor did
+    not sample this tick or the sample was dropped."""
+    if isinstance(reading, list):
+        reading = reading[0][1] if reading else None
+    if reading is None or not reading.valid:
+        return None
+    return reading
+
+
+def send_imu(sock, gyro, mag):
+    """Send this tick's raw magnetometer and gyro words. The magnetometer goes
+    first: each gyro packet is one imuTask pass in the firmware, which then
+    reads the latest magnetometer words. A sensor that did not sample, or
+    dropped the sample, sends nothing."""
+    for sensor_id, reading in ((SENSOR_ID_MAG, mag), (SENSOR_ID_GYRO, gyro)):
+        sample = _imu_sample(reading)
+        if sample is None:
+            continue
+        d = sample.data
+        sock.sendto(struct.pack(IMU_PACKET_FORMAT, sensor_id, d['X_axis'], d['Y_axis'], d['Z_axis']),
+                    (ADS_HOST, ADS_SENSOR_PORT))

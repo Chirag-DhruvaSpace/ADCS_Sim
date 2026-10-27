@@ -172,12 +172,23 @@ for _kind, _label in [('gyro', 'Gyro'), ('mag', 'Mag')]:
 
 
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
-    global _telemetry_sequence
+    global _telemetry_sequence, _gyroscope, _magnetometer, _mag_units
 
     firmware = None
     if config.POINTING['strategy'] == 'firmware_sitl':
-        from firmware_sitl_adapter import FirmwareLink
+        from firmware_sitl_adapter import FirmwareLink, with_board_magnetometer
         firmware = FirmwareLink()
+        # SITL ONLY: the magnetometer carries the real board's error, which
+        # the firmware's calibration removes (see with_board_magnetometer).
+        # Both chips are rebuilt in the import-time order from freshly seeded
+        # generators, so the noise sequence is the same as without it.
+        board_config = with_board_magnetometer(config.IMU_SIM)
+        gyro_random = np.random.default_rng(_gyro_seed)
+        mag_random = gyro_random if _gyro_seed == _mag_seed else np.random.default_rng(_mag_seed)
+        _gyroscope = SimulatedGyroscope(config.IMU_SIM, record_history=False, random_generator=gyro_random)
+        _magnetometer = SimulatedMagnetometer(board_config, record_history=False, random_generator=mag_random)
+        _mag_units = [(unit, SimulatedMagnetometer(board_config.unit_config('mag', unit, index), record_history=False))
+                      for index, unit in enumerate(board_config.magnetometers) if unit.enabled]
     t = 0.0
     tf = float(tf)
     dt = float(dt)
@@ -362,10 +373,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         if firmware is not None:
             # Field in the firmware's body frame: _dcm_bi_from_q(q) is the
             # physical ECI->body matrix (see q_sensor above). This tick's raw
-            # GPS fix and FSS replies go out with the state, same epoch t.
+            # GPS fix, FSS replies and gyro/magnetometer words go out with the
+            # state, same epoch t.
             wheels, dipole = firmware.tick(r_vec, v_vec, X_rot[:4], X_rot[4:7], utc_time.timestamp(),
                 srd._dcm_bi_from_q(X_rot[:4]) @ B_eci,
-                gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells)
+                gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells,
+                gyro=_gyro_msg, mag=_mag_msg)
             srd.set_firmware_tick(wheels, dipole)
         custom_tick_command = cs.get_pointing_command()
         srd.set_custom_tick_target(custom_tick_command['desired_quaternion'])

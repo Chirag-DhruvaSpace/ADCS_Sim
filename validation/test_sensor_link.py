@@ -6,6 +6,9 @@ The firmware side is reproduced here from its sources:
   sensor2body   utils/coord_transform.c: v_body = cos(RelDCM) @ v_sensor
   fssTask       sitl_task_defs.c: Q > 10000 -> 0, lit = sum(Q) >= 400,
                 usable = |Alpha|, |Beta| <= 3500
+  IMU           sitl_task_defs.c sitl_processHybridGyroMag (flight ADIS16545.c):
+                gyro deg/s = counts / (10485760 / 65536), body = RelDCM[9];
+                mag uT = counts * 0.15, magApplyCal, body = RelDCM[4]
   fusedquat     body -> ECI, so body vectors are _dcm_bi_from_q(q) @ v_eci
 """
 import math
@@ -87,9 +90,12 @@ def test_gps_packet_is_obc_decoded_ads_gps_data(receiver):
 def test_fss_packets_give_firmware_the_physical_sun(variant, receiver):
     """Sun model fed the SITL sensor-frame quaternion -> packets -> firmware
     decode + RelDCM must give _dcm_bi_from_q(q) @ sun_eci for every used head."""
+    # Zero latency too: each tick below jumps to a random attitude, so any
+    # lookback would blend in the previous trial's attitude.
     cfg = replace(sun_arrays()[variant], enable_alignment_error=False, enable_bias_drift=False,
                   enable_scale_nonlinearity=False, enable_white_noise=False,
-                  enable_albedo=False, enable_self_shadowing=False, dropout_probability=0.0)
+                  enable_albedo=False, enable_self_shadowing=False, dropout_probability=0.0,
+                  latency_mean_s=0.0, latency_sigma_s=0.0, latency_min_s=0.0, latency_max_s=0.0)
     array = SimulatedSunSensorArray(cfg, record_history=False)
     rng = np.random.default_rng(3)
     sun_eci = np.array([0.3, -0.8, 0.52])
@@ -122,3 +128,76 @@ def test_fss_packets_give_firmware_the_physical_sun(variant, receiver):
     finally:
         sender.close()
     assert used_total >= 10   # enough attitudes put the Sun inside some head's window
+
+
+# ---- IMU (ADIS16545 gyro + AK09916 magnetometer) ---------------------------
+FIRMWARE_C_MAG = np.cos(np.radians(np.array(((0, 90, 90), (90, 180, 90), (90, 90, 180)), dtype=float)))   # RelDCM[4]
+FIRMWARE_C_GYRO = np.cos(np.radians(np.array(((90, 0, 90), (0, 90, 90), (90, 90, 180)), dtype=float)))   # RelDCM[9]
+FIRMWARE_GYRO_DEG_S_PER_COUNT = 65536.0 / 10485760.0
+
+
+def firmware_imu_decode(gyro_counts, mag_counts):
+    """sitl_processHybridGyroMag() without the clamps and updateEst() (a
+    constant input passes through that filter unchanged): body rate in deg/s,
+    body field in uT."""
+    from firmware_sitl_adapter import BOARD_MAG_CAL_BIAS_UT, BOARD_MAG_CAL_MATRIX
+    rate = FIRMWARE_C_GYRO @ (np.asarray(gyro_counts, dtype=float) * FIRMWARE_GYRO_DEG_S_PER_COUNT)
+    mag_sensor = np.asarray(mag_counts, dtype=float) * 0.15
+    mag_sensor = np.array(BOARD_MAG_CAL_MATRIX) @ (mag_sensor - np.array(BOARD_MAG_CAL_BIAS_UT))
+    return rate, FIRMWARE_C_MAG @ mag_sensor
+
+
+def test_imu_mountings_reproduce_firmware_rel_dcm():
+    imu = config.IMU_SIM
+    np.testing.assert_allclose(_dcm_bi_from_q(imu.gyro_mount_quaternion), FIRMWARE_C_GYRO, atol=1e-12)
+    np.testing.assert_allclose(_dcm_bi_from_q(imu.mag_mount_quaternion), FIRMWARE_C_MAG, atol=1e-12)
+
+
+def test_imu_packets_give_firmware_the_physical_rate_and_field(receiver):
+    """Gyroscope/magnetometer models (the magnetometer with the board's error,
+    as SITL builds it) fed the SITL sensor-frame quaternion -> packets ->
+    firmware decode must give the true body rate and _dcm_bi_from_q(q) @ B_eci."""
+    from simulate_gyroscope import SimulatedGyroscope
+    from simulate_magnetometer import SimulatedMagnetometer
+    from firmware_sitl_adapter import with_board_magnetometer
+    perfect = config._apply_sensor_profile(config.IMU_SIM, 'perfect')
+    gyro_cfg = perfect
+    mag_cfg = with_board_magnetometer(replace(perfect, mag_disturbance_t=(0.0, 0.0, 0.0)))
+    rng = np.random.default_rng(5)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for trial in range(20):
+            q = rng.normal(size=4)
+            q /= np.linalg.norm(q)
+            omega = np.radians(rng.uniform(-10.0, 10.0, size=3))        # rad/s, body
+            b_eci = rng.normal(size=3) * 25e-6                          # T
+            q_sensor = q * np.array([1.0, -1.0, -1.0, -1.0])            # as satellite_flight_visualisation in SITL
+            # fresh sensors each trial: latency never blends two trials
+            gyro = SimulatedGyroscope(gyro_cfg, record_history=False).get_raw_data(0.0, q_sensor, omega)
+            mag = SimulatedMagnetometer(mag_cfg, record_history=False).get_raw_data(0.0, q_sensor, b_eci)
+            sensor_link.send_imu(sender, gyro, mag)
+            packets = {}
+            for _ in range(2):
+                packet = receiver.recvfrom(1024)[0]
+                assert len(packet) == 7
+                packets[packet[0]] = struct.unpack('<3h', packet[1:])
+            assert set(packets) == {sensor_link.SENSOR_ID_GYRO, sensor_link.SENSOR_ID_MAG}
+            rate, field = firmware_imu_decode(packets[sensor_link.SENSOR_ID_GYRO], packets[sensor_link.SENSOR_ID_MAG])
+            np.testing.assert_allclose(rate, np.degrees(omega), atol=0.007,          # one high-word count
+                                       err_msg=f'trial {trial} body rate')
+            np.testing.assert_allclose(field, (_dcm_bi_from_q(q) @ b_eci) * 1e6, atol=0.25,   # ~1.5 counts
+                                       err_msg=f'trial {trial} body field')
+    finally:
+        sender.close()
+
+
+def test_imu_dropout_sends_nothing(receiver):
+    sample = type('Sample', (), {'valid': False, 'data': {'X_axis': 1, 'Y_axis': 2, 'Z_axis': 3}})()
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sensor_link.send_imu(sender, sample, None)
+        receiver.settimeout(0.2)
+        with pytest.raises(socket.timeout):
+            receiver.recvfrom(1024)
+    finally:
+        sender.close()

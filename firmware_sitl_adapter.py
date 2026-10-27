@@ -4,7 +4,31 @@ import math
 import socket
 import struct
 import time
+from dataclasses import replace
 import numpy as np
+
+# The real board's magnetometer error, as the firmware's magApplyCal()
+# (ADIS16545.c) removes it: h_cal = A @ (h_raw - b), in sensor axes. Keep in
+# step with magCalBias/magCalMatrix there (and sitl_task_defs.c's copy).
+BOARD_MAG_CAL_BIAS_UT = (-17.2540, -5.3328, 23.3669)
+BOARD_MAG_CAL_MATRIX = ((1.046503, -0.026631, 0.010970),
+                        (-0.026631, 0.977446, -0.010631),
+                        (0.010970, -0.010631, 0.979232))
+
+
+def with_board_magnetometer(imu_config):
+    """imu_config with the board's magnetometer error added, so the raw words
+    read h_raw = A^-1 @ h + b and the firmware calibration returns h. SITL
+    only: the Python estimator used by the other modes has no matching
+    calibration. The random hard-iron draw and white noise are not passed
+    through A^-1 (sub-uT terms against a ~5% soft-iron correction)."""
+    soft_iron_inverse = np.linalg.inv(np.array(BOARD_MAG_CAL_MATRIX))
+    board_bias_t = np.array(BOARD_MAG_CAL_BIAS_UT) * 1e-6
+    response = soft_iron_inverse @ np.asarray(imu_config.mag_response_matrix, dtype=float)
+    fixed_bias = soft_iron_inverse @ np.asarray(imu_config.mag_fixed_bias_t, dtype=float) + board_bias_t
+    return replace(imu_config,
+                   mag_response_matrix=tuple(tuple(float(v) for v in row) for row in response),
+                   mag_fixed_bias_t=tuple(float(v) for v in fixed_bias))
 
 class PacketSocket:
     def __init__(self, sock, fmt, notify, wheel=False):
@@ -43,16 +67,19 @@ class FirmwareLink:
             self.event_at = now
         self.received_at = now
     def tick(self, position, velocity, quaternion, rates, unix_time, field_body,
-             gps=None, sun=None, sun_cells=()):
+             gps=None, sun=None, sun_cells=(), gyro=None, mag=None):
         """rates in rad/s; sent in deg/s, the unit of AdsMdl.bodyRate.
-        gps/sun: this tick's raw sensor samples (None when the sensor did not
-        sample this tick), forwarded to the ADS on sensor_link's port."""
+        gps/sun/gyro/mag: this tick's raw sensor samples (None when the sensor
+        did not sample this tick), forwarded to the ADS on sensor_link's port.
+        The firmware takes its body rate and field from gyro/mag; the rate and
+        field in the state packet are no longer applied (sim_link.c)."""
         self.telemetry.send_state(self.state_socket, position, velocity, quaternion,
                                   np.degrees(np.asarray(rates, dtype=float)), unix_time, field_body)
         if gps is not None:
             self.sensor_link.send_gps(self.state_socket, gps)
         if sun is not None:
             self.sensor_link.send_fss(self.state_socket, sun, sun_cells)
+        self.sensor_link.send_imu(self.state_socket, gyro, mag)
         self.link.poll_rw_torques()
         self.link.poll_mode()
         with self.link._lock:
