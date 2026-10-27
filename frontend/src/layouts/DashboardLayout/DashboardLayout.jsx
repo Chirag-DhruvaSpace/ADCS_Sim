@@ -24,12 +24,17 @@ export default function DashboardLayout({
   configuration
 }) {
   const [active, setActive] = useState('overview'),
-    [clear, setClear] = useState(false),
-    [suspended, setSuspended] = useState(false);
+    [clear, setClear] = useState(false);
+  const clearRef = useRef(clear);
+  const pendingTelemetry = useRef(null);
+  clearRef.current = clear;
   const currentTab = useRef(active);
   currentTab.current = active;
   useEffect(() => {
-    const accept = event => telemetryStore.accept(event.detail);
+    const accept = event => {
+      pendingTelemetry.current = event.detail;
+      if (!clearRef.current) telemetryStore.accept(event.detail);
+    };
     window.addEventListener('simulation-telemetry', accept);
     window.MissionDashboard = {
       get latest() {
@@ -42,7 +47,11 @@ export default function DashboardLayout({
         return telemetryStore.getSnapshot().samples;
       }
     };
-    const unsubscribe = telemetryStore.subscribe(() => requestAnimationFrame(() => window.dispatchEvent(new Event('dashboard-render'))));
+    const unsubscribe = telemetryStore.subscribe(() => {
+      if (!clearRef.current) requestAnimationFrame(() => {
+        if (!clearRef.current) window.dispatchEvent(new Event('dashboard-render'));
+      });
+    });
     return () => {
       window.removeEventListener('simulation-telemetry', accept);
       unsubscribe();
@@ -75,9 +84,8 @@ export default function DashboardLayout({
   useEffect(() => {
     document.body.classList.toggle('mission-clear-active', clear);
     window.dispatchEvent(new CustomEvent('telemetry-visibility', { detail: !clear }));
-    if (!clear) setSuspended(false);
-    const timer = clear ? setTimeout(() => setSuspended(true), 500) : null;
-    return () => { clearTimeout(timer); document.body.classList.remove('mission-clear-active'); };
+    if (!clear && pendingTelemetry.current) telemetryStore.accept(pendingTelemetry.current);
+    return () => { document.body.classList.remove('mission-clear-active'); };
   }, [clear]);
-  return <><MissionHeader active={active} onTabChange={setActive} clear={clear} onClearChange={setClear} /><ClearDots configuration={configuration} clear={clear} /><section className={'mission-dashboard' + (clear ? ' mission-clear-view' : '')} id="mission-dashboard" data-tab={active}><WorkspacePages active={active} configuration={configuration} suspended={suspended} /></section></>;
+  return <><MissionHeader active={active} onTabChange={setActive} clear={clear} onClearChange={setClear} /><ClearDots configuration={configuration} clear={clear} /><section className={'mission-dashboard' + (clear ? ' mission-clear-view' : '')} id="mission-dashboard" data-tab={active}><WorkspacePages active={active} configuration={configuration} suspended={clear} /></section></>;
 }

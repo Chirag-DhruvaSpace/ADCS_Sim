@@ -8,6 +8,8 @@ import PointingControls from "../../components/PointingControls/PointingControls
 import AttitudeTargetCard from "../../components/AttitudeTargetCard/AttitudeTargetCard.jsx";
 import ActuatorCard from "../../components/ActuatorCard/ActuatorCard.jsx";
 import DisturbanceCard from "../../components/DisturbanceCard/DisturbanceCard.jsx";
+import ManualControls from "../../components/ManualControls/ManualControls.jsx";
+import MissionCard from "../../components/MissionCard/MissionCard.jsx";
 import "./PointingPage.css";
 export default memo(function PointingPage({
   active,
@@ -32,5 +34,6 @@ export default memo(function PointingPage({
       <ActuatorCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
       <DisturbanceCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
     </div>
+    <MissionCard className="mission-card glass manual-command-dock" hidden={data.mode !== 'RW'}><ManualControls /></MissionCard>
   </section>;
 });

@@ -3,7 +3,6 @@ import MissionCard from '../MissionCard/MissionCard.jsx';
 import { memo } from 'react';
 import { formatTelemetry } from '../../services/formatTelemetry.js';
 import { ActuatorRows } from '../TelemetryRows/TelemetryRows.jsx';
-import ManualControls from '../ManualControls/ManualControls.jsx';
 import "./ActuatorCard.css";
 export default memo(function ActuatorCard({
   data,
@@ -49,11 +48,5 @@ export default memo(function ActuatorCard({
       <div id="mission-actuators">
         <ActuatorRows data={data} />
       </div>
-      <details id="mission-manual" hidden={data.mode !== "RW"}>
-        <summary>
-          {"Manual attitude commands"}
-        </summary>
-        <ManualControls />
-      </details>
     </MissionCard>;
 });
