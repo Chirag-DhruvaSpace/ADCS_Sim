@@ -956,15 +956,21 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 def _sun_diagnostic(name, field, scale=1.0):
                     value = getattr(_sun_diagnostics.get(name), field, None)
                     return None if value is None else (value if scale == 1.0 else value * scale)
-                data_to_send["sun_arr_valid"] = bool(_sun_rec.valid)
-                data_to_send["sun_arr_cells_used"] = int(sum(1 for c in _sun_rec.cells if c.used))
+                sun_receipt_current = bool(
+                    _sun_sensor is not None and _sun_rec.valid
+                    and data_to_send.get('imu_sun_valid', False)
+                    and 0 <= t - _sun_rec.t_meas_s <= config.IMU_SIM.fusion_max_age_s)
+                sun_solution_current = sun_receipt_current and _sun_rec.reconstruction_valid
+                data_to_send["sun_arr_valid"] = sun_receipt_current
+                data_to_send["sun_arr_cells_used"] = sum(
+                    1 for cell in _sun_rec.cells if cell.used and sun_solution_current)
                 data_to_send["sun_arr_cells_total"] = int(len(_sun_rec.cells))
                 data_to_send["sun_arr_cells"] = [
                     {"name": c.name,
                      "output_pct": float(c.output_pct),
                      "adc_counts": int(c.adc_counts),
                      "angle_deg": (None if c.angle_deg is None else float(c.angle_deg)),
-                     "used": bool(c.used), "in_fov": _sun_diagnostic(c.name, 'in_fov'),
+                     "used": bool(c.used and sun_solution_current), "in_fov": _sun_diagnostic(c.name, 'in_fov'),
                      "shadowed": _sun_diagnostic(c.name, 'shadowed'), "saturated": bool(c.saturated),
                      "eclipse_factor": _sun_diagnostic(c.name, 'eclipse_factor_applied'),
                      "albedo_pct": _sun_diagnostic(c.name, 'albedo_fraction', 100.0)}
@@ -972,7 +978,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 data_to_send["sun_arr_method"] = str(_sun_rec.method)
                 data_to_send["sun_arr_eclipse_factor"] = (
                     _sun_diagnostic(_sun_rec.cells[0].name, 'eclipse_factor_applied') if _sun_rec.cells else None)
-                if _sun_rec.reconstruction_valid and _sun_rec.reconstructed_body is not None:
+                if sun_solution_current and _sun_rec.reconstructed_body is not None:
                     data_to_send["sun_arr_recon_x"] = float(_sun_rec.reconstructed_body[0])
                     data_to_send["sun_arr_recon_y"] = float(_sun_rec.reconstructed_body[1])
                     data_to_send["sun_arr_recon_z"] = float(_sun_rec.reconstructed_body[2])
@@ -1074,7 +1080,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 'Magnetometer': bool(_imu_cfg and _imu_cfg.enable_magnetometer and
                                      (not _imu_cfg.magnetometers or any(unit.enabled for unit in _imu_cfg.magnetometers))),
                 'Sun sensor array': bool(_sun_sensor is not None),
-                'Star tracker': bool(_star_tracker.enabled and firmware is None),
+                'Star tracker': bool(_star_tracker.enabled),
             },
             models={
                 'Propagator': 'Orekit / DOP853',

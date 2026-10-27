@@ -66,6 +66,32 @@ class Sensors(unittest.TestCase):
         self.assertTrue(all(c.output_fraction == 0 for c in m.cells))
         self.assertFalse(m.reconstruction_valid)
 
+    def test_sun_selection_uses_strongest_independent_three_heads(self):
+        from compute_simulated_attitude import reconstruct_sun
+        normals = np.array([[1,0,0], [-1,0,0], [0,1,0], [0,-1,0], [0,0,1], [0,0,-1]])
+        # All six are above threshold, but only the brightest independent
+        # three belong to the solution. The bright opposing X head is skipped.
+        outputs = np.array([.9, .8, .7, .03, .6, .02])
+        direction, valid, method, used = reconstruct_sun(outputs, normals, .015)
+        self.assertTrue(valid)
+        np.testing.assert_array_equal(used, [True, False, True, False, True, False])
+        expected = np.array([.9, .7, .6])
+        expected /= np.linalg.norm(expected)
+        np.testing.assert_allclose(direction, expected)
+        self.assertEqual(method, 'least_squares')
+
+    def test_failed_sun_solution_marks_no_heads_used(self):
+        from compute_simulated_attitude import reconstruct_sun
+        for outputs, normals in (
+            ([1,0,0], np.eye(3)),
+            ([1,1,1], np.array([[1,0,0], [0,1,0], [-1,0,0]])),
+        ):
+            with self.subTest(outputs=outputs):
+                direction, valid, method, used = reconstruct_sun(outputs, normals, .015)
+                self.assertIsNone(direction)
+                self.assertFalse(valid)
+                self.assertFalse(np.any(used))
+
     def test_cosine_and_three_faces(self):
         cfg = replace(SunSensorArrayParameters.perfect(), activation_threshold=0.)
         rng = np.random.default_rng(123)

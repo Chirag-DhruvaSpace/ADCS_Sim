@@ -74,10 +74,14 @@ export function createSensorMarkers({
       // Firmware SITL: "used" is the firmware's verdict on this head's GETTLM
       // reply (lit and inside +/-35 deg), not the Python reconstruction's.
       const head = (data.fss_heads || []).find(h => h.cell === item.name);
-      const sunUsed = head ? head.used : !!cell?.used;
+      const sunEnabled = item.enabled !== false && data.sensor_activation?.['Sun sensor array'] !== false;
+      const sunReceiptValid = head ? true : data.sun_arr_valid !== false;
+      const sunSolutionValid = head ? true : data.sun_arr_recon_valid !== false;
+      const sunUsed = sunEnabled && sunReceiptValid && sunSolutionValid
+        && (head ? head.used === true : cell?.used === true);
       const unit = (data.imu_units?.[item.kind === 'Gyro' ? 'gyro' : 'mag'] || []).find(u => u.name === item.name);
       /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-      const level = item.kind === 'Sun' ? (cell?.output_pct || 0) / 100
+      const level = item.kind === 'Sun' ? (sunEnabled && sunReceiptValid ? (cell?.output_pct || 0) / 100 : 0)
         : item.kind === 'StarTracker' ? Number(data.star_tracker_used === true)
         : Number(unit ? unit.used : item.kind === 'Gyro' ? data.imu_gyro_valid : data.imu_mag_valid);
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;

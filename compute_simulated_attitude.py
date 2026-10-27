@@ -37,20 +37,48 @@ class DecodedVector:
 
 
 def reconstruct_sun(outputs, normals, activation_threshold, min_cells=3):
-    """Flight reconstruction from photocurrents and calibrated mount normals only."""
-    outputs, normals = np.asarray(outputs, float), np.asarray(normals, float)
+    """Solve using the strongest independent heads, not every illuminated head.
+
+    The default solution uses three heads. Selection sees only measured
+    photocurrents and calibrated normals; it never reads true illumination
+    or subtracts simulated albedo. A larger configured minimum includes more
+    heads after selecting a full-rank three-head basis.
+    """
+    outputs = np.asarray(outputs, dtype=float)
+    normals = np.asarray(normals, dtype=float)
     normals = normals / np.linalg.norm(normals, axis=1)[:, None]
-    mask = np.isfinite(outputs) & (outputs > activation_threshold)
-    if np.count_nonzero(mask) < min_cells:
-        return None, False, 'insufficient_cells', mask
-    A = normals[mask]
-    if np.linalg.matrix_rank(A) != 3:
-        return None, False, 'degenerate_geometry', mask
-    s = np.linalg.lstsq(A, outputs[mask], rcond=None)[0]
-    length = np.linalg.norm(s)
-    if length < 1e-12:
-        return None, False, 'degenerate_geometry', mask
-    return s / length, True, 'least_squares', mask
+    eligible = np.isfinite(outputs) & (outputs > activation_threshold)
+    used = np.zeros(len(outputs), dtype=bool)
+    if np.count_nonzero(eligible) < min_cells:
+        return None, False, 'insufficient_cells', used
+
+    eligible_indices = np.flatnonzero(eligible)
+    brightness_order = np.argsort(-outputs[eligible_indices], kind='stable')
+    ranked_indices = eligible_indices[brightness_order]
+    selected_indices = []
+    # The brightest three can contain parallel/opposing normals. Retain a
+    # head only if it adds an independent direction to the initial basis.
+    for candidate_index in ranked_indices:
+        trial_indices = selected_indices + [int(candidate_index)]
+        if np.linalg.matrix_rank(normals[trial_indices]) > len(selected_indices):
+            selected_indices.append(int(candidate_index))
+        if len(selected_indices) == 3:
+            break
+    if len(selected_indices) < 3:
+        return None, False, 'degenerate_geometry', used
+    for candidate_index in ranked_indices:
+        if len(selected_indices) >= min_cells:
+            break
+        if int(candidate_index) not in selected_indices:
+            selected_indices.append(int(candidate_index))
+
+    selected_normals = normals[selected_indices]
+    direction = np.linalg.lstsq(selected_normals, outputs[selected_indices], rcond=None)[0]
+    direction_length = np.linalg.norm(direction)
+    if not np.isfinite(direction_length) or direction_length < 1e-12:
+        return None, False, 'degenerate_geometry', used
+    used[selected_indices] = True
+    return direction / direction_length, True, 'least_squares', used
 
 
 def decode_vector_sample(sample, sensor_kind, configuration):
@@ -135,6 +163,9 @@ def decode_sun_sample(sample, configuration):
             eclipse_factor_applied=None, albedo_fraction=None))
     decoded = SunArrayMeasurement(sample.t_meas_s, sample.t_arrival_s,
         decoded_cells, None, False, 'not_processed', sample.valid)
+    if not sample.valid:
+        decoded.method = 'invalid_receipt'
+        return decoded
     # The provisional fine-sensor interface must not narrow the configured
     # photocells' field of view. Use their ADC readings whenever geometry allows.
     direction, good, method, used = reconstruct_sun(
@@ -155,7 +186,6 @@ def decode_sun_sample(sample, configuration):
     accepted_directions = []
     for sensor, cell_configuration, cell in zip(sample.sensors, configuration.cells, decoded_cells):
         direction = fine_sensor_body_direction(sensor, cell_configuration, configuration)
-        cell.used = direction is not None
         if direction is not None:
             accepted_directions.append(direction)
     decoded.method = 'fine_sensor_vectors'
@@ -166,6 +196,8 @@ def decode_sun_sample(sample, configuration):
     if direction_length > 1e-12:
         decoded.reconstructed_body = direction_sum / direction_length
         decoded.reconstruction_valid = True
+        for sensor, cell_configuration, cell in zip(sample.sensors, configuration.cells, decoded_cells):
+            cell.used = fine_sensor_body_direction(sensor, cell_configuration, configuration) is not None
     return decoded
 
 

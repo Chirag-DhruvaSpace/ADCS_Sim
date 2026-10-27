@@ -17,9 +17,12 @@
 .star-tracker-card .tracker-metrics { font-size: .77em; line-height: 1.35; }
 #mission-page-sensors .star-tracker-card .tracker-metrics > div { padding: 3px 0; gap: 12px; }
 .star-tracker-card .tracker-metrics dd { white-space: normal; overflow-wrap: anywhere; }
-.star-tracker-optics { margin: 0; width: clamp(90px, 12dvh, 132px); }
+.star-tracker-optics { margin: 0; width: clamp(90px, 12dvh, 132px); align-self: start; }
 .star-tracker-optics figcaption {
   font-size: .6em;
+  block-size: 6.5em;
+  overflow-y: auto;
+  scrollbar-width: thin;
   color: var(--mission-muted);
   text-align: center;
   margin-top: 5px;

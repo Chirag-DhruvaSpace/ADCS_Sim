@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 #  setup.ps1 - ADCS Simulator - one-click setup (v8)
 #  Flow: git clone repo -> double-click Setup.bat -> use VS Code normally.
 #
@@ -630,6 +630,21 @@ if __name__ == '__main__':
 '' | Out-File -FilePath $LogFile -Encoding utf8
 MissionBanner
 try {
+
+# Save this account's display preference before installation can fail and before
+# pre-flight changes the process execution policy to RemoteSigned.
+# A scaling failure remains a warning so simulator setup can continue.
+try {
+  Say '  [..] DISPLAY SCALING: setting 125% for this Windows account (all displays)' Cyan
+  & (Join-Path $Root 'tools\set-display-scaling.ps1') | ForEach-Object { Say "  [..] $_" DarkCyan }
+  $scalingSaved = Get-ItemProperty -LiteralPath 'HKCU:\Control Panel\Desktop' -ErrorAction Stop
+  if ($scalingSaved.LogPixels -ne 120 -or $scalingSaved.Win8DpiScaling -ne 1) {
+    throw 'Windows scaling values were not saved as expected.'
+  }
+  Ok 'DISPLAY SCALING: verified 125% saved. Sign out of Windows and sign back in to apply.'
+} catch {
+  Warn "Could not configure 125% display scaling: $($_.Exception.Message). Set it in Windows Settings > System > Display > Scale."
+}
 
 # ====================== Step 1 : pre-flight + shield =======================
 Step 'Pre-flight (python / node / orekit-data) + run_simulator self-sufficiency'

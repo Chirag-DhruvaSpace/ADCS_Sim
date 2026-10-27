@@ -1909,14 +1909,7 @@ export async function startSimulationEngine(configuration) {
       reportLoading(100, 'Simulation ready', true);
     }
   }
-  /* =====================================================================
-     Fullscreen is MANUAL ONLY (button in the top-left bar).
-     Rationale 2026-09-18: browsers block programmatic fullscreen before ANY
-     user click, and this page's heavy first paint (3D scene + tile fetch)
-     means an auto-request fired at load either fails silently or pops late
-     over the operator's click -- both looked like "weird UI". A user click
-     on ⛶ always works, so auto-request on load + gesture-retry were removed.
-     ===================================================================== */
+  // Startup fullscreen is requested after the loading screen fades out.
   function enterFullscreen() {
     if (document.fullscreenElement) return;
     try {
@@ -1926,7 +1919,7 @@ export async function startSimulationEngine(configuration) {
       if (p && typeof p.catch === 'function') p.catch(() => {/* denied; button retry */});
     } catch (e) {/* ignored */}
   }
-  /* Manual-only toggle (see note above). */
+  // Keep the toolbar toggle available after startup.
   listen($("fullscreen-toggle"), 'click', () => {
     if (document.fullscreenElement) {
       const p = document.exitFullscreen();

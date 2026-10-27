@@ -2,6 +2,7 @@
 import {useEffect, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {getLoadingProgress} from '../../services/loadingProgress.js';
+import {startupFullscreen} from '../../services/startupFullscreen.js';
 import './LoadingScreen.css';
 export default function LoadingScreen({error}) {
   const [state, setState] = useState(getLoadingProgress);
@@ -16,6 +17,9 @@ export default function LoadingScreen({error}) {
     const timer = setTimeout(() => setDismissed(true), 450);
     return () => clearTimeout(timer);
   }, [state.ready]);
+  useEffect(() => {
+    if (dismissed && !error) return startupFullscreen();
+  }, [dismissed, error]);
   /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
   if (dismissed) return null;
   return createPortal(<div className={'launch-screen' + (state.ready ? ' launch-ready' : '')} role="status" aria-live="polite">

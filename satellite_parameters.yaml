@@ -2,8 +2,8 @@
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
 pointing:
-  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
-  legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
+  strategy: firmware_sitl          # legacy | custom | firmware_sitl (external UDP actuators)
+  legacy_mode: NOMINAL_IN_ORBIT         # Startup mode when strategy is legacy
   # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
   # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
   custom:
@@ -560,7 +560,7 @@ sun_sensor:
   # Reconstruction and measurement delivery
   albedo_scale: 0.15                        # Uniform Lambertian Earth reflectivity [0,1]
   activation_threshold: 0.015               # 1.5% full scale; 5x nominal noise sigma
-  min_cells_for_solution: 3                 # Rank requires at least three normals
+  min_cells_for_solution: 3                 # Use three strongest independent heads; larger values include more
   dropout_probability: 0.0                  # Chance the complete array receipt is lost
   latency_mean_s: 0.01                      # Measurement staleness, about 10 ms
   latency_sigma_s: 0.002

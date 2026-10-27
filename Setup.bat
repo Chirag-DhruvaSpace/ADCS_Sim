@@ -7,6 +7,9 @@ REM  Setup downloads/builds EVERYTHING itself (venv + deps, Java
 REM  via jdk4py inside the venv, portable Node, frontend build,
 REM  orekit-data if missing), proves the sim boots (HTTP 200),
 REM  then STOPS everything and leaves the machine clean.
+REM  Also saves 125%% custom display scaling for the current Windows
+REM  account (all displays). Sign out/in after setup to apply scaling.
+REM  Restore: powershell -ExecutionPolicy Bypass -File tools\set-display-scaling.ps1 -Restore
 REM
 REM  Run the sim afterwards in VS Code as usual:
 REM  open folder -> new terminal -> python run_simulator.py
