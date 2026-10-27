@@ -30,6 +30,32 @@ def with_board_magnetometer(imu_config):
                    mag_response_matrix=tuple(tuple(float(v) for v in row) for row in response),
                    mag_fixed_bias_t=tuple(float(v) for v in fixed_bias))
 
+# Flight imuTask reads the ADIS16545 and AK09916 every 10 ms
+# (DEFAULT_ICM_READ_INTERVAL), and fuseAttitude()'s per-cycle gains are tuned
+# for that rate. The SITL firmware integrates each IMU sample with exactly this
+# period, so Python must send one sample per 10 ms of simulated time.
+FIRMWARE_IMU_RATE_HZ = 100.0
+
+
+def with_firmware_imu_rate(imu_config):
+    """imu_config with the gyro and magnetometer sampling at the flight imuTask
+    rate. Per-sample white noise is left as configured: it is the noise of one
+    read, which does not depend on how often the chip is read."""
+    return replace(imu_config,
+                   gyro_update_rate_hz=FIRMWARE_IMU_RATE_HZ,
+                   mag_update_rate_hz=FIRMWARE_IMU_RATE_HZ)
+
+
+def imu_substep_times(t, dt):
+    """The IMU sample times strictly inside the physics step [t, t + dt): the
+    sample at t itself goes out with the step's other sensors (tick()), these
+    follow once the step has been integrated (send_imu())."""
+    count = int(round(dt * FIRMWARE_IMU_RATE_HZ))
+    if count < 1 or not math.isclose(count / FIRMWARE_IMU_RATE_HZ, dt, rel_tol=1e-9, abs_tol=1e-12):
+        raise ValueError(f'physics step {dt} s is not a whole number of {1/FIRMWARE_IMU_RATE_HZ} s IMU periods')
+    return [t + k * dt / count for k in range(1, count)]
+
+
 class PacketSocket:
     def __init__(self, sock, fmt, notify, wheel=False):
         self.sock, self.fmt, self.notify, self.wheel = sock, fmt, notify, wheel
@@ -67,12 +93,14 @@ class FirmwareLink:
             self.event_at = now
         self.received_at = now
     def tick(self, position, velocity, quaternion, rates, unix_time, field_body,
-             gps=None, sun=None, sun_cells=(), gyro=None, mag=None):
+             gps=None, sun=None, sun_cells=(), gyro=None, mag=None,
+             star=None, epoch_unix_s=0.0):
         """rates in rad/s; sent in deg/s, the unit of AdsMdl.bodyRate.
-        gps/sun/gyro/mag: this tick's raw sensor samples (None when the sensor
-        did not sample this tick), forwarded to the ADS on sensor_link's port.
-        The firmware takes its body rate and field from gyro/mag; the rate and
-        field in the state packet are no longer applied (sim_link.c)."""
+        gps/sun/gyro/mag/star: this tick's raw sensor samples (None when the
+        sensor did not sample this tick), forwarded to the ADS on sensor_link's
+        port. The firmware takes its body rate and field from gyro/mag; the rate
+        and field in the state packet are no longer applied (sim_link.c).
+        epoch_unix_s: Unix time of sim t = 0, for the star tracker timestamp."""
         self.telemetry.send_state(self.state_socket, position, velocity, quaternion,
                                   np.degrees(np.asarray(rates, dtype=float)), unix_time, field_body)
         if gps is not None:
@@ -80,6 +108,7 @@ class FirmwareLink:
         if sun is not None:
             self.sensor_link.send_fss(self.state_socket, sun, sun_cells)
         self.sensor_link.send_imu(self.state_socket, gyro, mag)
+        self.sensor_link.send_star_tracker(self.state_socket, star, epoch_unix_s)
         self.link.poll_rw_torques()
         self.link.poll_mode()
         with self.link._lock:
@@ -92,6 +121,11 @@ class FirmwareLink:
             self.last_mode = mode
             self.stable_since = None
         return wheels, dipole
+    def send_imu(self, gyro, mag):
+        """One extra 10 ms IMU sample from inside the physics step (see
+        imu_substep_times). Sent in time order; the firmware queues them and
+        runs one imuTask pass per sample."""
+        self.sensor_link.send_imu(self.state_socket, gyro, mag)
     def finish_tick(self, dt):
         self.link.step_wheel_momentum(dt)
         self.link.send_rw_telemetry()

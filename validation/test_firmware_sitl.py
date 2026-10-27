@@ -27,17 +27,19 @@ class FirmwareTests(unittest.TestCase):
             link.link.TLM_SEND_PORT = wheel_receiver.getsockname()[1]
             self.assertEqual(link.metadata(0, {}, np.zeros(3))['custom_pointing_status'],'red')
             sender.sendto(struct.pack('<3d',0,0,2.5),link.link._cmd_sock.getsockname())
-            sender.sendto(struct.pack('<B3f',2,.1,.2,.3),link.link._mode_sock.getsockname())
+            sender.sendto(struct.pack('<B3f4fB',2,.1,.2,.3,.5,.5,-.5,.5,1),link.link._mode_sock.getsockname())
             time.sleep(.01)
             q = np.array([1.,0,0,0]); field = np.array([0.,0,2e-5])
             wheels,dipole = link.tick([7e6,0,0],[0,7500,0],q,[0,0,0],123,field)
             np.testing.assert_allclose(wheels,[.0025,0,0,0])
             np.testing.assert_allclose(dipole,[.1,.2,.3],rtol=1e-6)
+            np.testing.assert_allclose(link.link.get_latest_fused_quaternion(),[.5,.5,-.5,.5])
+            self.assertEqual(link.link.get_latest_fuse_source_name(),'Star tracker')
             # Unsupported wheel speed, malformed packets and NaNs must not
             # change the accepted actuator state or count as fresh input.
             sender.sendto(b'invalid',link.link._cmd_sock.getsockname())
             sender.sendto(struct.pack('<3d',1,1,99),link.link._cmd_sock.getsockname())
-            sender.sendto(struct.pack('<B3f',2,float('nan'),0,0),link.link._mode_sock.getsockname())
+            sender.sendto(struct.pack('<B3f4fB',2,float('nan'),0,0,1,0,0,0,0),link.link._mode_sock.getsockname())
             accepted_at = link.received_at
             time.sleep(.01)
             held_wheels,held_dipole = link.tick([7e6,0,0],[0,7500,0],q,[0,0,0],123,field)
@@ -53,8 +55,14 @@ class FirmwareTests(unittest.TestCase):
             dynamics.set_firmware_tick(wheels,dipole)
             with patch.dict(cs.mode,value='FIRMWARE_SITL'), patch.object(dynamics.cd,'DISTURBANCES_ENABLED',False):
                 derivative = dynamics.rotational_equations_of_motion(0,[1,0,0,0,0,0,0],field)
-            expected = dynamics.I_inv @ (td.A@wheels + np.cross(dipole,field))
+            expected = dynamics.I_inv @ (link.link.FLIGHT_WHEEL_AXES_BODY@wheels + np.cross(dipole,field))
             np.testing.assert_allclose(derivative[4:7],expected)
+            # The firmware's TorqDistMat (flight resetDefaults(), SITL main.c)
+            # must invert these axes exactly, or the wheel loops run away.
+            c, s = np.cos(np.radians(35)), np.sin(np.radians(35))
+            torq_dist = np.array([[1/2/c, 0, -1/4/s], [0, -1/2/c, -1/4/s],
+                                  [-1/2/c, 0, -1/4/s], [0, 1/2/c, -1/4/s]])
+            np.testing.assert_allclose(link.link.FLIGHT_WHEEL_AXES_BODY @ torq_dist, np.eye(3), atol=1e-12)
             link.received_at = link.event_at = time.monotonic()
             self.assertEqual(link.metadata(0, {'NadirPoint':0},np.zeros(3))['custom_pointing_status'],'green')
             link.event_at = time.monotonic()-3

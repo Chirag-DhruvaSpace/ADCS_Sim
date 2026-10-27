@@ -9,6 +9,8 @@ The firmware side is reproduced here from its sources:
   IMU           sitl_task_defs.c sitl_processHybridGyroMag (flight ADIS16545.c):
                 gyro deg/s = counts / (10485760 / 65536), body = RelDCM[9];
                 mag uT = counts * 0.15, magApplyCal, body = RelDCM[4]
+  sagittaTask   sitl_task_defs.c (flight task_defs.c): accepted when isTrustworthy;
+                absquat = RelQuat[3] (x) q_ST (sensor2bodyquat, star_tracker_absquat.c)
   fusedquat     body -> ECI, so body vectors are _dcm_bi_from_q(q) @ v_eci
 """
 import math
@@ -196,6 +198,91 @@ def test_imu_dropout_sends_nothing(receiver):
     sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sensor_link.send_imu(sender, sample, None)
+        receiver.settimeout(0.2)
+        with pytest.raises(socket.timeout):
+            receiver.recvfrom(1024)
+    finally:
+        sender.close()
+
+
+# ---- Star tracker (Sagitta Solution) -----------------------------------------
+FIRMWARE_C_STAR_TRACKER = np.cos(np.radians(np.array(((85, 175, 90), (90, 90, 180), (5, 85, 90)), dtype=float)))   # RelDCM[3]
+
+
+def hamilton(a, b):
+    return sensor_link._hamilton(a, b)
+
+
+def firmware_absquat(q_st):
+    """sensor2bodyquat(StarTracker, q_ST) = RelQuat[3] (x) q_ST."""
+    return hamilton(sensor_link.FIRMWARE_STAR_TRACKER_REL_QUAT, q_st)
+
+
+def quaternion_angle_deg(a, b):
+    return math.degrees(2 * math.acos(min(1.0, abs(float(np.dot(a, b))) / (np.linalg.norm(a) * np.linalg.norm(b)))))
+
+
+def test_star_tracker_mount_reproduces_firmware_rel_quat():
+    mount = config.IMU_SIM.star_tracker.mount_quaternion
+    np.testing.assert_allclose(_dcm_bi_from_q(mount), FIRMWARE_C_STAR_TRACKER, atol=2e-6)
+    np.testing.assert_allclose(np.asarray(mount) * np.array([1, -1, -1, -1]),
+                               sensor_link.FIRMWARE_STAR_TRACKER_REL_QUAT, atol=1e-12)
+
+
+def _unpack_solution(packet):
+    fields = struct.unpack(sensor_link.STAR_TRACKER_PACKET_FORMAT, packet)
+    assert fields[0] == sensor_link.SENSOR_ID_STAR_TRACKER and len(packet) == 80
+    return {'q': np.array(fields[3:7]), 'trust': fields[22], 'matched': fields[14], 'tq': np.array(fields[8:12])}
+
+
+@pytest.mark.parametrize('profile', ['perfect', 'nominal'])
+def test_star_tracker_solution_gives_firmware_the_physical_attitude(profile, receiver):
+    """Tracker model sampled with the SITL firmware-frame quaternion -> Solution
+    packet -> firmware's RelQuat[3] (x) q_ST must give the true body->ECI
+    attitude (to the tracker's own error)."""
+    from simulate_startracker import SimulatedStarTracker
+    base = getattr(config.StarTrackerParameters, profile)()
+    cfg = replace(base, mount_quaternion=config.IMU_SIM.star_tracker.mount_quaternion,
+                  enable_blinding=False, enable_kinematic_limits=False, enable_dropouts=False,
+                  enable_outliers=False, enable_latency=False, cold_start_s=0.0, low_trust_packets=0)
+    rng = np.random.default_rng(9)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    worst_chain = worst_truth = 0.0
+    try:
+        for trial in range(20):
+            q = rng.normal(size=4)
+            q /= np.linalg.norm(q)
+            tracker = SimulatedStarTracker(config=cfg)
+            q_sensor = q * np.array([1.0, -1.0, -1.0, -1.0])     # as satellite_flight_visualisation in SITL
+            receipt = tracker.get_raw_data(0.0, q_sensor, np.array([7e6, 0, 0]), np.array([0, 1.0, 0]), np.zeros(3))
+            assert receipt is not None and receipt.valid
+            sensor_link.send_star_tracker(sender, receipt, 1.79e9)
+            solution = _unpack_solution(receiver.recvfrom(1024)[0])
+            assert solution['trust'] == 1 and solution['matched'] > 0
+            np.testing.assert_allclose(solution['tq'], solution['q'])
+            absquat = firmware_absquat(solution['q'])
+            # the tracker's measured attitude in the firmware's convention
+            measured = np.asarray(receipt.quaternion_eci) * np.array([1.0, -1.0, -1.0, -1.0])
+            worst_chain = max(worst_chain, quaternion_angle_deg(absquat, measured))
+            worst_truth = max(worst_truth, quaternion_angle_deg(absquat, q))
+    finally:
+        sender.close()
+    # The link must deliver exactly what the tracker measured (float32 on the
+    # wire); the tracker's own modelled error is the only difference from truth.
+    assert worst_chain * 3600 < 1.0, f'{profile}: link adds {worst_chain * 3600:.3f} arcsec'
+    assert worst_truth < (1e-4 if profile == 'perfect' else 0.05), f'{profile}: {worst_truth * 3600:.1f} arcsec from truth'
+
+
+def test_star_tracker_invalid_receipt_sends_no_solution(receiver):
+    receipt = type('Receipt', (), dict(valid=False, trusted=False, quaternion_eci=np.array([1.0, 0, 0, 0]),
+                                       num_stars=0, quality=0.0, t_meas_s=1.0, mode='BLINDED'))()
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sensor_link.send_star_tracker(sender, receipt, 1.79e9)
+        solution = _unpack_solution(receiver.recvfrom(1024)[0])
+        assert solution['trust'] == 0 and solution['matched'] == 0
+        assert not np.any(solution['q'])
+        sensor_link.send_star_tracker(sender, None, 1.79e9)          # no receipt yet: nothing sent
         receiver.settimeout(0.2)
         with pytest.raises(socket.timeout):
             receiver.recvfrom(1024)

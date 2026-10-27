@@ -12,9 +12,11 @@ export default memo(function AttitudeErrorCard({ data, derived }) {
         <circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" />
         <path d="M12 1v6m0 10v6M1 12h6m10 0h6" />
       </svg>Attitude error</h2>
-        <p className="quiet">Sun correction: <span data-bool="att_est_sun_used">
-          {formatTelemetry(data, derived, { 'data-bool': 'att_est_sun_used' }, '')}
-        </span></p>
+        {typeof data.att_est_source === 'string'
+          ? <p className="quiet">Firmware reference: <span>{data.att_est_source}</span></p>
+          : <p className="quiet">Sun correction: <span data-bool="att_est_sun_used">
+            {formatTelemetry(data, derived, { 'data-bool': 'att_est_sun_used' }, '')}
+          </span></p>}
       </div>
       <div className="estimator-metric" data-severity={severity}>
         <b data-value="att_est_error_deg" data-unit="°" data-digits="3">

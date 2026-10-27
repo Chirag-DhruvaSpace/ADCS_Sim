@@ -16,6 +16,8 @@ Wire format (UDP to 127.0.0.1:5010, little-endian, no padding):
                         ADIS_READ_GYRO() returns (ADIS16545.c)
     SENSOR_ID_MAG = 4 : ICM_MAG_Typedef, 3 x int16 -- the signed AK09916
                         counts ICM_READ_MAG() returns (ICM20948.c)
+    SENSOR_ID_STAR_TRACKER = 5: SgtSolution_t (sagitta.h, packed), 79 bytes --
+                        the Solution telemetry SgtReadSolution() decodes
 
 The payloads come from the current sensor models unchanged:
   - GPS: simulate_gps get_raw_data() -> RawGpsSample.data, the ORION receiver's
@@ -35,6 +37,13 @@ The payloads come from the current sensor models unchanged:
     RelDCM[AdisGyro] / RelDCM[Magnetometer], and in SITL the magnetometer
     carries the board error magApplyCal() removes (ADIS16545.c; see
     firmware_sitl_adapter.with_board_magnetometer).
+  - Star tracker: simulate_startracker get_raw_data() -> StarTrackerMeasurement,
+    the measured attitude with the tracker's errors, sampled (in SITL) with
+    the firmware-frame quaternion. The firmware turns the Solution quaternion
+    into body attitude as AdsMdl.absquat = RelQuat[3] (x) q_ST
+    (sensor2bodyquat, star_tracker_absquat.c), so q_ST is sent as the one
+    that makes that product the measured attitude. The yaml star_tracker
+    mount_quaternion MUST reproduce RelQuat[3] (it is its conjugate).
 
 UDP, fire-and-forget: only the latest sample matters, exactly as on the bus.
 """
@@ -50,9 +59,29 @@ SENSOR_ID_GPS = 1
 SENSOR_ID_FSS = 2
 SENSOR_ID_GYRO = 3
 SENSOR_ID_MAG = 4
+SENSOR_ID_STAR_TRACKER = 5
 
 IMU_PACKET_FORMAT = "<B3h"      # id, X_axis, Y_axis, Z_axis
 assert struct.calcsize(IMU_PACKET_FORMAT) == 1 + 6
+
+# SgtSolution_t, field for field:
+#   I ticks, Q timestamp_us, 4f calibrated q (w,x,y,z), f trackConfidence,
+#   4f TRACK q, B trackRemoved, B nrCentroided, B nrMatched, 4f LISA q,
+#   f lisaPct, B lisaNrClose, B starTrackerMode, B isTrustworthy,
+#   I stableCount, b solutionStrategy
+STAR_TRACKER_PACKET_FORMAT = "<BIQ4ff4f3B4ff3BIb"
+assert struct.calcsize(STAR_TRACKER_PACKET_FORMAT) == 1 + 79, "must match sizeof(SgtSolution_t)"
+
+# The firmware's star tracker mounting, AdsConfigStruct.RelQuat[3] (ADS main.c /
+# flight resetDefaults()), scalar first.
+FIRMWARE_STAR_TRACKER_REL_QUAT = (0.521334, 0.521334, -0.477714, 0.477714)
+
+# starTrackerMode codes: the Sagitta's own mode table is not in this tree and
+# the firmware only copies the byte to telemetry (AdsHk.StracMode), so SITL
+# uses these.
+STAR_TRACKER_MODE_CODES = {'ACQUISITION': 1, 'TRACKING': 2, 'LOST': 3, 'BLINDED': 4}
+
+_star_tracker_stable_count = 0
 
 # AdsGpsData, field for field:
 #   B fix_mode, B num_SV, H GNSS_Week, d GNSS_TOW,
@@ -171,10 +200,11 @@ def _imu_sample(reading):
 
 
 def send_imu(sock, gyro, mag):
-    """Send this tick's raw magnetometer and gyro words. The magnetometer goes
-    first: each gyro packet is one imuTask pass in the firmware, which then
-    reads the latest magnetometer words. A sensor that did not sample, or
-    dropped the sample, sends nothing."""
+    """Send one IMU sample's raw magnetometer and gyro words. The magnetometer
+    goes first: the firmware queues each gyro packet, paired with the
+    magnetometer packet just before it, as one imuTask pass. A sensor that did
+    not sample, or dropped the sample, sends nothing (a missing magnetometer
+    reads as a repeat of its last words, like a frozen chip)."""
     for sensor_id, reading in ((SENSOR_ID_MAG, mag), (SENSOR_ID_GYRO, gyro)):
         sample = _imu_sample(reading)
         if sample is None:
@@ -182,3 +212,63 @@ def send_imu(sock, gyro, mag):
         d = sample.data
         sock.sendto(struct.pack(IMU_PACKET_FORMAT, sensor_id, d['X_axis'], d['Y_axis'], d['Z_axis']),
                     (ADS_HOST, ADS_SENSOR_PORT))
+
+
+def _hamilton(a, b):
+    """Hamilton product, scalar first -- the firmware's utilsHamilt()."""
+    w1, x1, y1, z1 = a
+    w2, x2, y2, z2 = b
+    return np.array([w1*w2 - x1*x2 - y1*y2 - z1*z2,
+                     w1*x2 + x1*w2 + y1*z2 - z1*y2,
+                     w1*y2 - x1*z2 + y1*w2 + z1*x2,
+                     w1*z2 + x1*y2 - y1*x2 + z1*w2])
+
+
+def star_tracker_solution_quaternion(measured_quaternion):
+    """The Solution quaternion q_ST for one tracker receipt.
+
+    The tracker model reports m in the frame it was sampled in; with the SITL
+    firmware-frame input, the measured attitude in the firmware's convention
+    (body -> ECI, like fusedquat) is conj(m). The firmware computes
+    absquat = RelQuat[3] (x) q_ST, so q_ST = conj(RelQuat[3]) (x) conj(m)
+    = conj(m (x) RelQuat[3]).
+    """
+    product = _hamilton(np.asarray(measured_quaternion, dtype=float), FIRMWARE_STAR_TRACKER_REL_QUAT)
+    product /= np.linalg.norm(product)
+    return product * np.array([1.0, -1.0, -1.0, -1.0])
+
+
+def send_star_tracker(sock, receipt, epoch_unix_s):
+    """Send the tracker's latest receipt as one SgtSolution_t packet.
+
+    No receipt yet (tracker off, cold start) sends nothing, so the firmware's
+    read fails as for an unanswered poll. An invalid receipt (blinded, lost,
+    dropout) is sent as the Sagitta reports no solution: zeroed quaternions,
+    no matched stars, isTrustworthy 0. epoch_unix_s: Unix time of sim t = 0,
+    for the Solution timestamp."""
+    global _star_tracker_stable_count
+    if receipt is None:
+        return
+    trustworthy = bool(receipt.valid and receipt.trusted)
+    _star_tracker_stable_count = _star_tracker_stable_count + 1 if trustworthy else 0
+    if receipt.valid:
+        q = star_tracker_solution_quaternion(receipt.quaternion_eci)
+        stars = int(receipt.num_stars)
+        confidence = float(receipt.quality)
+    else:
+        q = np.zeros(4)
+        stars = 0
+        confidence = 0.0
+    q = [float(v) for v in q]
+    sock.sendto(struct.pack(STAR_TRACKER_PACKET_FORMAT, SENSOR_ID_STAR_TRACKER,
+                            int(round(receipt.t_meas_s * 1000.0)) & 0xFFFFFFFF,
+                            int(round((epoch_unix_s + receipt.t_meas_s) * 1e6)),
+                            *q, confidence,                          # calibrated quaternion
+                            *q,                                      # TRACK quaternion
+                            0, stars, stars,                         # trackRemoved, nrCentroided, nrMatched
+                            *q, 0.0, stars,                          # LISA quaternion, lisaPct, lisaNrClose
+                            STAR_TRACKER_MODE_CODES.get(receipt.mode, 0),
+                            int(trustworthy),
+                            _star_tracker_stable_count & 0xFFFFFFFF,
+                            0),                                      # solutionStrategy
+                (ADS_HOST, ADS_SENSOR_PORT))

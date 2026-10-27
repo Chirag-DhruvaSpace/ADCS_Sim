@@ -730,6 +730,12 @@ def set_firmware_tick(wheels, dipole):
     _firmware_wheels[:] = wheels
     _firmware_dipole[:] = dipole
 
+def _firmware_wheel_axes():
+    # Imported lazily: firmware_sitl_link binds its UDP ports on import, which
+    # only firmware SITL runs should do.
+    from firmware_sitl_link import FLIGHT_WHEEL_AXES_BODY
+    return FLIGHT_WHEEL_AXES_BODY
+
 def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external_torque_body=None, truth_field_eci=None, truth_position_eci=None, truth_velocity_eci=None, aerodynamic_torque_body=None):
      
     global detumbling_complete
@@ -778,7 +784,9 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
         # The firmware's dipole acts on the field in ITS body frame: for this
         # quaternion's kinematics (q_dot = 0.5*Omega(w)*q) _dcm_bi_from_q(q) is
         # the physical ECI->body matrix, the same one the 5002 uplink uses.
-        tau_actual = td.A @ rw_t + np.cross(M, _dcm_bi_from_q(q) @ field)
+        # The wheel torques act along the flight wheel axes, the geometry the
+        # firmware's TorqDistMat distributes for -- not td.A (the yaml axes).
+        tau_actual = _firmware_wheel_axes() @ rw_t + np.cross(M, _dcm_bi_from_q(q) @ field)
         store.mode = 'FIRMWARE_SITL'
     elif not detumbling_complete:
         # Detumble damps the MEASURED rate (omega_ctrl = gyro belief when the

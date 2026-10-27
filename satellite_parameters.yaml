@@ -578,7 +578,11 @@ star_tracker:
   enabled: true                            # Master switch overrides every profile
   seed: 73                                  # Independent of every other sensor
   update_rate_hz: 10                         # 5 / 8 / 10; accuracy does not scale
-  mount_quaternion: [1.0, 0.0, 0.0, 0.0]     # Tracker axes into body, house convention
+  # Tracker axes into body, house convention. Flight mounting: the firmware's
+  # RelQuat[3] / RelDCM[3] (ADS main.c / flight resetDefaults()) -- boresight
+  # body -Y, 5 deg tilt. This is conj(RelQuat[3]), the house convention being
+  # the transpose of the firmware's.
+  mount_quaternion: [0.521334, -0.521334, 0.477714, -0.477714]
   detector_temperature_c: 20.0
   thermal_reference_temperature_c: 20.0
   earth_limb_radius_km: 6478.137              # Earth radius plus 100 km atmosphere

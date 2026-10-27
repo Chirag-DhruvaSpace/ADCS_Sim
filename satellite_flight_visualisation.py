@@ -171,22 +171,46 @@ for _kind, _label in [('gyro', 'Gyro'), ('mag', 'Mag')]:
                                    position=list(_position), enabled=_unit.enabled))
 
 
+def _acquire_imu(t, q_sensor, omega_body, B_eci):
+    """One gyro + magnetometer acquisition at time t: (gyro_msg, mag_msg).
+    Both chips are prepared before either is read, to retain the seeded noise
+    order."""
+    _gyroscope.prepare_sample(t, q_sensor, omega_body)
+    _magnetometer.prepare_sample(t, q_sensor, B_eci)
+    if config.IMU_SIM.gyros:
+        gyro_msg = [(unit, sensor.get_raw_data(t, q_sensor, omega_body))
+                    for unit, sensor in _gyro_units] if config.IMU_SIM.enable_gyro else []
+    else:
+        gyro_msg = _gyroscope.read_sample(raw_output=True)
+    if config.IMU_SIM.magnetometers:
+        mag_msg = [(unit, sensor.get_raw_data(t, q_sensor, B_eci))
+                   for unit, sensor in _mag_units] if config.IMU_SIM.enable_magnetometer else []
+    else:
+        mag_msg = _magnetometer.read_sample(raw_output=True)
+    return gyro_msg, mag_msg
+
+
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
-    global _telemetry_sequence, _gyroscope, _magnetometer, _mag_units
+    global _telemetry_sequence, _gyroscope, _magnetometer, _gyro_units, _mag_units
 
     firmware = None
     if config.POINTING['strategy'] == 'firmware_sitl':
-        from firmware_sitl_adapter import FirmwareLink, with_board_magnetometer
+        from firmware_sitl_adapter import FirmwareLink, with_board_magnetometer, with_firmware_imu_rate
         firmware = FirmwareLink()
         # SITL ONLY: the magnetometer carries the real board's error, which
-        # the firmware's calibration removes (see with_board_magnetometer).
-        # Both chips are rebuilt in the import-time order from freshly seeded
-        # generators, so the noise sequence is the same as without it.
-        board_config = with_board_magnetometer(config.IMU_SIM)
+        # the firmware's calibration removes (see with_board_magnetometer),
+        # and both chips sample at the flight imuTask rate, 100 Hz (see
+        # with_firmware_imu_rate; the extra samples inside each physics step
+        # are taken after the step is integrated, below). Both chips are
+        # rebuilt in the import-time order from freshly seeded generators.
+        rate_config = with_firmware_imu_rate(config.IMU_SIM)
+        board_config = with_board_magnetometer(rate_config)
         gyro_random = np.random.default_rng(_gyro_seed)
         mag_random = gyro_random if _gyro_seed == _mag_seed else np.random.default_rng(_mag_seed)
-        _gyroscope = SimulatedGyroscope(config.IMU_SIM, record_history=False, random_generator=gyro_random)
+        _gyroscope = SimulatedGyroscope(rate_config, record_history=False, random_generator=gyro_random)
         _magnetometer = SimulatedMagnetometer(board_config, record_history=False, random_generator=mag_random)
+        _gyro_units = [(unit, SimulatedGyroscope(rate_config.unit_config('gyro', unit, index), record_history=False))
+                       for index, unit in enumerate(rate_config.gyros) if unit.enabled]
         _mag_units = [(unit, SimulatedMagnetometer(board_config.unit_config('mag', unit, index), record_history=False))
                       for index, unit in enumerate(board_config.magnetometers) if unit.enabled]
     t = 0.0
@@ -231,7 +255,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # physical environment measured by their own sensors; only position/
         # velocity knowledge comes from GPS.
         _msg = None
-        _gyro_msg = _mag_msg = _sun_msg = None
+        _gyro_msg = _mag_msg = _sun_msg = _star_msg = None
         if _gps_sim is not None:
             _msg = _gps_sim.get_raw_data(t, r_vec, v_vec)
             _boundary_had_fix = _msg is not None
@@ -292,26 +316,13 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         q_sensor = X_rot[:4] if firmware is None else X_rot[:4] * np.array([1.0, -1.0, -1.0, -1.0])
         if config.IMU_SIM.enabled:
             # Acquire each sensor directly; navigation receives only their outputs.
-            # Prepare both chips before reading to retain the seeded noise order.
-            _gyroscope.prepare_sample(t, q_sensor, X_rot[4:7])
-            _magnetometer.prepare_sample(t, q_sensor, B_eci)
-            if config.IMU_SIM.gyros:
-                _gyro_msg = [(unit, sensor.get_raw_data(t, q_sensor, X_rot[4:7]))
-                             for unit, sensor in _gyro_units] if config.IMU_SIM.enable_gyro else []
-            else:
-                _gyro_msg = _gyroscope.read_sample(raw_output=True)
-            if config.IMU_SIM.magnetometers:
-                _mag_msg = [(unit, sensor.get_raw_data(t, q_sensor, B_eci))
-                            for unit, sensor in _mag_units] if config.IMU_SIM.enable_magnetometer else []
-            else:
-                _mag_msg = _magnetometer.read_sample(raw_output=True)
+            _gyro_msg, _mag_msg = _acquire_imu(t, q_sensor, X_rot[4:7], B_eci)
             _sun_msg = (_sun_sensor.get_raw_data(t, q_sensor, sun_eci,
                             srp_result.eclipse_fraction, r_vec) if _sun_sensor is not None else None)
-            # The star tracker is a separate sensor. Firmware SITL keeps
-            # its own attitude processing and receives no simulated star input.
-            _star_msg = (_star_tracker.get_raw_data(
-                            t, X_rot[:4], r_vec, sun_eci, X_rot[4:7])
-                         if firmware is None else None)
+            # The star tracker is a separate sensor. In firmware SITL it is
+            # sampled in the firmware's frame (q_sensor) like the other
+            # sensors, and its Solution goes to the firmware (firmware.tick).
+            _star_msg = _star_tracker.get_raw_data(t, q_sensor, r_vec, sun_eci, X_rot[4:7])
             _imu_nav.process_raw_data(t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM,
                                       star_tracker=_star_msg)
             # use_mag_for_control switch: the magnetic laws (B-dot detumble,
@@ -378,7 +389,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             wheels, dipole = firmware.tick(r_vec, v_vec, X_rot[:4], X_rot[4:7], utc_time.timestamp(),
                 srd._dcm_bi_from_q(X_rot[:4]) @ B_eci,
                 gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells,
-                gyro=_gyro_msg, mag=_mag_msg)
+                gyro=_gyro_msg, mag=_mag_msg,
+                star=_star_msg, epoch_unix_s=epoch_utc.timestamp())
             srd.set_firmware_tick(wheels, dipole)
         custom_tick_command = cs.get_pointing_command()
         srd.set_custom_tick_target(custom_tick_command['desired_quaternion'])
@@ -393,10 +405,24 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 (t, t + dt),
                 X_rot,
                 rtol=config.SIMULATION.attitude_integrator_rel_tolerance,
-                atol=config.SIMULATION.attitude_integrator_abs_tolerance
+                atol=config.SIMULATION.attitude_integrator_abs_tolerance,
+                dense_output=firmware is not None,
             )
         finally:
             srd.set_custom_tick_target(None)
+
+        # SITL: the rest of this step's 100 Hz IMU samples (the one at t went
+        # out with firmware.tick() above). Attitude and rate at each 10 ms point
+        # come from the integrator's own continuous solution over this step, so
+        # the firmware's estimator sees the motion the plant actually made.
+        # The field is held at its tick value; it changes by nT over 0.1 s.
+        if firmware is not None and config.IMU_SIM.enabled:
+            from firmware_sitl_adapter import imu_substep_times
+            for t_sample in imu_substep_times(t, dt):
+                y_sample = sol_rot.sol(t_sample)
+                q_sample = y_sample[:4] / np.linalg.norm(y_sample[:4])
+                firmware.send_imu(*_acquire_imu(t_sample, q_sample * np.array([1.0, -1.0, -1.0, -1.0]),
+                                                y_sample[4:7], B_eci))
 
 
         # Publish measurements and truth at the same sampling epoch t.
@@ -918,12 +944,13 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # ---- IMU sensor belief (only when IMU enabled; no new keys when off)
         if config.IMU_SIM.enabled:
             data_to_send.update(_imu_nav.telemetry())
-            if firmware is None and _star_msg is not None:
+            if _star_msg is not None:
                 data_to_send['star_tracker_update_rate_hz'] = _star_tracker.update_rate_hz
                 # Operator-only comparison, separate from navigation updates.
+                # Truth in the frame the tracker sampled (q_sensor, see above).
                 tracker_axis_body = _star_tracker.mount_rotation[:, 2]
                 observed_boresight = srd._dcm_bi_from_q(_star_msg.quaternion_eci) @ tracker_axis_body
-                true_boresight = srd._dcm_bi_from_q(X_rot[:4]) @ tracker_axis_body
+                true_boresight = srd._dcm_bi_from_q(q_sensor) @ tracker_axis_body
                 chord = np.linalg.norm(observed_boresight - true_boresight)
                 data_to_send['star_tracker_error_arcsec'] = float(
                     np.degrees(2 * np.arcsin(np.clip(chord / 2, 0, 1))) * 3600)
@@ -1020,6 +1047,17 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 data_to_send["sun_arr_error_deg"] = None
             # attitude estimator belief (quat in the SAME xyzw order as quat_*)
             _q_est = _att_est.q_eci
+            # SITL: the belief is the firmware's own estimate (AdsMdl.fusedquat,
+            # from the mode link). It is body->ECI in the same convention as
+            # X_rot[:4] -- the truth quaternion the firmware used to take on
+            # 5002 -- so it compares with X_rot directly.
+            _fw_q_est = firmware.link.get_latest_fused_quaternion() if firmware is not None else None
+            if _fw_q_est is not None:
+                _q_est = np.asarray(_fw_q_est, dtype=float)
+                _q_est = _q_est / np.linalg.norm(_q_est)
+                imu_att_est_error_deg = 2.0 * np.degrees(np.arccos(np.clip(
+                    abs(float(np.dot(_q_est, X_rot[:4] / np.linalg.norm(X_rot[:4])))), 0.0, 1.0)))
+                data_to_send["att_est_source"] = firmware.link.get_latest_fuse_source_name()
             for _axis, _value in zip(('w', 'x', 'y', 'z'), X_rot[:4]):
                 data_to_send['truth_att_quat_' + _axis] = float(_value)
             data_to_send["att_est_quat_x"] = float(_q_est[1])
@@ -1057,7 +1095,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             'earth_exclusion_deg': config.IMU_SIM.star_tracker.earth_exclusion_deg,
         }
         _star_tracker_view_history.append(current_tracker_view)
-        tracker_receipt = _star_tracker.get_raw_data() if firmware is None else None
+        tracker_receipt = _star_tracker.get_raw_data()
         data_to_send['star_tracker_view'] = select_star_tracker_view(
             _star_tracker_view_history, tracker_receipt)
         tracker_parameters = config.IMU_SIM.star_tracker

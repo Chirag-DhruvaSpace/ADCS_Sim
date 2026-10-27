@@ -20,9 +20,12 @@ give the firmware's own wheelsNeedDesat()/gyroscopic-decoupling terms
 something physically reasonable to read back as "wheel speed" telemetry.
 """
 
+import math
 import socket
 import struct
 import threading
+
+import numpy as np
 
 CMD_LISTEN_PORT = 5104     # matches ACS SITL's PYTHON_CMD_PORT (where it actually sends RW commands) --
                             # CORRECTED this session: was 5102, a leftover/wrong value; ACS SITL
@@ -38,6 +41,19 @@ CMD_FORMAT = "<3d"   # rwNo, mode(0=torque mNm, 1=speed), value -- matches acs_s
 TLM_FORMAT = "<3d"   # rwNo, currspeed_rpm, actual_torque_mNm -- matches acs_sim_link.h exactly
 
 RW_MOI = 5.4e-5   # kg*m^2 -- matches acs.h's confirmed value, reused here for the momentum estimate
+
+# The flight reaction-wheel spin axes in body axes, one column per wheel
+# (RW1..RW4), as the flight firmware's resetDefaults() TorqDistMat is built
+# for: a pyramid canted 35 deg below the XY plane, all tilted toward -Z.
+#     RW1 ( cos35,      0, -sin35)      RW3 (-cos35,      0, -sin35)
+#     RW2 (     0, -cos35, -sin35)      RW4 (     0,  cos35, -sin35)
+# The FIRMWARE_SITL plant applies the firmware's wheel torques along these, so
+# that A @ TorqDistMat is the identity, as on the satellite. Other simulator
+# modes keep the wheel axes from satellite_parameters.yaml.
+_C35, _S35 = math.cos(math.radians(35.0)), math.sin(math.radians(35.0))
+FLIGHT_WHEEL_AXES_BODY = np.array([[_C35, 0.0,   -_C35, 0.0],
+                                   [0.0,  -_C35, 0.0,   _C35],
+                                   [-_S35, -_S35, -_S35, -_S35]])
 
 _lock = threading.Lock()
 _latest_torque_mNm = [0.0, 0.0, 0.0, 0.0]
@@ -65,8 +81,15 @@ _latest_ads_mode = [0]   # raw AdsMode byte value, 0 = AdcsMode_Safe
 # encoded current that function actually commands the hardware. By
 # explicit request, trading testing mtrCurrDist()'s own saturation/
 # encoding logic for a simpler pipeline.
-MODE_STATUS_FORMAT = "<B3f"
+#
+# EXTENDED again: the firmware's own attitude estimate, AdsMdl.fusedquat
+# (w, x, y, z, body->ECI, 4 float32), and fuseAttDiag.source (uint8: 0 none,
+# 1 star tracker, 2 TRIAD, 3 Sun-2DOF) -- 30 bytes in total.
+MODE_STATUS_FORMAT = "<B3f4fB"
 _latest_mtr_dipole_Am2 = [0.0, 0.0, 0.0]
+_latest_fused_quaternion = [None]
+_latest_fuse_source = [0]
+FUSE_SOURCE_NAMES = {0: "Gyro only", 1: "Star tracker", 2: "TRIAD", 3: "Sun 2-DOF"}
 
 # Human-readable names, matching base_shared.h's AdsMode enum exactly --
 # only Safe/NadirPoint are meaningful in this build (the only two modes
@@ -140,7 +163,7 @@ def poll_mode():
                   f"expected {expected_len} -- discarding")
             continue
 
-        mode, mx, my, mz = struct.unpack(MODE_STATUS_FORMAT, data)
+        mode, mx, my, mz, qw, qx, qy, qz, source = struct.unpack(MODE_STATUS_FORMAT, data)
 
         with _lock:
             if _latest_ads_mode[0] != mode:
@@ -150,6 +173,21 @@ def poll_mode():
             _latest_mtr_dipole_Am2[0] = mx
             _latest_mtr_dipole_Am2[1] = my
             _latest_mtr_dipole_Am2[2] = mz
+            _latest_fused_quaternion[0] = (qw, qx, qy, qz)
+            _latest_fuse_source[0] = source
+
+
+def get_latest_fused_quaternion():
+    """The firmware's latest attitude estimate (AdsMdl.fusedquat, w-x-y-z,
+    body->ECI), or None before the first mode packet."""
+    with _lock:
+        return _latest_fused_quaternion[0]
+
+
+def get_latest_fuse_source_name():
+    """Which reference fuseAttitude() corrected toward on its last pass."""
+    with _lock:
+        return FUSE_SOURCE_NAMES.get(_latest_fuse_source[0], str(_latest_fuse_source[0]))
 
 
 def get_latest_mtr_dipole_Am2():
