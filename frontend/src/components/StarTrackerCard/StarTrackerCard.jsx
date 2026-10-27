@@ -8,15 +8,20 @@ const vector = (values, length, digits) => Array.isArray(values) && values.lengt
   ? `[${values.map(value => value.toFixed(digits)).join(', ')}]` : '—';
 
 const EARTH_RADIUS_M = 6378137;
-const PREVIEW_SIZE = 80;
-const PREVIEW_INTERVAL_MS = 250;
+const PREVIEW_SIZE = 128;
+const PREVIEW_INTERVAL_MS = 500;
+// Limit this CPU-only thumbnail to approximately 8ms of rendering per second.
+const PREVIEW_CPU_FRACTION = .008;
+const previewFrames = new WeakMap();
+let previewRays;
+let previewRayFov;
 
-function loadPreviewTexture(url) {
+function loadPreviewTexture(url, maxWidth = 1024) {
   return new Promise(resolve => {
     const image = new Image();
     image.onload = () => {
       const surface = document.createElement('canvas');
-      surface.width = Math.min(image.naturalWidth, 1024);
+      surface.width = Math.min(image.naturalWidth, maxWidth);
       surface.height = Math.round(image.naturalHeight * surface.width / image.naturalWidth);
       const context = surface.getContext('2d', { willReadFrequently: true });
       context.drawImage(image, 0, 0, surface.width, surface.height);
@@ -35,7 +40,7 @@ let previewTexturesPromise;
 function getPreviewTextures() {
   if (!previewTexturesPromise) {
     previewTexturesPromise = Promise.all([
-      loadPreviewTexture(TEXTURES.day),
+      loadPreviewTexture(TEXTURES.day, 2048),
       loadPreviewTexture(TEXTURES.referenceSky),
       loadPreviewTexture(TEXTURES.cloudsLow),
       loadPreviewTexture(TEXTURES.moon)
@@ -51,6 +56,29 @@ function sampleTexture(texture, horizontal, vertical) {
   const row = Math.min(texture.height - 1, Math.max(0, Math.floor(vertical * texture.height)));
   const offset = (row * texture.width + column) * 4;
   return [texture.data[offset], texture.data[offset + 1], texture.data[offset + 2]];
+}
+
+function sampleSurface(texture, horizontal, vertical) {
+  if (!texture) return null;
+  // Filter across the longitude seam; clamp at the poles.
+  const x = (((horizontal % 1) + 1) % 1) * texture.width - .5;
+  const y = Math.max(0, Math.min(texture.height - 1, vertical * texture.height - .5));
+  const left = Math.floor(x), top = Math.floor(y);
+  const x0 = (left + texture.width) % texture.width;
+  const x1 = (x0 + 1) % texture.width;
+  const y1 = Math.min(texture.height - 1, top + 1);
+  const a = (top * texture.width + x0) * 4;
+  const b = (top * texture.width + x1) * 4;
+  const c = (y1 * texture.width + x0) * 4;
+  const d = (y1 * texture.width + x1) * 4;
+  const fx = x - left, fy = y - top, pixels = texture.data;
+  const result = [0, 0, 0];
+  for (let channel = 0; channel < 3; channel++) {
+    const upper = pixels[a + channel] * (1 - fx) + pixels[b + channel] * fx;
+    const lower = pixels[c + channel] * (1 - fx) + pixels[d + channel] * fx;
+    result[channel] = upper * (1 - fy) + lower * fy;
+  }
+  return result;
 }
 
 function transformDirection(matrix, direction) {
@@ -124,8 +152,25 @@ function sphereDistance(origin, direction, radius) {
 }
 
 export function renderTrackerView(context, view, earthTexture, skyTexture, cloudTexture, moonTexture) {
-  const image = context.createImageData(PREVIEW_SIZE, PREVIEW_SIZE);
+  let image = previewFrames.get(context);
+  if (!image) {
+    image = context.createImageData(PREVIEW_SIZE, PREVIEW_SIZE);
+    previewFrames.set(context, image);
+  }
   const halfWidth = Math.tan(view.field_of_view_deg * Math.PI / 360);
+  // Camera rays depend only on the FOV, not the changing spacecraft attitude.
+  if (previewRayFov !== view.field_of_view_deg) {
+    previewRayFov = view.field_of_view_deg;
+    previewRays = new Float64Array(PREVIEW_SIZE * PREVIEW_SIZE * 3);
+    for (let row = 0; row < PREVIEW_SIZE; row++) for (let column = 0; column < PREVIEW_SIZE; column++) {
+      const x = (2 * (column + .5) / PREVIEW_SIZE - 1) * halfWidth;
+      const y = (1 - 2 * (row + .5) / PREVIEW_SIZE) * halfWidth;
+      const length = Math.hypot(x, y, 1), offset = (row * PREVIEW_SIZE + column) * 3;
+      previewRays[offset] = x / length;
+      previewRays[offset + 1] = y / length;
+      previewRays[offset + 2] = 1 / length;
+    }
+  }
   const position = view.position_ecef_m;
   const positionSquared = dotProduct(position, position);
   const sunRadiusRad = .2666 * Math.PI / 180;
@@ -137,18 +182,15 @@ export function renderTrackerView(context, view, earthTexture, skyTexture, cloud
   let moonRadiusM = 1737400;
   if (validVector(view.moon_position_ecef_m)) {
     moonOrigin = position.map((coordinate, axis) => coordinate - view.moon_position_ecef_m[axis]);
-    // Keep unresolved disks visible at 80 pixels without adding a GPU pass.
+    // Keep unresolved disks visible without adding a GPU pass.
     moonRadiusM = Math.max(moonRadiusM, Math.hypot(...moonOrigin) * pixelRadiusRad);
   }
   for (let row = 0; row < PREVIEW_SIZE; row += 1) {
     for (let column = 0; column < PREVIEW_SIZE; column += 1) {
-      const cameraX = (2 * (column + .5) / PREVIEW_SIZE - 1) * halfWidth;
-      const cameraY = (1 - 2 * (row + .5) / PREVIEW_SIZE) * halfWidth;
-      const length = Math.hypot(cameraX, cameraY, 1);
-      const cameraRay = [cameraX / length, cameraY / length, 1 / length];
+      const rayOffset = (row * PREVIEW_SIZE + column) * 3;
+      const cameraRay = [previewRays[rayOffset], previewRays[rayOffset + 1], previewRays[rayOffset + 2]];
       const earthFixedRay = transformDirection(view.tracker_to_ecef, cameraRay);
-      const inertialRay = transformDirection(view.tracker_to_eci, cameraRay);
-      let color = sampleReferenceSky(skyTexture, inertialRay) || [5, 9, 18];
+      let color;
       const earthDistance = sphereDistance(position, earthFixedRay, EARTH_RADIUS_M);
       const moonDistance = moonOrigin ? sphereDistance(moonOrigin, earthFixedRay, moonRadiusM) : -1;
       if (earthDistance > 0 && (moonDistance < 0 || earthDistance < moonDistance)) {
@@ -159,8 +201,8 @@ export function renderTrackerView(context, view, earthTexture, skyTexture, cloud
         const latitude = Math.asin(Math.max(-1, Math.min(1, normal[2])));
         const horizontal = .5 + longitude / (2 * Math.PI);
         const vertical = .5 - latitude / Math.PI;
-        let surface = sampleTexture(earthTexture, horizontal, vertical) || [36, 104, 156];
-        const clouds = sampleTexture(cloudTexture, horizontal, vertical);
+        let surface = sampleSurface(earthTexture, horizontal, vertical) || [36, 104, 156];
+        const clouds = sampleSurface(cloudTexture, horizontal, vertical);
         if (clouds) surface = mixColor(surface, [235, 243, 255], Math.max(...clouds) / 255 * .65);
         const daylight = Math.max(0, dotProduct(normal, view.sun_direction_ecef));
         // Operator preview exposure deliberately preserves the unlit surface;
@@ -168,7 +210,7 @@ export function renderTrackerView(context, view, earthTexture, skyTexture, cloud
         const illumination = .38 + .62 * Math.sqrt(daylight);
         color = surface.map((channel, axis) => channel * illumination + [7, 13, 22][axis]);
         const facing = Math.max(0, -dotProduct(normal, earthFixedRay));
-        const horizonHaze = .08 + .5 * Math.pow(1 - facing, 2);
+        const horizonHaze = .02 + .4 * Math.pow(1 - facing, 3);
         color = mixColor(color, [65, 150, 240], horizonHaze);
       } else if (moonDistance > 0) {
         bodies.moonVisible = true;
@@ -180,6 +222,9 @@ export function renderTrackerView(context, view, earthTexture, skyTexture, cloud
         const illumination = .2 + .8 * Math.max(0, dotProduct(normal, view.sun_direction_ecef));
         color = surface.map(channel => channel * illumination);
       } else {
+        // Do not shade sky pixels hidden behind Earth or the Moon.
+        const inertialRay = transformDirection(view.tracker_to_eci, cameraRay);
+        color = sampleReferenceSky(skyTexture, inertialRay) || [5, 9, 18];
         const sunAlignment = dotProduct(inertialRay, view.sun_direction_eci);
         if (sunAlignment > sunGlowCosine) {
           const angularDistance = Math.acos(Math.max(-1, Math.min(1, sunAlignment)));
@@ -254,6 +299,8 @@ function OpticalPreview({ view, active }) {
   }, [renderingEnabled, textures]);
   useEffect(() => {
     if (!renderingEnabled) return;
+    let timer;
+    let frameCostMs = 0;
     const draw = () => {
       if (document.hidden || document.body.classList.contains('mission-clear-active')) return;
       if (window.missionCameraState?.().transitioning) return;
@@ -280,9 +327,17 @@ function OpticalPreview({ view, active }) {
         setViewDescription(previous => previous === description ? previous : description);
       }
     };
-    draw();
-    const timer = window.setInterval(draw, PREVIEW_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+    const tick = () => {
+      const started = performance.now();
+      draw();
+      const elapsed = performance.now() - started;
+      // React promptly to expensive frames, and relax the budget gradually.
+      frameCostMs = Math.max(elapsed, frameCostMs * .9);
+      const interval = Math.max(PREVIEW_INTERVAL_MS, frameCostMs / PREVIEW_CPU_FRACTION);
+      timer = window.setTimeout(tick, Math.max(0, interval - elapsed));
+    };
+    tick();
+    return () => window.clearTimeout(timer);
   }, [renderingEnabled, textures]);
   return <figure className="star-tracker-optics"
     title="Live mounting and orbit geometry: Earth with atmosphere/clouds, Sun glow and lunar phase. Enhanced night-side exposure for visibility. Background sky is illustrative; this is not a detector image. Bodies only appear when inside the camera view. Earth exclusion uses limb clearance, not disk visibility: the configured 22-degree margin can exceed the image half-angle. Receipt views use the matching capture geometry.">

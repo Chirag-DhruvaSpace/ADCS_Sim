@@ -1,17 +1,46 @@
-/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-/* Manual controls use the existing .control-panel, .card and .controls rules. */
-
-
-.control-panel {
-      position: fixed; top: 120px; right: 15px;
-      display: flex; flex-direction: column; gap: 10px; z-index: 1000;
-    }
-/* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-.card {
-      background: #1a1a1a; padding: 12px 15px; border-radius: 10px;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.3); text-align: center;
-      width: 240px; color: white;
-    }
-.display { font-size: 1.4rem; font-weight: bold; margin-bottom: 8px; color: #4CAF50; }
-.controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-
+/* Manual commands share the telemetry panels' glass surface. */
+#mission-page-pointing .manual-command-dock {
+  position:fixed;
+  left:calc(var(--mission-edge) + var(--mission-left) + 12px);
+  right:calc(var(--mission-edge) + var(--mission-right) + 12px);
+  bottom:16px;
+  pointer-events:auto;
+  border:1px solid var(--glass-edge);
+  border-radius:18px;
+  padding:10px 12px;
+  overflow:hidden;
+  container-type:inline-size;
+  transform:translate3d(0,0,0);
+  opacity:1;
+  transition:transform 520ms cubic-bezier(.16,1,.3,1),opacity 420ms ease;
+}
+.mission-dashboard.mission-clear-view #mission-page-pointing .manual-command-dock {
+  transform:translate3d(0,calc(100% + 32px),0);
+  opacity:0;
+  pointer-events:none;
+}
+@media (prefers-reduced-motion:reduce) {
+  #mission-page-pointing .manual-command-dock { transition:none; }
+}
+#mission-page-pointing .manual-command-dock[hidden] { display:none; }
+.manual-command-dock .control-panel {
+  position:static; inset:auto; transform:none; width:100%;
+  display:flex; flex-direction:row; gap:12px; padding:0; margin:0;
+  background:none; border:0; box-shadow:none;
+}
+.manual-command-dock .manual-axis { flex:1; min-width:0; }
+.mission-card.manual-command-dock .control-panel { padding:0!important; }
+.manual-axis label { display:flex; justify-content:space-between; gap:4px; font-size:12px; line-height:18px; }
+.manual-axis label span { color:#d8e9f4; font-variant-numeric:tabular-nums; }
+.manual-axis-controls { display:flex; align-items:center; gap:4px; }
+.manual-axis-controls input { flex:1; width:100%; min-width:0; height:26px; margin:0; accent-color:rgb(var(--glass-accent)); cursor:pointer; }
+.manual-axis-controls button { flex:none; width:24px; height:26px; padding:0; border:1px solid var(--glass-edge); border-radius:6px; background:rgb(var(--glass-accent) / var(--glass-control-opacity)); color:inherit; cursor:pointer; }
+@container (max-width:440px) {
+  .manual-command-dock .control-panel { flex-direction:column; gap:4px; }
+  .manual-command-dock .manual-axis { display:grid; grid-template-columns:76px minmax(0,1fr); align-items:center; gap:8px; }
+}
+/* Narrow layouts stack the telemetry panels, so reserve a bottom control bar. */
+@media (max-width:1150px) {
+  #mission-page-pointing .manual-command-dock { left:18px; right:18px; bottom:12px; }
+  #mission-page-pointing:has(.manual-command-dock:not([hidden])) { padding-bottom:130px; }
+}

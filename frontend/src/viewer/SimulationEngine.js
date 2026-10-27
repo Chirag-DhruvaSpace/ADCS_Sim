@@ -1015,8 +1015,10 @@ export async function startSimulationEngine(configuration) {
         if (!FEED.isNew(data)) return;
         if (data.actuator_telemetry) {
           bundledActuators = true;
-          fetchRWTorques(data.actuator_telemetry);
-          fetchMTRTelemetry(data.actuator_telemetry);
+          if (!document.body.classList.contains('mission-clear-active')) {
+            fetchRWTorques(data.actuator_telemetry);
+            fetchMTRTelemetry(data.actuator_telemetry);
+          }
         }
         if (typeof data.satellite_name === 'string' && data.satellite_name.trim()) satelliteNameLabel.el.textContent = data.satellite_name.trim();
         updateSensorMarkers(data);
