@@ -127,7 +127,7 @@ class FirmwareLink:
         self.received_at = now
     def tick(self, position, velocity, quaternion, rates, unix_time, field_body,
              gps=None, sun=None, sun_cells=(), gyro=None, mag=None,
-             star=None, epoch_unix_s=0.0):
+             star=None, epoch_unix_s=0.0, control_period_s=None):
         """rates in rad/s; sent in deg/s, the unit of AdsMdl.bodyRate.
         gps/sun/gyro/mag/star: this tick's raw sensor samples (None when the
         sensor did not sample this tick), forwarded to the ADS on sensor_link's
@@ -144,9 +144,11 @@ class FirmwareLink:
         self.sensor_link.send_star_tracker(self.state_socket, star, epoch_unix_s)
         self.link.poll_rw_torques()
         self.link.poll_mode()
+        if control_period_s is None:
+            import satellite_parameters as config
+            control_period_s = config.CONTROL.control_loop_period_s
+        wheels, dipole = self.link.apply_actuator_limits(control_period_s)
         with self.link._lock:
-            wheels = np.array(self.link._latest_torque_mNm)*1e-3
-            dipole = np.array(self.link._latest_mtr_dipole_Am2)
             mode = self.link._latest_ads_mode[0]
         if mode != self.last_mode:
             if self.received_at is not None:

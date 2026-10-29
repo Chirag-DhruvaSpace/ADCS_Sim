@@ -260,6 +260,22 @@ Boresight: body -Z to Sun (2 DOF; spin about Sun line is free). Design derivatio
 
 ## 8. Physics Engine
 
+Attitude uses one convention in Python control and firmware SITL: scalar-first
+Hamilton `q = [w,x,y,z]`, `v_eci = R(q) @ v_body`, and
+`q_dot = 0.5 * q * [0,omega_body]`. Sensors, facet forces, disturbances,
+navigation, targets and rendering share `attitude_frames.py`. Existing YAML
+sensor mounting quaternions retain their historical passive encoding through
+`mount_to_body`; they are not spacecraft attitude quaternions. The configured
+star-tracker mounting matches firmware `RelQuat[3]`/`RelDCM[3]`.
+
+Firmware commands are held for each existing physics tick. Wheel torque and
+step impulse are bounded by the configured torque/momentum capacity; telemetry
+returns achieved torque. Pre-driver magnetic dipoles are bounded by the configured
+dipole/current limits using the existing coil model and dipole increment.
+This remains a bounded actuator approximation, without full rotor gyroscopic
+coupling or a reproduction of firmware current encoding. Launch commands,
+UDP packet layouts, sensor cadence and simulation pacing are unchanged.
+
 - Orbit (engine/ + engine_adcs_bridge.py): Orekit NumericalPropagator DOP853 -- central + EGM2008 Holmes-Featherstone, NRLMSISE-00 + CSSI weather, SRP + shadow. EngineOrbitProvider gives state, dense output, ECI/ECEF, Sun/Moon, IGRF, facet-coupled forces.
 - Attitude: solve_ivp Euler + quaternion per 0.1 s tick; orbit segments extrapolate tick attitude; dense output resets at attitude updates.
 - Disturbances: calculate_disturbances.py (GG, aero, SRP, residual dipole, per-channel switches); spacecraft_surface_physics.py unifies facet forces/moments for orbit + attitude + telemetry.

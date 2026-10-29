@@ -216,20 +216,8 @@ RESIDUAL_DIPOLE_BODY = np.asarray(config.DISTURBANCES.residual_dipole_Am2, dtype
 DRAG_CP_ARM_BODY = np.asarray(config.DISTURBANCES.center_of_pressure_arm_body_m, dtype=float)
 
 
-def _dcm_bi_from_q(q):
-    """body->ECI DCM from a scalar-first [q0,q1,q2,q3] quaternion -- the exact
-    same formula rotational_equations_of_motion uses everywhere, duplicated
-    here so this module is self-contained (importing the dynamics from here
-    would create a circular import). Normalises defensively, since the ODE
-    state's quaternion can drift slightly off unit between RK stages."""
-    q = np.asarray(q, dtype=float).reshape(4)
-    q = q / np.linalg.norm(q)
-    q0, q1, q2, q3 = q
-    return np.array([
-        [1 - 2*(q2**2 + q3**2),     2*(q1*q2 + q0*q3),     2*(q1*q3 - q0*q2)],
-        [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
-        [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
-    ])   # v_eci = C_bi @ v_body
+from attitude_frames import body_to_eci as _dcm_bi_from_q
+
 
 
 def gravity_gradient_torque_body(q, r_eci):

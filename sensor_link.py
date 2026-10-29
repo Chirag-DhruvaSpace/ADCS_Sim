@@ -225,17 +225,10 @@ def _hamilton(a, b):
 
 
 def star_tracker_solution_quaternion(measured_quaternion):
-    """The Solution quaternion q_ST for one tracker receipt.
-
-    The tracker model reports m in the frame it was sampled in; with the SITL
-    firmware-frame input, the measured attitude in the firmware's convention
-    (body -> ECI, like fusedquat) is conj(m). The firmware computes
-    absquat = RelQuat[3] (x) q_ST, so q_ST = conj(RelQuat[3]) (x) conj(m)
-    = conj(m (x) RelQuat[3]).
-    """
-    product = _hamilton(np.asarray(measured_quaternion, dtype=float), FIRMWARE_STAR_TRACKER_REL_QUAT)
-    product /= np.linalg.norm(product)
-    return product * np.array([1.0, -1.0, -1.0, -1.0])
+    """Encode a body-to-ECI receipt so firmware RelQuat[3] * q_ST recovers it."""
+    relative_inverse = np.asarray(FIRMWARE_STAR_TRACKER_REL_QUAT) * np.array([1., -1., -1., -1.])
+    product = _hamilton(relative_inverse, np.asarray(measured_quaternion, dtype=float))
+    return product / np.linalg.norm(product)
 
 
 def send_star_tracker(sock, receipt, epoch_unix_s):

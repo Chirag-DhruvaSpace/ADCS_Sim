@@ -83,22 +83,5 @@ def nadir_pointing_quaternion(r_eci, v_eci):
     # Cyclic relabel: nadir (zdes) becomes body X, not body Z.
     rotmat = np.column_stack((zdes, xdes, ydes))
 
-    # ROOT-CAUSE FIX: _rotmat_to_quaternion_robust's Shepperd formulas assume
-    # the OPPOSITE DCM convention (ECI->body) from the standard C_bi(q)
-    # (body->ECI, v_eci = C_bi @ v_body) convention used everywhere else in
-    # this project (quat2eul.py, satellite_flight_visualisation.py's C_bi
-    # construction, and the actual physical propagation via the Omega
-    # kinematics matrix). Feeding rotmat straight in produced a quaternion
-    # whose STANDARD C_bi(q) reconstruction equals rotmat.T, not rotmat --
-    # verified directly (max abs diff ~0.1 between rotmat and the
-    # reconstructed C_bi, not the expected ~1e-16). That meant the returned
-    # quaternion did not physically mean what the docstring says: body +X
-    # did NOT actually end up at nadir once the control law converged q to
-    # this q_target, even though the quaternion-error metric (which just
-    # chases q_target algebraically, blind to any DCM interpretation)
-    # reported small "error". Feeding rotmat.T into the Shepperd conversion
-    # instead makes the returned quaternion's standard C_bi(q) reconstruction
-    # equal rotmat exactly (verified to ~1e-16), so body +X now genuinely
-    # matches zdes (nadir) to 0.0deg once converged -- not just in the
-    # control law's own bookkeeping.
-    return _rotmat_to_quaternion_robust(rotmat.T)
+    # Columns are body axes in ECI; the Hamilton converter takes that matrix.
+    return _rotmat_to_quaternion_robust(rotmat)

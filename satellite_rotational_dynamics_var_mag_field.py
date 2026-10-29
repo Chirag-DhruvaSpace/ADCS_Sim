@@ -125,24 +125,8 @@ get_spacecraft_location = None
 # All orbit and target dates use the same configured UTC epoch.
 EPOCH_UTC = config.ORBIT.epoch_utc
 
-def _dcm_bi_from_q(q):
-    """body->ECI rotation matrix from a scalar-first quaternion [q0,q1,q2,q3].
+from attitude_frames import body_to_eci as _dcm_bi_from_q
 
-    This is the EXACT same formula the rotational equations inline everywhere
-    (detumbling_torque, the MTR sun-pointing branch, the Omega/q_dot step) --
-    hoisted into one named helper so other modules (the visualisation's
-    magnetometer-sensor ECI conversion) can reuse it instead of duplicating
-    or guessing. Normalises defensively: between RK stages the ODE
-    quaternion can drift slightly off unit.
-    """
-    q = np.asarray(q, dtype=float).reshape(4)
-    q = q / np.linalg.norm(q)
-    q0, q1, q2, q3 = q
-    return np.array([
-        [1 - 2*(q2**2 + q3**2),     2*(q1*q2 + q0*q3),     2*(q1*q3 - q0*q2)],
-        [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
-        [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
-    ])   # v_eci = C_bi @ v_body ; v_body = C_bi.T @ v_eci
 
 def detumbling_torque(q, w, threshold_deg_s, B_eci):
 
@@ -157,12 +141,7 @@ def detumbling_torque(q, w, threshold_deg_s, B_eci):
         # Recompute the body field from the propagated quaternion and the
         # SENSED ECI field (the RHS passes B_sensor_eci in as B_eci), so w
         # and B stay in the same body frame inside this law.
-        q0, q1, q2, q3 = q
-        _C = np.array([
-            [1 - 2*(q2**2 + q3**2),     2*(q1*q2 + q0*q3),     2*(q1*q3 - q0*q2)],
-            [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
-            [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
-        ])
+        _C = _dcm_bi_from_q(q)
         B_body = _C.T @ np.asarray(B_eci, dtype=float)
         B_body_dot = -np.cross(w, B_body)
         B_body_dot_sign = np.array([np.sign(B_body_dot[0]), np.sign(B_body_dot[1]), np.sign(B_body_dot[2])])
@@ -171,14 +150,7 @@ def detumbling_torque(q, w, threshold_deg_s, B_eci):
         Torque = np.cross(M, B_body)
         return Torque, M, B_body
 
-    q0, q1, q2, q3 = q
-    w_net_deg = np.linalg.norm(w) * 180 / np.pi
-    
-    C_bi = np.array([
-        [1 - 2*(q2**2 + q3**2),     2*(q1*q2 + q0*q3),     2*(q1*q3 - q0*q2)],
-        [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
-        [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
-    ])
+    C_bi = _dcm_bi_from_q(q)
 
     B_body = C_bi.T @ B_eci 
     #B_body = C_bi @ B_eci
@@ -345,26 +317,8 @@ def _moon_pointing_control_torque(q, omega, t):
         spin_theta_deg = _triangle_wave_angle_deg(
             t - _moon_spin_achieved_time[0], MOON_SPIN_AMPLITUDE_DEG, MOON_SPIN_RATE_DEG_S)
         q_spin = _build_spin_quaternion(spin_theta_deg, MOON_SPIN_AXIS)
-        # Right-multiply: applies the spin in the target's OWN (local) Y/Z
-        # axis, i.e. rolls the pointing frame about its own boresight-
-        # perpendicular axis rather than about a fixed ECI axis.
-        # ROOT-CAUSE FIX: this project's C_bi(q) formula composes Hamilton
-        # products in REVERSED order (verified directly: C_bi(qA (x) qB) =
-        # C_bi(qB) @ C_bi(qA)). Right-multiplying here (quat_mult(q_target_
-        # moon, q_spin), the original form) does NOT make the boresight
-        # sweep by the exact commanded angle relative to the moon-centered
-        # direction -- confirmed numerically: a commanded 12deg spin only
-        # produced a ~10.6deg actual sweep (~88%, not exact, and not simply
-        # proportional in a clean way). Left-multiplying instead (q_spin (x)
-        # q_target_moon) applies the spin FIRST in the moon target's own
-        # local body coordinates, THEN carries the whole thing into ECI via
-        # the moon-pointing orientation -- verified to give an EXACT sweep:
-        # commanded 0/5/12/-12/8deg produced actual 0/5/12/12/8deg off the
-        # moon-centered direction, precisely. This matches the actual
-        # requirement (confirmed): the Moon should be exactly centered in
-        # the frame at the midpoint of the sweep, reaching exactly +/-12deg
-        # (the sensor's half-cone FOV angle) at the extremes.
-        q_target = sun_pointing.quat_mult(q_spin, q_target_moon)
+        # Right multiplication applies the sweep in target body axes.
+        q_target = sun_pointing.quat_mult(q_target_moon, q_spin)
     else:
         q_target = q_target_moon
 
@@ -425,12 +379,8 @@ def _sun_sweep_control_torque(q, omega, t):
         spin_theta_deg = _triangle_wave_angle_deg(
             t - _sun_sweep_achieved_time[0], SUN_SWEEP_AMPLITUDE_DEG, SUN_SWEEP_RATE_DEG_S)
         q_spin = _build_spin_quaternion(spin_theta_deg, SUN_SWEEP_AXIS)
-        # ROOT-CAUSE FIX: same composition-order fix as MOON's spin above --
-        # left-multiply so the boresight sweeps by the EXACT commanded
-        # angle off the sun-centered direction, matching the confirmed
-        # requirement (Sun centered at sweep midpoint, +/-12deg at the
-        # extremes, matching the sensor's half-cone FOV angle).
-        q_target = sun_pointing.quat_mult(q_spin, q_target_sun)
+        # Right multiplication applies the sweep in target body axes.
+        q_target = sun_pointing.quat_mult(q_target_sun, q_spin)
     else:
         q_target = q_target_sun
 
@@ -781,12 +731,10 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
         rw_t = _firmware_wheels.copy()
         M = _firmware_dipole.copy()
         field = np.asarray(B_eci if truth_field_eci is None else truth_field_eci)
-        # The firmware's dipole acts on the field in ITS body frame: for this
-        # quaternion's kinematics (q_dot = 0.5*Omega(w)*q) _dcm_bi_from_q(q) is
-        # the physical ECI->body matrix, the same one the 5002 uplink uses.
+        # q maps body to ECI in every mode; its transpose maps the field to body.
         # The wheel torques act along the flight wheel axes, the geometry the
         # firmware's TorqDistMat distributes for -- not td.A (the yaml axes).
-        tau_actual = _firmware_wheel_axes() @ rw_t + np.cross(M, _dcm_bi_from_q(q) @ field)
+        tau_actual = _firmware_wheel_axes() @ rw_t + np.cross(M, _dcm_bi_from_q(q).T @ field)
         store.mode = 'FIRMWARE_SITL'
     elif not detumbling_complete:
         # Detumble damps the MEASURED rate (omega_ctrl = gyro belief when the
@@ -922,12 +870,7 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # C_bi here is the satellite's BELIEVED frame (q_ctrl = estimator
             # belief when the IMU tap is on, truth otherwise) -- the controller
             # converts the field with the frame IT believes it has.
-            q0c, q1c, q2c, q3c = q_ctrl
-            C_bi = np.array([
-            [1 - 2*(q2c**2 + q3c**2),   2*(q1c*q2c + q0c*q3c), 2*(q1c*q3c - q0c*q2c)],
-            [2*(q1c*q2c - q0c*q3c),     1 - 2*(q1c**2 + q3c**2), 2*(q2c*q3c + q0c*q1c)],
-            [2*(q1c*q3c + q0c*q2c),     2*(q2c*q3c - q0c*q1c), 1 - 2*(q1c**2 + q2c**2)]
-            ])
+            C_bi = _dcm_bi_from_q(q_ctrl)
             B_body = C_bi.T @ B_eci
             tau_actual, M = sun_pointing.control_torque(q_ctrl, omega_ctrl, B_body, t)
             store.mode = "POINTING"
@@ -946,7 +889,7 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     store.mtr_torques[:] = np.cross(M, actual_B_body)
     store.tau_body[:] = tau_actual
     store.time = t
-    store.mtr_currents[:] = np.zeros(3) if firmware_mode else compute_MTR_power(M)[1:4] 
+    store.mtr_currents[:] = compute_MTR_power(M)[1:4]
 
     Omega = np.array([
     [0,   -w_x, -w_y, -w_z],

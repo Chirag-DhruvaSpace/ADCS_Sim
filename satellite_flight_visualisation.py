@@ -312,16 +312,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # the sensor belief therefore stays consistent with the body frame
         # even between 10 Hz IMU ticks.
         B_sensor_eci = B_eci
-        # SITL ONLY: the sensor models rotate ECI vectors into the body with
-        # _dcm_bi_from_q(q).T, the MBD convention. For this quaternion's
-        # kinematics (q_dot = 0.5*Omega(w)*q, i.e. q (x) w, body->ECI) the
-        # physical ECI->body matrix is _dcm_bi_from_q(q) itself, and that is
-        # also how the firmware reads the quaternion it gets on 5002
-        # (attitude_fusion.c: fusedquat is body->ECI). Feeding the models the
-        # conjugate gives _dcm_bi_from_q(conj q).T == _dcm_bi_from_q(q), so the
-        # FSS heads see the Sun where the firmware expects it, without
-        # touching the models. Non-SITL runs keep the MBD convention.
-        q_sensor = X_rot[:4] if firmware is None else X_rot[:4] * np.array([1.0, -1.0, -1.0, -1.0])
+        # Sensors, plant and navigation share the same body-to-ECI attitude.
+        q_sensor = X_rot[:4]
         if config.IMU_SIM.enabled:
             # Acquire each sensor directly; navigation receives only their outputs.
             _gyro_msg, _mag_msg = _acquire_imu(t, q_sensor, X_rot[4:7], B_eci)
@@ -346,9 +338,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # model evaluated at the GPS-BELIEVED position (real flight
             # software computes the same model onboard -- this is not the
             # truth channel, it is a model + the sensor's own reading).
-            # SITL: not run. The firmware estimates its own attitude, and this
-            # estimator's gyro propagation assumes the MBD frame, which the
-            # sensor-frame samples above no longer follow.
+            # SITL uses the external firmware's own attitude estimate.
             B_model_eci = _orbit_provider.magnetic_field_eci(t, r_vec_nav)
             if firmware is None:
                 _imu_nav.estimate(t, B_model_eci, sun_eci)
@@ -390,15 +380,15 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         drag_torque_for_step = lambda stage_t, stage_q: facets_at(stage_t, stage_q).drag_torque_body_nm
 
         if firmware is not None:
-            # Field in the firmware's body frame: _dcm_bi_from_q(q) is the
-            # physical ECI->body matrix (see q_sensor above). This tick's raw
+            # Transform the inertial field with the transpose of body-to-ECI.
+            # This tick's raw
             # GPS fix, FSS replies and gyro/magnetometer words go out with the
             # state, same epoch t.
             wheels, dipole = firmware.tick(r_vec, v_vec, X_rot[:4], X_rot[4:7], utc_time.timestamp(),
-                srd._dcm_bi_from_q(X_rot[:4]) @ B_eci,
+                srd._dcm_bi_from_q(X_rot[:4]).T @ B_eci,
                 gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells,
                 gyro=_gyro_msg, mag=_mag_msg,
-                star=_star_msg, epoch_unix_s=epoch_utc.timestamp())
+                star=_star_msg, epoch_unix_s=epoch_utc.timestamp(), control_period_s=dt)
             srd.set_firmware_tick(wheels, dipole)
         custom_tick_command = cs.get_pointing_command()
         srd.set_custom_tick_target(custom_tick_command['desired_quaternion'])
@@ -429,7 +419,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             for t_sample in imu_substep_times(t, dt):
                 y_sample = sol_rot.sol(t_sample)
                 q_sample = y_sample[:4] / np.linalg.norm(y_sample[:4])
-                firmware.send_imu(*_acquire_imu(t_sample, q_sample * np.array([1.0, -1.0, -1.0, -1.0]),
+                firmware.send_imu(*_acquire_imu(t_sample, q_sample,
                                                 y_sample[4:7], B_eci))
 
 
@@ -561,18 +551,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # once per orbit even though the underlying physics was stable. Instead we
         # compose body->ECI (already have as C_bi, same formula used in the dynamics)
         # with ECI->ECEF directly, and send the resulting quaternion as-is.
-        C_bi = np.array([
-            [1 - 2*(q2**2 + q3**2),     2*(q1*q2 + q0*q3),     2*(q1*q3 - q0*q2)],
-            [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
-            [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
-        ])   # body -> ECI (v_eci = C_bi @ v_body), matches the convention used throughout
-        # SITL ONLY: for this quaternion's kinematics the matrix above is
-        # really ECI -> body (see q_sensor in the IMU block), and the firmware
-        # reads the quaternion that way. Use its transpose so the rendered
-        # attitude and the pointing errors match what the firmware and the FSS
-        # heads see. Non-SITL controllers were built around the matrix above.
-        if firmware is not None:
-            C_bi = C_bi.T   # true body -> ECI (v_eci = C_bi @ v_body)
+        C_bi = srd._dcm_bi_from_q(X_rot[:4])
         C_eci2ecef = eci_to_ecef_dcm(utc_time)
         # ---- RENDER ORIENTATION = the satellite's BELIEVED attitude ----
         # When the IMU is enabled (and render_estimated_attitude is True) the
@@ -1128,7 +1107,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         enrich_dashboard(
             data_to_send, t=t, position_eci=r_vec, velocity_eci=v_vec,
             sun_eci_m=_orbit_provider.sun_position_eci(), eci_to_ecef=C_eci2ecef,
-            body_to_eci=C_bi,   # == _dcm_bi_from_q(X_rot[:4]) outside SITL
+            body_to_eci=C_bi,   # same physical rotation in every mode
             mtr_torque=store.mtr_torques, mtr_dipole=store.mtr_dipole,
             mtr_current=store.mtr_currents, gps_enabled=_gps_sim is not None,
             spacecraft_name=config.SPACECRAFT.name,

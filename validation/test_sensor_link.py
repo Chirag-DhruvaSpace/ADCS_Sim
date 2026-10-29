@@ -11,7 +11,7 @@ The firmware side is reproduced here from its sources:
                 mag uT = counts * 0.15, magApplyCal, body = RelDCM[4]
   sagittaTask   sitl_task_defs.c (flight task_defs.c): accepted when isTrustworthy;
                 absquat = RelQuat[3] (x) q_ST (sensor2bodyquat, star_tracker_absquat.c)
-  fusedquat     body -> ECI, so body vectors are _dcm_bi_from_q(q) @ v_eci
+  fusedquat     body -> ECI, so body vectors are _dcm_bi_from_q(q).T @ v_eci
 """
 import math
 import socket
@@ -91,7 +91,7 @@ def test_gps_packet_is_obc_decoded_ads_gps_data(receiver):
 @pytest.mark.parametrize('variant', ['legacy', 'deployed'])
 def test_fss_packets_give_firmware_the_physical_sun(variant, receiver):
     """Sun model fed the SITL sensor-frame quaternion -> packets -> firmware
-    decode + RelDCM must give _dcm_bi_from_q(q) @ sun_eci for every used head."""
+    decode + RelDCM must give _dcm_bi_from_q(q).T @ sun_eci for every used head."""
     # Zero latency too: each tick below jumps to a random attitude, so any
     # lookback would blend in the previous trial's attitude.
     cfg = replace(sun_arrays()[variant], enable_alignment_error=False, enable_bias_drift=False,
@@ -108,10 +108,10 @@ def test_fss_packets_give_firmware_the_physical_sun(variant, receiver):
         for i in range(40):
             q = rng.normal(size=4)
             q /= np.linalg.norm(q)
-            q_sensor = q * np.array([1.0, -1.0, -1.0, -1.0])     # as satellite_flight_visualisation in SITL
+            q_sensor = q.copy()     # same attitude input in all modes
             raw = array.get_raw_data(0.1 * i, q_sensor, sun_eci, 1.0, None)
             heads = sensor_link.send_fss(sender, raw, cfg.cells)
-            expected = _dcm_bi_from_q(q) @ sun_eci
+            expected = _dcm_bi_from_q(q).T @ sun_eci
             for _ in range(6):
                 packet = receiver.recvfrom(1024)[0]
                 assert len(packet) == 27 and packet[0] == sensor_link.SENSOR_ID_FSS
@@ -151,14 +151,14 @@ def firmware_imu_decode(gyro_counts, mag_counts):
 
 def test_imu_mountings_reproduce_firmware_rel_dcm():
     imu = config.IMU_SIM
-    np.testing.assert_allclose(_dcm_bi_from_q(imu.gyro_mount_quaternion), FIRMWARE_C_GYRO, atol=1e-12)
-    np.testing.assert_allclose(_dcm_bi_from_q(imu.mag_mount_quaternion), FIRMWARE_C_MAG, atol=1e-12)
+    np.testing.assert_allclose(_dcm_bi_from_q(imu.gyro_mount_quaternion).T, FIRMWARE_C_GYRO, atol=1e-12)
+    np.testing.assert_allclose(_dcm_bi_from_q(imu.mag_mount_quaternion).T, FIRMWARE_C_MAG, atol=1e-12)
 
 
 def test_imu_packets_give_firmware_the_physical_rate_and_field(receiver):
     """Gyroscope/magnetometer models (the magnetometer with the board's error,
     as SITL builds it) fed the SITL sensor-frame quaternion -> packets ->
-    firmware decode must give the true body rate and _dcm_bi_from_q(q) @ B_eci."""
+    firmware decode must give the true body rate and _dcm_bi_from_q(q).T @ B_eci."""
     from simulate_gyroscope import SimulatedGyroscope
     from simulate_magnetometer import SimulatedMagnetometer
     from firmware_sitl_adapter import with_board_magnetometer
@@ -173,7 +173,7 @@ def test_imu_packets_give_firmware_the_physical_rate_and_field(receiver):
             q /= np.linalg.norm(q)
             omega = np.radians(rng.uniform(-10.0, 10.0, size=3))        # rad/s, body
             b_eci = rng.normal(size=3) * 25e-6                          # T
-            q_sensor = q * np.array([1.0, -1.0, -1.0, -1.0])            # as satellite_flight_visualisation in SITL
+            q_sensor = q.copy()            # same attitude input in all modes
             # fresh sensors each trial: latency never blends two trials
             gyro = SimulatedGyroscope(gyro_cfg, record_history=False).get_raw_data(0.0, q_sensor, omega)
             mag = SimulatedMagnetometer(mag_cfg, record_history=False).get_raw_data(0.0, q_sensor, b_eci)
@@ -187,7 +187,7 @@ def test_imu_packets_give_firmware_the_physical_rate_and_field(receiver):
             rate, field = firmware_imu_decode(packets[sensor_link.SENSOR_ID_GYRO], packets[sensor_link.SENSOR_ID_MAG])
             np.testing.assert_allclose(rate, np.degrees(omega), atol=0.007,          # one high-word count
                                        err_msg=f'trial {trial} body rate')
-            np.testing.assert_allclose(field, (_dcm_bi_from_q(q) @ b_eci) * 1e6, atol=0.25,   # ~1.5 counts
+            np.testing.assert_allclose(field, (_dcm_bi_from_q(q).T @ b_eci) * 1e6, atol=0.25,   # ~1.5 counts
                                        err_msg=f'trial {trial} body field')
     finally:
         sender.close()
@@ -224,7 +224,7 @@ def quaternion_angle_deg(a, b):
 
 def test_star_tracker_mount_reproduces_firmware_rel_quat():
     mount = config.IMU_SIM.star_tracker.mount_quaternion
-    np.testing.assert_allclose(_dcm_bi_from_q(mount), FIRMWARE_C_STAR_TRACKER, atol=2e-6)
+    np.testing.assert_allclose(_dcm_bi_from_q(mount).T, FIRMWARE_C_STAR_TRACKER, atol=2e-6)
     np.testing.assert_allclose(np.asarray(mount) * np.array([1, -1, -1, -1]),
                                sensor_link.FIRMWARE_STAR_TRACKER_REL_QUAT, atol=1e-12)
 
@@ -253,7 +253,7 @@ def test_star_tracker_solution_gives_firmware_the_physical_attitude(profile, rec
             q = rng.normal(size=4)
             q /= np.linalg.norm(q)
             tracker = SimulatedStarTracker(config=cfg)
-            q_sensor = q * np.array([1.0, -1.0, -1.0, -1.0])     # as satellite_flight_visualisation in SITL
+            q_sensor = q.copy()     # same attitude input in all modes
             receipt = tracker.get_raw_data(0.0, q_sensor, np.array([7e6, 0, 0]), np.array([0, 1.0, 0]), np.zeros(3))
             assert receipt is not None and receipt.valid
             sensor_link.send_star_tracker(sender, receipt, 1.79e9)
@@ -262,7 +262,7 @@ def test_star_tracker_solution_gives_firmware_the_physical_attitude(profile, rec
             np.testing.assert_allclose(solution['tq'], solution['q'])
             absquat = firmware_absquat(solution['q'])
             # the tracker's measured attitude in the firmware's convention
-            measured = np.asarray(receipt.quaternion_eci) * np.array([1.0, -1.0, -1.0, -1.0])
+            measured = np.asarray(receipt.quaternion_eci)
             worst_chain = max(worst_chain, quaternion_angle_deg(absquat, measured))
             worst_truth = max(worst_truth, quaternion_angle_deg(absquat, q))
     finally:

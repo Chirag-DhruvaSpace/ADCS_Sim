@@ -14,14 +14,8 @@ from satellite_parameters import DISTURBANCES
 PRESSURE_AT_AU_PA = DISTURBANCES.solar_pressure_at_1au_pa
 
 
-def body_to_eci(q):
-    q = np.asarray(q, dtype=float)
-    q = q / np.linalg.norm(q)
-    w, x, y, z = q
-    # Matches the simulator's passive scalar-first quaternion convention.
-    return np.array([[1-2*(y*y+z*z), 2*(x*y+w*z), 2*(x*z-w*y)],
-                     [2*(x*y-w*z), 1-2*(x*x+z*z), 2*(y*z+w*x)],
-                     [2*(x*z+w*y), 2*(y*z-w*x), 1-2*(x*x+y*y)]])
+from attitude_frames import body_to_eci
+
 
 
 @dataclass

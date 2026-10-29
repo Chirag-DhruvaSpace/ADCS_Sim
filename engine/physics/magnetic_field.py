@@ -48,7 +48,7 @@ class OrekitIGRF:
         elements = model.calculateField(
             geodetic.getLatitude(),
             geodetic.getLongitude(),
-            geodetic.getAltitude() / 1000.0,
+            geodetic.getAltitude()  # Orekit calculateField height is in metres,
         )
         ned = elements.getFieldVector()
         lat = geodetic.getLatitude()

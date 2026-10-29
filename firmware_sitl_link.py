@@ -8,16 +8,10 @@ satellite_rotational_dynamics_var_mag_field.py's new "FIRMWARE_SITL" mode.
 Mirrors telemetry.py's role/style exactly, but for the reverse direction --
 same UDP, non-blocking, module-level-state pattern.
 
-IMPORTANT SIMPLIFICATION, stated explicitly: this simulator's rotational
-dynamics has NO wheel-speed/momentum state at all -- reaction_wheel_torque_
-distribution()'s output (rw_t) is used only for display (confirmed
-directly in satellite_rotational_dynamics_var_mag_field.py's own comment:
-"we apply tau_body to the body and display the individual wheel torques").
-So the wheel momentum tracked HERE is a separate, simple bookkeeping
-estimate (dh/dt = -T_wheel, matching the firmware's own confirmed sign
-convention), NOT fed back into the main body dynamics -- it exists only to
-give the firmware's own wheelsNeedDesat()/gyroscopic-decoupling terms
-something physically reasonable to read back as "wheel speed" telemetry.
+The plant latches bounded wheel and magnetic commands once per physics step.
+Wheel momentum uses the achieved torque (dh/dt = -T_body_axis); returned
+wheel telemetry reports that same torque. Rotor momentum is still separate
+from the bus Euler equation: full gyroscopic rotor coupling is not modeled.
 """
 
 import math
@@ -58,6 +52,7 @@ FLIGHT_WHEEL_AXES_BODY = np.array([[_C35, 0.0,   -_C35, 0.0],
 _lock = threading.Lock()
 _latest_torque_mNm = [0.0, 0.0, 0.0, 0.0]
 _wheel_momentum = [0.0, 0.0, 0.0, 0.0]   # kg*m^2*rad/s, separate bookkeeping only -- see module docstring
+_applied_torque_Nm = np.zeros(4)
 
 _cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 _cmd_sock.bind(("0.0.0.0", CMD_LISTEN_PORT))
@@ -212,6 +207,38 @@ def get_latest_ads_mode_name():
     return _ADS_MODE_NAMES.get(raw, f"Unknown({raw})")
 
 
+def apply_actuator_limits(dt):
+    """Latch achieved commands for one held physics step, in SI units.
+
+    Positive wheel command produces positive body torque along its axis and
+    negative rotor acceleration. Limit its impulse using the same dt used
+    by the plant, so a nearly full wheel cannot overshoot its capacity.
+    This bounds the pre-driver MTR command using the configured plant and
+    existing coil model; it does not emulate the firmware current encoder.
+    """
+    import satellite_parameters as config
+    import MTR_parameters_P30xl as coil
+    if not math.isfinite(dt) or dt <= 0:
+        raise ValueError('Actuator hold period must be finite and positive')
+    with _lock:
+        h = np.asarray(_wheel_momentum)
+        limit = config.WHEEL_MAX_MOMENTUM_NMS
+        lower = np.maximum(-config.WHEEL_MAX_TORQUE_NM, (h-limit)/dt)
+        upper = np.minimum(config.WHEEL_MAX_TORQUE_NM, (h+limit)/dt)
+        _applied_torque_Nm[:] = np.clip(np.asarray(_latest_torque_mNm)*1e-3, lower, upper)
+        # Same dipole/current relation as compute_MTR_power(), in A*m^2/A.
+        dipole_per_amp = (1+coil.gain_ratio)*np.pi*coil.r**2*coil.N*1e-6
+        dipole_limit = np.minimum(config.MTR_MAX_DIPOLE_AM2,
+                                 np.asarray(config.SPACECRAFT.mtr_max_current_A)*dipole_per_amp)
+        dipole = np.clip(_latest_mtr_dipole_Am2, -dipole_limit, dipole_limit)
+        step = config.MTR_DIPOLE_STEP_AM2
+        if step > 0:
+            dipole_limit = np.floor(dipole_limit/step)*step
+            dipole = np.round(dipole/step)*step
+        dipole = np.clip(dipole, -dipole_limit, dipole_limit)
+        return _applied_torque_Nm.copy(), dipole
+
+
 def step_wheel_momentum(dt):
     """Advances the separate wheel-momentum bookkeeping estimate --
     dh/dt = -T_wheel, matching the firmware's own confirmed sign
@@ -220,7 +247,7 @@ def step_wheel_momentum(dt):
     main dynamics step."""
     with _lock:
         for i in range(4):
-            torque_Nm = _latest_torque_mNm[i] * 1e-3
+            torque_Nm = _applied_torque_Nm[i]
             _wheel_momentum[i] += -torque_Nm * dt
 
 
@@ -229,7 +256,7 @@ def send_rw_telemetry():
     AcsHk.RWTlm[] -- same call cadence as telemetry.py's send_state()."""
     with _lock:
         momentum_snapshot = list(_wheel_momentum)
-        torque_snapshot = list(_latest_torque_mNm)
+        torque_snapshot = list(_applied_torque_Nm * 1e3)
 
     for rwNo in range(4):
         omega_rad_s = momentum_snapshot[rwNo] / RW_MOI

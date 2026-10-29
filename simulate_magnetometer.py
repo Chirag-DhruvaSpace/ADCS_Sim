@@ -82,21 +82,8 @@ class GaussMarkov:
     def reset(self):
         self._value = 0.0
 
-def _dcm_bi_from_q(quaternion):
-    quaternion = np.asarray(quaternion, dtype=float).reshape(4)
-    quaternion = quaternion / np.linalg.norm(quaternion)
-    scalar, vector_x, vector_y, vector_z = quaternion
-    return np.array([
-        [1 - 2 * (vector_y**2 + vector_z**2),
-         2 * (vector_x * vector_y + scalar * vector_z),
-         2 * (vector_x * vector_z - scalar * vector_y)],
-        [2 * (vector_x * vector_y - scalar * vector_z),
-         1 - 2 * (vector_x**2 + vector_z**2),
-         2 * (vector_y * vector_z + scalar * vector_x)],
-        [2 * (vector_x * vector_z + scalar * vector_y),
-         2 * (vector_y * vector_z - scalar * vector_x),
-         1 - 2 * (vector_x**2 + vector_y**2)],
-    ])
+from attitude_frames import body_to_eci as _dcm_bi_from_q, mount_to_body
+
 
 
 @dataclass(frozen=True)
@@ -151,7 +138,7 @@ class SimulatedMagnetometer:
         seed = config.seed if config.mag_seed is None else config.mag_seed
         self.rng = (np.random.default_rng(seed)
                     if random_generator is None else random_generator)
-        self._mag_mount = _dcm_bi_from_q(config.mag_mount_quaternion)
+        self._mag_mount = mount_to_body(config.mag_mount_quaternion)
         self._M_mag = self._build_calibration_matrix(
             config.mag_scale_error, config.mag_misalignment_rad)
         if config.mag_hard_iron_bias_sigma_t > 0.0:

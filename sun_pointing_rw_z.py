@@ -68,16 +68,9 @@ def sun_pointing_rw_z_quaternion(timestamp_utc):
     # Body axes expressed in ECI (columns = body->ECI)
     C_IB = np.column_stack([x_body_eci, y_body_eci, z_body_eci])
 
-    # ECI -> Body (matches sun_pointing_rw.py's exact pattern -- scipy's
-    # Rotation.from_matrix needs this transpose to produce a quaternion
-    # whose STANDARD C_bi(q) reconstruction, used throughout this project,
-    # equals C_IB rather than its transpose. Missing this was caught by
-    # direct numerical verification below: without it, body -Z landed
-    # ~81deg away from the true Sun direction instead of ~0deg.)
-    C_BI = C_IB.T
-
+    # Convert the body-to-ECI matrix directly to a Hamilton quaternion.
     from scipy.spatial.transform import Rotation
-    q_xyzw = Rotation.from_matrix(C_BI).as_quat()
+    q_xyzw = Rotation.from_matrix(C_IB).as_quat()
 
     # Convert to project convention [q0,q1,q2,q3]
     q0 = q_xyzw[3]

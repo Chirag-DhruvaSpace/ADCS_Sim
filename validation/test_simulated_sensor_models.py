@@ -356,13 +356,8 @@ def _check_misalignment() -> None:
 def _check_mag_frame() -> None:
     from satellite_parameters import ImuSimParameters
     imu = (SimulatedGyroscope(ImuSimParameters.perfect()), SimulatedMagnetometer(ImuSimParameters.perfect()), SimulatedSunSensorArray((ImuSimParameters.perfect()).sun_array))
-    # Known rotation: q = [cos45, 0, 0, sin45] is +90 deg about Z. Feeding
-    # B_eci = [B,0,0] through the repo's own C_bi formula gives
-    # B_body = [0,+B,0] (checked numerically against _dcm_bi_from_q -- the
-    # check below asserts the sensor reproduces that exact vector). The
-    # important property: the measured body field equals
-    # _dcm_bi_from_q(q).T @ B_eci to machine precision. A body<->ECI swap
-    # (using C_bi instead of C_bi.T) would give a DIFFERENT vector and fail.
+    # Positive body rotation about Z takes body X toward inertial Y.
+    # A fixed inertial +X field is therefore seen along body -Y.
     B = 2.0e-5
     q = np.array([np.cos(np.pi / 4.0), 0.0, 0.0, np.sin(np.pi / 4.0)])
     (imu[0].update(0.1, q, np.zeros(3)), imu[1].update(0.1, q, np.array([B, 0.0, 0.0])), None)
@@ -371,11 +366,11 @@ def _check_mag_frame() -> None:
         _check("FRAME", "16 90deg body field", False, "no mag record")
         return
     meas = mrecs[0]["meas"]
-    expect = _dcm_bi_from_q(q).T @ np.array([B, 0.0, 0.0])   # == [0, +B, 0]
-    ok = float(np.linalg.norm(meas - expect)) < 1e-12 and abs(meas[1] - B) < 1e-12
+    expect = _dcm_bi_from_q(q).T @ np.array([B, 0.0, 0.0])   # == [0, -B, 0]
+    ok = float(np.linalg.norm(meas - expect)) < 1e-12 and abs(meas[1] + B) < 1e-12
     _check("FRAME", "16 90deg body field", ok,
            f"B_eci=[{B:.0e},0,0] @ +90deg-about-Z -> body = "
-           f"[{meas[0]:+.2e}, {meas[1]:+.2e}, {meas[2]:+.2e}] T (expect [0, +{B:.0e}, 0])")
+           f"[{meas[0]:+.2e}, {meas[1]:+.2e}, {meas[2]:+.2e}] T (expect [0, -{B:.0e}, 0])")
     # identity attitude: body field == ECI field (use zero latency so the
     # buffered truth is exactly this sample, no interpolation lag)
     imu2 = (SimulatedGyroscope(replace(ImuSimParameters.perfect(), gyro_latency_mean_s=0.0,

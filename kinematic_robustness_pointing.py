@@ -14,20 +14,8 @@ old_Z, new_Z=old_X -- a proper rotation, det=+1, verified numerically), the
 same style of axis relabeling nadir_pointing.py itself already uses to move
 the C firmware's literal zdes->bodyZ mapping onto body +X for this project.
 
-ROOT-CAUSE NOTES (both caught and fixed before shipping, verified numerically,
-not by hand -- see the two established bugs elsewhere in this project this
-mirrors):
-1. quat2eul.rotmat_to_quaternion(R) needs R.T fed in, not R directly -- this
-   project's C_bi(q) formula reconstructs to R.T otherwise (same class of
-   issue as nadir_pointing.py's Shepperd-based conversion and sun_pointing_
-   rw_z.py's scipy-based one).
-2. Composing the spin quaternion with the base target needs LEFT-
-   multiplication (quaternion_multiply(q_spin, q_base)), not right --
-   this project's C_bi(qA (x) qB) = C_bi(qB) @ C_bi(qA) (reversed Hamilton-
-   product composition, verified directly), so right-multiplying applies the
-   spin in the wrong (outer/ECI-referenced) sense and moves the boresight,
-   exactly the bug found and fixed in MOON/SUN_SWEEP's oscillation and
-   nominal_in_orbit_pointing.py's yaw bias.
+Targets use Hamilton body-to-ECI quaternions. Body axes are matrix columns;
+right multiplication applies a spin in the target's local body frame.
 """
 import numpy as np
 import nadir_pointing as nad
@@ -68,25 +56,18 @@ def kinematic_robustness_pointing_quaternion(r_eci, v_eci, t, spin_rate_deg_s=DE
         q_desired = [q0, q1, q2, q3]
     """
     q_nadir = nad.nadir_pointing_quaternion(r_eci, v_eci)   # body +X -> nadir
-    q0n, q1n, q2n, q3n = q_nadir
-    C_old = np.array([
-        [1 - 2*(q2n**2 + q3n**2),     2*(q1n*q2n + q0n*q3n),     2*(q1n*q3n - q0n*q2n)],
-        [2*(q1n*q2n - q0n*q3n),       1 - 2*(q1n**2 + q3n**2),   2*(q2n*q3n + q0n*q1n)],
-        [2*(q1n*q3n + q0n*q2n),       2*(q2n*q3n - q0n*q1n),     1 - 2*(q1n**2 + q2n**2)]
-    ])
+    from attitude_frames import body_to_eci
+    C_old = body_to_eci(q_nadir)
     rotmat_z = C_old @ _R_RELABEL   # cyclic relabel: nadir now on body +Z
 
-    q_z_base = q2e.rotmat_to_quaternion(rotmat_z.T)   # transpose fix, see docstring
+    q_z_base = nad._rotmat_to_quaternion_robust(rotmat_z)
     q_z_base = q_z_base / np.linalg.norm(q_z_base)
 
     theta_deg = (spin_rate_deg_s * float(t)) % 360.0
     q_spin = _spin_quaternion_about_z(theta_deg)
 
-    # LEFT-multiply: spin first in the base target's own local body
-    # coordinates, then carried into ECI by the base orientation -- keeps
-    # the boresight (+Z) exactly fixed while spinning about it. See
-    # docstring note 2.
-    q_target = q2e.quaternion_multiply(q_spin, q_z_base)
+    # Right multiplication spins about the target body +Z boresight.
+    q_target = q2e.quaternion_multiply(q_z_base, q_spin)
     q_target = q_target / np.linalg.norm(q_target)
     if q_target[0] < 0:
         q_target = -q_target

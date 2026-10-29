@@ -64,11 +64,10 @@ def sun_pointing_quaternion(timestamp_utc):
         z_body_eci
     ])
 
-    # ECI -> Body
-    C_BI = C_IB.T
+    # Hamilton attitude: body axes are columns of C_IB.
 
     from scipy.spatial.transform import Rotation
-    q_xyzw = Rotation.from_matrix(C_BI).as_quat()
+    q_xyzw = Rotation.from_matrix(C_IB).as_quat()
 
     # Convert to project convention [q0,q1,q2,q3]
     q0 = q_xyzw[3]

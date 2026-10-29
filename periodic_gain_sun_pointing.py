@@ -99,7 +99,7 @@ def slerp(q0, q1, s):
 # EPOCH_UTC must match the epoch periodic_lqr_design.py used to build K_seq (it imports
 # EPOCH_UTC from there internally via build_target_frame(), so this stays in sync automatically).
 _C_target, _sun0 = build_target_frame()
-_R = _C_target.T
+_R = _C_target
 _tr = np.trace(_R)
 _qw = np.sqrt(max(0, 1 + _tr)) / 2
 _qx = (_R[2, 1] - _R[1, 2]) / (4 * _qw)

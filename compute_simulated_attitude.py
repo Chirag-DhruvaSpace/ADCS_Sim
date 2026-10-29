@@ -9,21 +9,8 @@ import numpy as np
 from dataclasses import dataclass
 
 
-def _dcm_bi_from_q(quaternion):
-    quaternion = np.asarray(quaternion, dtype=float).reshape(4)
-    quaternion = quaternion / np.linalg.norm(quaternion)
-    scalar, vector_x, vector_y, vector_z = quaternion
-    return np.array([
-        [1 - 2 * (vector_y**2 + vector_z**2),
-         2 * (vector_x * vector_y + scalar * vector_z),
-         2 * (vector_x * vector_z - scalar * vector_y)],
-        [2 * (vector_x * vector_y - scalar * vector_z),
-         1 - 2 * (vector_x**2 + vector_z**2),
-         2 * (vector_y * vector_z + scalar * vector_x)],
-        [2 * (vector_x * vector_z + scalar * vector_y),
-         2 * (vector_y * vector_z - scalar * vector_x),
-         1 - 2 * (vector_x**2 + vector_y**2)],
-    ])
+from attitude_frames import body_to_eci as _dcm_bi_from_q, mount_to_body
+
 
 @dataclass
 class DecodedVector:
@@ -100,7 +87,7 @@ def decode_vector_sample(sample, sensor_kind, configuration):
         scale = 150e-9
         mount = configuration.mag_mount_quaternion
     sensor_vector = counts * scale
-    body_vector = _dcm_bi_from_q(mount) @ sensor_vector
+    body_vector = mount_to_body(mount) @ sensor_vector
     decoded = DecodedVector(sample.t_meas_s, sample.t_arrival_s, sample.valid, sample.saturated)
     if sensor_kind == 'gyro':
         decoded.omega_body_rad_s = body_vector
@@ -444,7 +431,7 @@ class ImuNav:
             'star_tracker_used': self.estimator.star_tracker_used_last,
             'star_tracker_quaternion_eci': (measurement.quaternion_eci.tolist()
                                             if valid else None),
-            'star_tracker_boresight_eci': ((_dcm_bi_from_q(quaternion) @ _dcm_bi_from_q(measurement.mount_quaternion)[:, 2]).tolist()
+            'star_tracker_boresight_eci': ((_dcm_bi_from_q(quaternion) @ mount_to_body(measurement.mount_quaternion)[:, 2]).tolist()
                                           if valid else None),
             'star_tracker_latency_ms': ((measurement.t_arrival_s - measurement.t_meas_s) * 1000
                                         if measurement is not None else None),
@@ -556,9 +543,9 @@ def _usable_star_tracker_quaternion(measurement, time_s, max_age_s):
 
 
 class AttitudeEstimator:
-    """Six-state multiplicative EKF: body attitude error and gyro bias.
+    """Six-state multiplicative EKF: inertial attitude error and body gyro bias.
 
-    Quaternion convention is the simulator's passive scalar-first convention.
+    Quaternion is scalar-first Hamilton, mapping body to ECI.
     Covariance has radian/rad-per-second units. Vector measurement variances
     are angular variances. Initialization is an explicit prior, not truth.
     Delayed body vectors are transported to arrival using measured rate;
@@ -599,7 +586,7 @@ class AttitudeEstimator:
         measured = _dcm_bi_from_q(self._q).T @ _dcm_bi_from_q(past_q) @ (measured / measurement_length)
         predicted = _dcm_bi_from_q(self._q).T @ (reference / reference_length)
         observation_matrix = np.zeros((3, 6))
-        observation_matrix[:, :3] = -_skew(predicted)
+        observation_matrix[:, :3] = _dcm_bi_from_q(self._q).T @ _skew(reference / reference_length)
         measurement_covariance = np.eye(3) * sigma**2
         innovation = measured - predicted
         innovation_covariance = observation_matrix @ self.P @ observation_matrix.T + measurement_covariance
@@ -614,9 +601,10 @@ class AttitudeEstimator:
         self.bias = np.clip(self.bias + delta[3:], -self.max_bias_rad_s, self.max_bias_rad_s)
         residual_projection = np.eye(6) - kalman_gain @ observation_matrix
         self.P = residual_projection @ self.P @ residual_projection.T + kalman_gain @ measurement_covariance @ kalman_gain.T
-        # Reset the tangent error after injecting the finite correction.
+        # Left error: exp(error_old) exp(-injected) has reset Jacobian
+        # J_left(injected) = I + skew(injected)/2 + O(injected**2).
         reset_jacobian = np.eye(6)
-        reset_jacobian[:3, :3] -= 0.5 * _skew(delta[:3])
+        reset_jacobian[:3, :3] += 0.5 * _skew(delta[:3])
         self.P = reset_jacobian @ self.P @ reset_jacobian.T
         self.P = (self.P + self.P.T) / 2
         self.corrections += 1
@@ -695,7 +683,8 @@ class AttitudeEstimator:
             angle_rad = 2 * np.arctan2(vector_length, error_quaternion[0])
             innovation = error_quaternion[1:] * angle_rad / vector_length
         # Right propagation leaves the left error tangent unchanged.
-        measurement_covariance = np.array(measurement.covariance_body_rad2, copy=True)
+        rotation = _dcm_bi_from_q(self._q)
+        measurement_covariance = rotation @ measurement.covariance_body_rad2 @ rotation.T
         measurement_covariance += np.eye(3) * 1e-20
         observation_matrix = np.zeros((3, 6))
         observation_matrix[:, :3] = np.eye(3)
@@ -711,7 +700,7 @@ class AttitudeEstimator:
         residual_projection = np.eye(6) - kalman_gain @ observation_matrix
         self.P = residual_projection @ self.P @ residual_projection.T + kalman_gain @ measurement_covariance @ kalman_gain.T
         reset_jacobian = np.eye(6)
-        reset_jacobian[:3, :3] -= .5 * _skew(correction[:3])
+        reset_jacobian[:3, :3] += .5 * _skew(correction[:3])
         self.P = reset_jacobian @ self.P @ reset_jacobian.T
         self.P = (self.P + self.P.T) / 2
         self.corrections += 1
@@ -726,7 +715,7 @@ class AttitudeEstimator:
         # changes the coordinate convention and gives the wrong attitude.
         self._q = _quat_multiply(self._q, full_step_rotation)
         self._q = self._q / np.linalg.norm(self._q)
-        rate_to_attitude = _dcm_bi_from_q(midpoint).T
+        rate_to_attitude = _dcm_bi_from_q(midpoint)
         state_transition = np.eye(6)
         state_transition[:3, 3:] = -rate_to_attitude * elapsed_time_s
         bias_noise_mapping = np.vstack((-.5 * elapsed_time_s * rate_to_attitude, np.eye(3)))

@@ -54,8 +54,8 @@ BOUNDARIES:
 GOLDEN RULES:
     1. Never fetch or advance truth: the loop passes all truth per tick.
     2. One owned numpy Generator, seeded from YAML; no shared sensor streams.
-    3. House frame helpers only. C(q_error * q_truth) = C(q_truth) C(q_error).
-       Mounted body errors multiply truth on the left, as the MEKF expects.
+    3. Hamilton body-to-ECI attitude throughout. Mounted body errors multiply
+       truth on the right; mounting values retain their YAML encoding.
     4. Receipts are what flight software consumes. Injected error diagnostics
        are for telemetry/validation only and never used as filter innovations.
 
@@ -95,6 +95,7 @@ import sys
 import numpy as np
 
 from compute_simulated_attitude import _dcm_bi_from_q, _quat_multiply, _rotation_quaternion
+from attitude_frames import mount_to_body
 from satellite_parameters import StarTrackerParameters
 
 
@@ -138,7 +139,7 @@ class SimulatedStarTracker:
         self.cfg = StarTrackerParameters.perfect() if config is None else config
         self.enabled = bool(enabled and self.cfg.enabled and self.cfg.profile != 'off')
         self.rng = np.random.default_rng(self.cfg.seed)
-        self.mount_rotation = _dcm_bi_from_q(self.cfg.mount_quaternion)
+        self.mount_rotation = mount_to_body(self.cfg.mount_quaternion)
         self._reading = None
         self._last_tick_s = None
         self._last_capture_s = None
@@ -267,9 +268,8 @@ class SimulatedStarTracker:
             thermal_arcsec = np.asarray(self.cfg.thermal_slope_arcsec_per_deg_c) * temperature_difference_c
         error_arcsec = temporal_arcsec + self._bias_arcsec + thermal_arcsec
         error_body_rad = self.mount_rotation @ (error_arcsec * ARCSEC_TO_RAD)
-        # House composition puts this left error on the right of C_truth,
-        # so the error axes are body axes, matching mounting and the MEKF.
-        measured_quaternion = _quat_multiply(_rotation_quaternion(error_body_rad), quaternion)
+        # Tracker errors are in body axes: apply them on the right of q_truth.
+        measured_quaternion = _quat_multiply(quaternion, _rotation_quaternion(error_body_rad))
         measured_quaternion /= np.linalg.norm(measured_quaternion)
         covariance_tracker = np.diag((nea_sigma**2 + lfse_sigma**2) * ARCSEC_TO_RAD**2)
         covariance_body = self.mount_rotation @ covariance_tracker @ self.mount_rotation.T
@@ -467,7 +467,7 @@ def _validate():
     mount = _rotation_quaternion(np.array([-.2, .5, .3]))
     configuration = replace(configuration, mount_quaternion=tuple(mount))
     tracker = SimulatedStarTracker(config=configuration)
-    boresight = _dcm_bi_from_q(quaternion) @ _dcm_bi_from_q(mount)[:, 2]
+    boresight = _dcm_bi_from_q(quaternion) @ mount_to_body(mount)[:, 2]
     receipt = _validation_sample(tracker, 0, quaternion=quaternion, sun=boresight,
                                  position=boresight * 7000000)
     assert receipt.reason == 'SUN_HARD_OFF'

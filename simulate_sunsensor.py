@@ -57,8 +57,8 @@ GOLDEN RULES (enforced below):
        passed IN by the loop each tick -- the sensor is a pure lying machine.
     2. ALL randomness comes from ONE numpy generator seeded from
        SunSensorArrayParameters.seed. No global np.random anywhere.
-    3. Frame math only via the repo's own _dcm_bi_from_q copy
-       (the B_body = C_bi.T @ B_eci convention). Do not "fix" it.
+    3. Attitude uses attitude_frames.body_to_eci, with inertial vectors
+       mapped into body by its transpose in every simulation mode.
     4. Receipts (SunArrayMeasurement) are what flight software consumes.
        The in-memory records (receipt + stapled truth) exist ONLY for the
        demo/validation -- the ADCS never reads them.
@@ -116,21 +116,8 @@ class GaussMarkov:
     def reset(self):
         self._value = 0.0
 
-def _dcm_bi_from_q(quaternion):
-    quaternion = np.asarray(quaternion, dtype=float).reshape(4)
-    quaternion = quaternion / np.linalg.norm(quaternion)
-    scalar, vector_x, vector_y, vector_z = quaternion
-    return np.array([
-        [1 - 2 * (vector_y**2 + vector_z**2),
-         2 * (vector_x * vector_y + scalar * vector_z),
-         2 * (vector_x * vector_z - scalar * vector_y)],
-        [2 * (vector_x * vector_y - scalar * vector_z),
-         1 - 2 * (vector_x**2 + vector_z**2),
-         2 * (vector_y * vector_z + scalar * vector_x)],
-        [2 * (vector_x * vector_z + scalar * vector_y),
-         2 * (vector_y * vector_z - scalar * vector_x),
-         1 - 2 * (vector_x**2 + vector_y**2)],
-    ])
+from attitude_frames import body_to_eci as _dcm_bi_from_q
+
 
 def sensor_to_body_matrix(normal_body, roll_rad=0.0):
     """Create sensor axes with local +Z along its facing normal."""

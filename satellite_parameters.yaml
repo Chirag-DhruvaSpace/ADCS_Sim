@@ -83,7 +83,7 @@ orbit:
   altitude_m: 500003.0
   inclination_deg: 97.0
   eccentricity: 0.0             # ASSUMPTION: circular starting orbit
-  raan_deg: 180.0                 # ASSUMPTION: not supplied
+  raan_deg: 0.0                 # ASSUMPTION: not supplied
   argument_of_perigee_deg: 0.0  # ASSUMPTION: not supplied
   true_anomaly_deg: 180.0         # ASSUMPTION: not supplied
 
@@ -582,8 +582,7 @@ star_tracker:
   # RelQuat[3] / RelDCM[3] (ADS main.c / flight resetDefaults()) -- boresight
   # body -Y, 5 deg tilt. This is conj(RelQuat[3]), the house convention being
   # the transpose of the firmware's.
-  #mount_quaternion: [0.521334, -0.521334, 0.477714, -0.477714]
-  mount_quaternion: [1.0, 0.0, 0.0, 0.0]
+  mount_quaternion: [0.521334, -0.521334, 0.477714, -0.477714]
   detector_temperature_c: 20.0
   thermal_reference_temperature_c: 20.0
   earth_limb_radius_km: 6478.137              # Earth radius plus 100 km atmosphere

@@ -51,20 +51,8 @@ def nominal_in_orbit_pointing_quaternion(r_eci, v_eci, yaw_bias_deg=45.0):
     """
     q_nadir = nad.nadir_pointing_quaternion(r_eci, v_eci)
     q_yaw = _yaw_bias_quaternion(yaw_bias_deg)
-    # ROOT-CAUSE FIX: this project's C_bi(q) formula composes Hamilton
-    # products in REVERSED order -- verified directly: C_bi(qA (x) qB) =
-    # C_bi(qB) @ C_bi(qA), not C_bi(qA) @ C_bi(qB) as a "standard" convention
-    # might suggest. Right-multiplying (quaternion_multiply(q_nadir, q_yaw),
-    # the initial attempt) therefore applies the yaw rotation on the
-    # OUTSIDE/ECI-referenced sense, not about the nadir target's own local X
-    # axis -- confirmed numerically: it moved the boresight ~3.4deg off
-    # nadir even though the rotation is nominally "about X". Left-
-    # multiplying instead (q_yaw (x) q_nadir) gives C_bi(nadir) @ C_bi(yaw),
-    # i.e. yaw applied first in the target's own local body coordinates,
-    # THEN carried into ECI by the nadir orientation -- verified to leave
-    # the boresight at EXACTLY 0.0deg error for yaw angles from -45 to
-    # 90deg, since the boresight (X) is the yaw axis itself here.
-    q_target = q2e.quaternion_multiply(q_yaw, q_nadir)
+    # Right multiplication applies the yaw about the target body X axis.
+    q_target = q2e.quaternion_multiply(q_nadir, q_yaw)
     q_target = q_target / np.linalg.norm(q_target)
     if q_target[0] < 0:
         q_target = -q_target
