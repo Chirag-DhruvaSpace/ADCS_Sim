@@ -164,7 +164,8 @@ def test_firmware_limits_impulse_reversal_and_achieved_telemetry(monkeypatch, fi
     initial = np.array([hmax-5e-5, -hmax+5e-5, hmax, -hmax])
     monkeypatch.setattr(link, '_wheel_momentum', initial.tolist())
     monkeypatch.setattr(link, '_latest_torque_mNm', [-400., 400., 400., -400.])
-    monkeypatch.setattr(link, '_latest_mtr_dipole_Am2', [1e6, -1e6, .34])
+    monkeypatch.setattr(link, '_latest_mtr_current_mA',
+                        (np.array([1e6, -1e6, .34])/link.mtr_dipole_per_amp()*1e3).tolist())
     monkeypatch.setattr(link, '_applied_torque_Nm', np.zeros(4))
     wheels, dipole = link.apply_actuator_limits(.1)
     np.testing.assert_allclose(wheels, [-.0005, .0005, .004, -.004], atol=1e-15)
@@ -196,7 +197,8 @@ def test_magnetorquer_current_bound(monkeypatch, firmware_plant):
     import satellite_parameters as config
     from dataclasses import replace
     from satellite_rotational_dynamics_var_mag_field import compute_MTR_power
-    monkeypatch.setattr(link, '_latest_mtr_dipole_Am2', [100., -100., 100.])
+    monkeypatch.setattr(link, '_latest_mtr_current_mA',
+                        (np.array([100., -100., 100.])/link.mtr_dipole_per_amp()*1e3).tolist())
     monkeypatch.setattr(config, 'SPACECRAFT', replace(config.SPACECRAFT, mtr_max_current_A=(.001, .002, .003)))
     _, dipole = link.apply_actuator_limits(.1)
     assert np.all(np.asarray(compute_MTR_power(dipole)[1:]) <= np.array([.001, .002, .003])+1e-15)

@@ -89,6 +89,19 @@ def imu_substep_times(t, dt):
     return [t + k * dt / count for k in range(1, count)]
 
 
+def _valid_actuator_command(values):
+    """An ACS SITL actuator packet (rwNo, mode, value): a wheel torque for
+    wheels 0..3 or a torquer current for rods 0..2."""
+    index, mode = values[0], values[1]
+    if index != round(index):
+        return False
+    if mode == 0:
+        return 0 <= index <= 3
+    if mode == 2:
+        return 0 <= index <= 2
+    return False
+
+
 class PacketSocket:
     def __init__(self, sock, fmt, notify, wheel=False):
         self.sock, self.fmt, self.notify, self.wheel = sock, fmt, notify, wheel
@@ -100,7 +113,7 @@ class PacketSocket:
             values = struct.unpack(self.fmt, data)
             if not all(math.isfinite(value) for value in values):
                 continue
-            if self.wheel and (values[0] != round(values[0]) or not 0 <= values[0] <= 3 or values[1] != 0):
+            if self.wheel and not _valid_actuator_command(values):
                 continue
             self.notify()
             return data, address

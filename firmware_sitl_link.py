@@ -31,7 +31,11 @@ MODE_LISTEN_PORT = 5105     # matches ADS SITL's PYTHON_MODE_PORT -- new this se
                             # carries the REAL ADS AdsMode (distinct from store.mode,
                             # which is always "FIRMWARE_SITL" regardless of the real mode)
 
-CMD_FORMAT = "<3d"   # rwNo, mode(0=torque mNm, 1=speed), value -- matches acs_sim_link.h exactly
+CMD_FORMAT = "<3d"   # rwNo, mode, value -- matches acs_sim_link.h's AcsRwCmdPacket exactly
+# AcsRwCmdPacket.mode values (acs_sim_link.h ACS_SIM_CMD_*).
+CMD_MODE_RW_TORQUE = 0      # rwNo = wheel 0..3, value = torque, mNm
+CMD_MODE_RW_SPEED = 1       # rwNo = wheel 0..3, value = raw speed command
+CMD_MODE_MTR_CURRENT = 2    # rwNo = torquer rod 0..2 (body X/Y/Z), value = signed current, mA
 TLM_FORMAT = "<3d"   # rwNo, currspeed_rpm, actual_torque_mNm -- matches acs_sim_link.h exactly
 
 RW_MOI = 5.4e-5   # kg*m^2 -- matches acs.h's confirmed value, reused here for the momentum estimate
@@ -63,25 +67,18 @@ _mode_sock.bind(("0.0.0.0", MODE_LISTEN_PORT))
 _mode_sock.setblocking(False)
 _latest_ads_mode = [0]   # raw AdsMode byte value, 0 = AdcsMode_Safe
 
-# EXTENDED this session: the mode packet now also carries
-# bdotVars.controlMoment directly (mode_link.c's ModeLinkPacket, #pragma
-# pack(1) -- 1 uint8 + 3 float32 = 13 bytes, matching this format string
-# exactly). This is the ONLY channel carrying any MTR command to Python's
-# physics at all -- satellite_rotational_dynamics_var_mag_field.py's own
-# M = np.zeros(3) was a leftover "no MTR mode exists" assumption from when
-# only Nadir/Sun-pointing (both RW-only) existed.
-#
-# SIMPLIFIED (this session): carries the physical dipole moment (Am^2)
-# directly, PRE-mtrCurrDist() -- not the post-saturation, sign-magnitude-
-# encoded current that function actually commands the hardware. By
-# explicit request, trading testing mtrCurrDist()'s own saturation/
-# encoding logic for a simpler pipeline.
-#
-# EXTENDED again: the firmware's own attitude estimate, AdsMdl.fusedquat
-# (w, x, y, z, body->ECI, 4 float32), and fuseAttDiag.source (uint8: 0 none,
-# 1 star tracker, 2 TRIAD, 3 Sun-2DOF) -- 30 bytes in total.
-MODE_STATUS_FORMAT = "<B3f4fB"
-_latest_mtr_dipole_Am2 = [0.0, 0.0, 0.0]
+# Mode packet (mode_link.c's ModeLinkPacket, #pragma pack(1)): AdsHk.AdcsMode
+# (uint8), the firmware's attitude estimate AdsMdl.fusedquat (w, x, y, z,
+# body->ECI, 4 float32) and fuseAttDiag.source (uint8: 0 none, 1 star tracker,
+# 2 TRIAD, 3 Sun-2DOF) -- 18 bytes. No actuator commands: those come from the
+# ACS SITL on the command port, as they reach the actuators through the ACS
+# board in flight.
+MODE_STATUS_FORMAT = "<B4fB"
+
+# Magnetorquer rod currents in mA, signed (+ve = dipole along +body axis), as
+# the ACS last commanded them: the firmware's mtrCurrDist() via flight acs.c
+# AcsSetMtrCurrAll() -> ACS SITL.
+_latest_mtr_current_mA = [0.0, 0.0, 0.0]
 _latest_fused_quaternion = [None]
 _latest_fuse_source = [0]
 FUSE_SOURCE_NAMES = {0: "Gyro only", 1: "Star tracker", 2: "TRIAD", 3: "Sun 2-DOF"}
@@ -121,13 +118,15 @@ def poll_rw_torques():
         rwNo = int(round(rwNo_f))
         mode = int(round(mode_f))
 
-        if not (0 <= rwNo <= 3):
-            print(f"firmware_sitl_link: rwNo={rwNo} out of range, discarding")
+        if not (0 <= rwNo <= (2 if mode == CMD_MODE_MTR_CURRENT else 3)):
+            print(f"firmware_sitl_link: actuator {rwNo} out of range for mode {mode}, discarding")
             continue
 
         with _lock:
-            if mode == 0:   # torque command, mNm
+            if mode == CMD_MODE_RW_TORQUE:
                 _latest_torque_mNm[rwNo] = value
+            elif mode == CMD_MODE_MTR_CURRENT:
+                _latest_mtr_current_mA[rwNo] = value
             else:
                 print(f"firmware_sitl_link: mode={mode} (speed command) "
                       f"not yet supported, ignoring")
@@ -158,16 +157,13 @@ def poll_mode():
                   f"expected {expected_len} -- discarding")
             continue
 
-        mode, mx, my, mz, qw, qx, qy, qz, source = struct.unpack(MODE_STATUS_FORMAT, data)
+        mode, qw, qx, qy, qz, source = struct.unpack(MODE_STATUS_FORMAT, data)
 
         with _lock:
             if _latest_ads_mode[0] != mode:
                 print(f"[DEBUG] mode_link: received mode byte {mode} "
                       f"(was {_latest_ads_mode[0]})")
             _latest_ads_mode[0] = mode
-            _latest_mtr_dipole_Am2[0] = mx
-            _latest_mtr_dipole_Am2[1] = my
-            _latest_mtr_dipole_Am2[2] = mz
             _latest_fused_quaternion[0] = (qw, qx, qy, qz)
             _latest_fuse_source[0] = source
 
@@ -185,17 +181,6 @@ def get_latest_fuse_source_name():
         return FUSE_SOURCE_NAMES.get(_latest_fuse_source[0], str(_latest_fuse_source[0]))
 
 
-def get_latest_mtr_dipole_Am2():
-    """Returns the real MTR dipole moment (A*m^2, body frame) the firmware
-    actually commanded this cycle (detumbling_MM.c's bdotCalcTorq(), via
-    bdotVars.controlMoment) -- sent directly, pre-mtrCurrDist(), so this is
-    the control law's own output rather than the post-saturation encoded
-    current."""
-    with _lock:
-        print(f"######################################################################{_latest_mtr_dipole_Am2}")
-        return list(_latest_mtr_dipole_Am2)
-
-
 def get_latest_ads_mode_name():
     """Returns the real ADS mode's human-readable name (e.g. 'Safe',
     'NadirPoint') -- distinct from store.mode, which is always
@@ -207,17 +192,25 @@ def get_latest_ads_mode_name():
     return _ADS_MODE_NAMES.get(raw, f"Unknown({raw})")
 
 
+def mtr_dipole_per_amp():
+    """Magnetorquer rod dipole per ampere, A*m^2/A -- the same dipole/current
+    relation as compute_MTR_power()."""
+    import MTR_parameters_P30xl as coil
+    return (1+coil.gain_ratio)*np.pi*coil.r**2*coil.N*1e-6
+
+
 def apply_actuator_limits(dt):
     """Latch achieved commands for one held physics step, in SI units.
 
     Positive wheel command produces positive body torque along its axis and
     negative rotor acceleration. Limit its impulse using the same dt used
     by the plant, so a nearly full wheel cannot overshoot its capacity.
-    This bounds the pre-driver MTR command using the configured plant and
-    existing coil model; it does not emulate the firmware current encoder.
+    The magnetorquer dipole is the ACS-commanded rod current through the
+    plant's coil model (the firmware's own coil constant, MTR_COIL_NA, is
+    its model of the same rods), then bounded by the plant's current and
+    dipole limits.
     """
     import satellite_parameters as config
-    import MTR_parameters_P30xl as coil
     if not math.isfinite(dt) or dt <= 0:
         raise ValueError('Actuator hold period must be finite and positive')
     with _lock:
@@ -226,11 +219,10 @@ def apply_actuator_limits(dt):
         lower = np.maximum(-config.WHEEL_MAX_TORQUE_NM, (h-limit)/dt)
         upper = np.minimum(config.WHEEL_MAX_TORQUE_NM, (h+limit)/dt)
         _applied_torque_Nm[:] = np.clip(np.asarray(_latest_torque_mNm)*1e-3, lower, upper)
-        # Same dipole/current relation as compute_MTR_power(), in A*m^2/A.
-        dipole_per_amp = (1+coil.gain_ratio)*np.pi*coil.r**2*coil.N*1e-6
+        dipole_per_amp = mtr_dipole_per_amp()
         dipole_limit = np.minimum(config.MTR_MAX_DIPOLE_AM2,
                                  np.asarray(config.SPACECRAFT.mtr_max_current_A)*dipole_per_amp)
-        dipole = np.clip(_latest_mtr_dipole_Am2, -dipole_limit, dipole_limit)
+        dipole = np.clip(np.asarray(_latest_mtr_current_mA)*1e-3*dipole_per_amp, -dipole_limit, dipole_limit)
         step = config.MTR_DIPOLE_STEP_AM2
         if step > 0:
             dipole_limit = np.floor(dipole_limit/step)*step

@@ -27,7 +27,12 @@ class FirmwareTests(unittest.TestCase):
             link.link.TLM_SEND_PORT = wheel_receiver.getsockname()[1]
             self.assertEqual(link.metadata(0, {}, np.zeros(3))['custom_pointing_status'],'red')
             sender.sendto(struct.pack('<3d',0,0,2.5),link.link._cmd_sock.getsockname())
-            sender.sendto(struct.pack('<B3f4fB',2,.1,.2,.3,.5,.5,-.5,.5,1),link.link._mode_sock.getsockname())
+            # Torquer rods 0..2 commanded through the ACS as signed currents (mA),
+            # chosen to give a .1/.2/.3 A*m^2 dipole through the plant coil model.
+            rod_mA = np.array([.1,.2,.3])/link.link.mtr_dipole_per_amp()*1e3
+            for rod in range(3):
+                sender.sendto(struct.pack('<3d',rod,2,rod_mA[rod]),link.link._cmd_sock.getsockname())
+            sender.sendto(struct.pack('<B4fB',2,.5,.5,-.5,.5,1),link.link._mode_sock.getsockname())
             time.sleep(.01)
             q = np.array([1.,0,0,0]); field = np.array([0.,0,2e-5])
             wheels,dipole = link.tick([7e6,0,0],[0,7500,0],q,[0,0,0],123,field)
@@ -39,7 +44,8 @@ class FirmwareTests(unittest.TestCase):
             # change the accepted actuator state or count as fresh input.
             sender.sendto(b'invalid',link.link._cmd_sock.getsockname())
             sender.sendto(struct.pack('<3d',1,1,99),link.link._cmd_sock.getsockname())
-            sender.sendto(struct.pack('<B3f4fB',2,float('nan'),0,0,1,0,0,0,0),link.link._mode_sock.getsockname())
+            sender.sendto(struct.pack('<3d',3,2,99),link.link._cmd_sock.getsockname())   # no fourth torquer rod
+            sender.sendto(struct.pack('<B4fB',2,float('nan'),0,0,1,0),link.link._mode_sock.getsockname())
             accepted_at = link.received_at
             time.sleep(.01)
             held_wheels,held_dipole = link.tick([7e6,0,0],[0,7500,0],q,[0,0,0],123,field)
