@@ -46,6 +46,27 @@ def with_firmware_imu_rate(imu_config):
                    mag_update_rate_hz=FIRMWARE_IMU_RATE_HZ)
 
 
+# ADIS16545-1 (+/-125 deg/s) gyroscope error figures, Analog Devices product
+# page / datasheet Rev. A, 1 sigma. Bias repeatability is the turn-on to turn-on
+# bias the firmware sees (it has no gyro-bias estimation), so it is the
+# startup bias; in-run bias stability drives the slow wander.
+ADIS16545_ANGLE_RANDOM_WALK_DEG_RTHR = 0.07
+ADIS16545_IN_RUN_BIAS_STABILITY_DEG_HR = 0.5
+ADIS16545_BIAS_REPEATABILITY_DEG_HR = 63.0
+
+
+def with_adis16545_gyro(imu_config):
+    """imu_config with the gyro's random errors set to the ADIS16545 figures
+    above, for the firmware IMU rate. SITL only. White noise is per sample:
+    ARW [deg/sqrt(s)] * sqrt(sample rate). Wander keeps its configured time
+    constant; scale error and misalignment are left as configured."""
+    arw_deg_rts = ADIS16545_ANGLE_RANDOM_WALK_DEG_RTHR / 60.0
+    return replace(imu_config,
+                   gyro_white_noise_sigma_rad_s=math.radians(arw_deg_rts * math.sqrt(FIRMWARE_IMU_RATE_HZ)),
+                   gyro_bias_sigma_rad_s=math.radians(ADIS16545_BIAS_REPEATABILITY_DEG_HR / 3600.0),
+                   gyro_wander_sigma_rad_s=math.radians(ADIS16545_IN_RUN_BIAS_STABILITY_DEG_HR / 3600.0))
+
+
 def imu_substep_times(t, dt):
     """The IMU sample times strictly inside the physics step [t, t + dt): the
     sample at t itself goes out with the step's other sensors (tick()), these

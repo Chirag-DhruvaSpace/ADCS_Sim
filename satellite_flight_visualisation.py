@@ -195,15 +195,18 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
 
     firmware = None
     if config.POINTING['strategy'] == 'firmware_sitl':
-        from firmware_sitl_adapter import FirmwareLink, with_board_magnetometer, with_firmware_imu_rate
+        from firmware_sitl_adapter import (FirmwareLink, with_board_magnetometer,
+                                           with_firmware_imu_rate, with_adis16545_gyro)
         firmware = FirmwareLink()
         # SITL ONLY: the magnetometer carries the real board's error, which
         # the firmware's calibration removes (see with_board_magnetometer),
-        # and both chips sample at the flight imuTask rate, 100 Hz (see
-        # with_firmware_imu_rate; the extra samples inside each physics step
-        # are taken after the step is integrated, below). Both chips are
-        # rebuilt in the import-time order from freshly seeded generators.
-        rate_config = with_firmware_imu_rate(config.IMU_SIM)
+        # the gyro carries the ADIS16545's datasheet random errors (see
+        # with_adis16545_gyro), and both chips sample at the flight imuTask
+        # rate, 100 Hz (see with_firmware_imu_rate; the extra samples inside
+        # each physics step are taken after the step is integrated, below).
+        # Both chips are rebuilt in the import-time order from freshly seeded
+        # generators.
+        rate_config = with_adis16545_gyro(with_firmware_imu_rate(config.IMU_SIM))
         board_config = with_board_magnetometer(rate_config)
         gyro_random = np.random.default_rng(_gyro_seed)
         mag_random = gyro_random if _gyro_seed == _mag_seed else np.random.default_rng(_mag_seed)
