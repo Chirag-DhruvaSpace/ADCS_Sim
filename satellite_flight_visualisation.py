@@ -191,12 +191,12 @@ def _acquire_imu(t, q_sensor, omega_body, B_eci):
 
 
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
-    global _telemetry_sequence, _gyroscope, _magnetometer, _gyro_units, _mag_units
+    global _telemetry_sequence, _gyroscope, _magnetometer, _gyro_units, _mag_units, _sun_sensor
 
     firmware = None
     if config.POINTING['strategy'] == 'firmware_sitl':
-        from firmware_sitl_adapter import (FirmwareLink, with_board_magnetometer,
-                                           with_firmware_imu_rate, with_adis16545_gyro)
+        from firmware_sitl_adapter import (FirmwareLink, with_board_magnetometer, with_firmware_imu_rate,
+                                           with_adis16545_gyro, without_fine_sun_sensor_albedo)
         firmware = FirmwareLink()
         # SITL ONLY: the magnetometer carries the real board's error, which
         # the firmware's calibration removes (see with_board_magnetometer),
@@ -216,6 +216,11 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                        for index, unit in enumerate(rate_config.gyros) if unit.enabled]
         _mag_units = [(unit, SimulatedMagnetometer(board_config.unit_config('mag', unit, index), record_history=False))
                       for index, unit in enumerate(board_config.magnetometers) if unit.enabled]
+        # SITL ONLY: no Earth albedo on the fine FSS heads (see
+        # without_fine_sun_sensor_albedo for why, and what it hides).
+        if _sun_sensor is not None:
+            _sun_sensor = SimulatedSunSensorArray(without_fine_sun_sensor_albedo(config.IMU_SIM).sun_array,
+                                                  record_history=False)
     t = 0.0
     tf = float(tf)
     dt = float(dt)

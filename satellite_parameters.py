@@ -507,6 +507,7 @@ class SunSensorArrayParameters:
     enable_saturation: bool = True
     enable_quantization: bool = True
     enable_albedo: bool = True
+    enable_fine_albedo: bool = True          # albedo also reaches the fine FSS quadrants (needs enable_albedo)
     enable_penumbra: bool = True
     enable_self_shadowing: bool = True
 

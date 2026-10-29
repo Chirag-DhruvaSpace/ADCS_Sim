@@ -67,6 +67,18 @@ def with_adis16545_gyro(imu_config):
                    gyro_wander_sigma_rad_s=math.radians(ADIS16545_IN_RUN_BIAS_STABILITY_DEG_HR / 3600.0))
 
 
+def without_fine_sun_sensor_albedo(imu_config):
+    """imu_config with Earth albedo kept off the fine FSS heads; the coarse
+    photocells keep it. SITL only, by choice: with albedo on, the Earth-facing
+    head reads 6-13% of full Sun over sunlit Earth, above the firmware's 4%
+    lit threshold (FSS_ECLIPSE_QSUM_THRESH), and the firmware takes it as a
+    Sun sighting -- TRIAD then corrupts the attitude estimate and Sun and
+    Nadir pointing fail in sunlight. That is a real flight-firmware exposure
+    (no albedo guard in computeSunVectorBody()); this only lets SITL test the
+    pointing modes around it."""
+    return replace(imu_config, sun_array=replace(imu_config.sun_array, enable_fine_albedo=False))
+
+
 def imu_substep_times(t, dt):
     """The IMU sample times strictly inside the physics step [t, t + dt): the
     sample at t itself goes out with the step's other sensors (tick()), these

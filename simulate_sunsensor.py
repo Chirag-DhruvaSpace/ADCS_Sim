@@ -573,7 +573,8 @@ class SimulatedSunSensorArray:
                 direction_sensor = sensor_to_body.T @ sun_direction_body
                 noise_sigma = cell_config.white_noise_sigma if configuration.enable_white_noise else 0.0
                 direct_brightness = max(0.0, cell.output_fraction - cell.albedo_fraction)
-                albedo_direction_sensor = None if earth_direction_body is None else sensor_to_body.T @ earth_direction_body
+                albedo_direction_sensor = (None if earth_direction_body is None or not configuration.enable_fine_albedo
+                                           else sensor_to_body.T @ earth_direction_body)
                 data = simulate_fine_sensor(direction_sensor, direct_brightness,
                     configuration.fine_temperature_k, configuration, noise_sigma, self.rng,
                     albedo_direction_sensor, cell.albedo_fraction)
