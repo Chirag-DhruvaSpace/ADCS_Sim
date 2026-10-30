@@ -540,7 +540,10 @@ class SimulatedSunSensorArray:
         if sample_index <= self._last_k:
             return None
         self._last_k = sample_index
-        sample_time_s = sample_index / configuration.update_rate_hz
+        # Grid tolerance may admit a boundary a few ulps ahead of time_s.
+        # Never timestamp a receipt in the future or extrapolate its truth:
+        # zero-latency (perfect) sensors otherwise fail the freshness gate.
+        sample_time_s = min(time_s, sample_index / configuration.update_rate_hz)
         self.samples += 1
 
         # latency: the sample describes the geometry a few ms ago

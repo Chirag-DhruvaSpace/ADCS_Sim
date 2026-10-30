@@ -57,3 +57,18 @@ def test_perfect_profile_dark_heads_have_zero_counts():
     sums = {head.name:sum(head.data[k] for k in ['Q1','Q2','Q3','Q4']) for head in receipt.sensors}
     assert sums['-X'] == cfg.fine_total_signal_counts
     assert all(value == 0 for name,value in sums.items() if name != '-X')
+
+
+def test_perfect_sun_receipts_remain_current_on_accumulated_clock():
+    from simulate_sunsensor import SimulatedSunSensorArray
+    cfg = config._apply_sensor_profile(config.IMU_SIM.sun_array, 'perfect')
+    sensor = SimulatedSunSensorArray(cfg, record_history=False)
+    t = 0.
+    for _ in range(1500):
+        receipt = sensor.get_raw_data(t, [1.,0.,0.,0.], [-1.,0.,0.], 1.)
+        assert receipt is not None and receipt.valid
+        assert 0 <= t - receipt.t_meas_s <= config.IMU_SIM.fusion_max_age_s
+        assert receipt.t_meas_s <= receipt.t_arrival_s <= t
+        lit = next(head for head in receipt.sensors if head.name == '-X')
+        assert sum(lit.data[key] for key in ('Q1','Q2','Q3','Q4')) > 400
+        t += .1

@@ -121,6 +121,21 @@ def test_tracker_usage_follows_fresh_firmware_reference(firmware_plant, monkeypa
     assert metadata['att_est_source'] == 'Awaiting fresh firmware status'
 
 
+@pytest.mark.parametrize('source,used', [(0,False),(1,False),(2,True),(3,True)])
+def test_sun_usage_follows_firmware_not_python_estimator(firmware_plant, monkeypatch, source, used):
+    from firmware_sitl_adapter import FirmwareLink
+    link = FirmwareLink.__new__(FirmwareLink)
+    link.link = firmware_plant
+    link.received_at = link.event_at = link.stable_since = None
+    link.schedule_lag_s = 0.
+    monkeypatch.setattr(firmware_plant.time, 'monotonic', lambda: 10.)
+    firmware_plant._latest_fuse_source[0] = source
+    firmware_plant._latest_fuse_received_at[0] = 9.9
+    assert link.metadata(0., {}, np.zeros(3))['att_est_sun_used'] is used
+    firmware_plant._latest_fuse_received_at[0] = 7.
+    assert not link.metadata(0., {}, np.zeros(3))['att_est_sun_used']
+
+
 def test_failed_segment_does_not_send_future_samples():
     from firmware_sitl_adapter import integrate_firmware_step
     link = SimpleNamespace(schedule_lag_s=0., finish_tick=lambda *a, **k: pytest.fail('advanced failed interval'))

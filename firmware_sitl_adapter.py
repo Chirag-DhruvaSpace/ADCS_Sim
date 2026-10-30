@@ -237,6 +237,7 @@ class FirmwareLink:
                     att_est_source=reference if reference_fresh else 'Awaiting fresh firmware status',
                     firmware_reference_age_s=reference_age,
                     star_tracker_used=reference_fresh and reference == 'Star tracker',
+                    att_est_sun_used=reference_fresh and reference in ('TRIAD', 'Sun 2-DOF'),
                     firmware_packet_age_s=None if self.received_at is None else now-self.received_at,
                     firmware_wheel_speed_rpm=[h/self.link.RW_MOI*60/(2*np.pi) for h in self.link._wheel_momentum],
                     firmware_command_freshness=freshness,
