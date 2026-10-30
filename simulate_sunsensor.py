@@ -158,7 +158,7 @@ def quadrant_signal(direction_sensor, brightness, config):
 
 def simulate_fine_sensor(sun_direction_sensor, brightness, temperature_k, config,
                          noise_sigma, random_generator, albedo_direction_sensor=None,
-                         albedo_brightness=0.0):
+                          albedo_brightness=0.0, albedo_quadrants=None):
     """Form quadrants, then derive the sensor's reported vector from those counts.
 
     A pinhole shifts the light spot by distance*tan(angle). The four quadrant
@@ -168,7 +168,9 @@ def simulate_fine_sensor(sun_direction_sensor, brightness, temperature_k, config
     maximum_ratio = math.tan(config.fine_fov_half_angle_rad)
     direct_counts = quadrant_signal(sun_direction_sensor, brightness, config)
     reflected_counts = (0.0, 0.0, 0.0, 0.0)
-    if albedo_direction_sensor is not None:
+    if albedo_quadrants is not None:
+        reflected_counts = albedo_quadrants
+    elif albedo_direction_sensor is not None:
         # Existing Earth-albedo irradiance uses the Earth-center direction as
         # a single optical source here, rather than resolving its extended disk.
         reflected_counts = quadrant_signal(albedo_direction_sensor, albedo_brightness, config)
@@ -210,8 +212,7 @@ def simulate_fine_sensor(sun_direction_sensor, brightness, temperature_k, config
         'Beta': signed_16_bit(math.degrees(beta_rad) * 100),
     }
 
-def earth_albedo_fractions(position_eci, sun_eci, body_to_eci, normals, fov_cos,
-                           reflectivity, patches=2048):
+def earth_albedo_rays(position_eci, sun_eci, reflectivity, patches=2048):
     """Lambertian spherical Earth surface quadrature, normalized to solar flux.
 
     Uniform reflectivity, no clouds/terrain/atmospheric scattering. Includes
@@ -221,7 +222,7 @@ def earth_albedo_fractions(position_eci, sun_eci, body_to_eci, normals, fov_cos,
     radius = 6371008.8
     r = np.asarray(position_eci, float)
     if np.linalg.norm(r) <= radius:
-        return np.zeros(len(normals))
+        return np.empty((0, 3)), np.empty(0)
     index = np.arange(patches)
     axis = r / np.linalg.norm(r)
     cap = radius / np.linalg.norm(r)
@@ -238,9 +239,35 @@ def earth_albedo_fractions(position_eci, sun_eci, body_to_eci, normals, fov_cos,
     illumination = np.maximum(0., vector_length @ sun_eci)
     emission = np.maximum(0., np.sum(vector_length * -ray, axis=1))
     weights = reflectivity * (2 * radius**2 * (1-cap) / patches) * illumination * emission / distance**2
+    return ray, weights
+
+
+def earth_albedo_fractions(position_eci, sun_eci, body_to_eci, normals, fov_cos,
+                           reflectivity, patches=2048):
+    ray, weights = earth_albedo_rays(position_eci, sun_eci, reflectivity, patches)
     incidence = normals @ body_to_eci.T @ ray.T
     response = np.where((incidence >= fov_cos[:, None]) & (incidence > 0), incidence, 0.)
     return response @ weights
+
+
+def fine_albedo_quadrants(rays_body, weights, sensor_to_body, config):
+    """Resolve the extended Earth disk through this fine head's aperture.
+
+    A coarse cell's hemispheric irradiance cannot be concentrated into a
+    pinhole spot at Earth center. Only rays inside the fine optical window
+    contribute, each at its own spot position and incidence angle.
+    """
+    rays = np.asarray(rays_body) @ sensor_to_body
+    limit = math.tan(config.fine_fov_half_angle_rad)
+    z = rays[:, 2]
+    active = (z > 0) & (np.abs(rays[:, 0]) <= limit*z) & (np.abs(rays[:, 1]) <= limit*z)
+    if not np.any(active):
+        return np.zeros(4)
+    x = rays[active, 0]/z[active]/limit
+    y = rays[active, 1]/z[active]/limit
+    scale = np.asarray(weights)[active]*z[active]*config.fine_total_signal_counts/4
+    return np.array([scale @ ((1+x)*(1+y)), scale @ ((1-x)*(1+y)),
+                     scale @ ((1-x)*(1-y)), scale @ ((1+x)*(1-y))])
 
 
 
@@ -563,17 +590,22 @@ class SimulatedSunSensorArray:
             # Operator diagnostics stay separate from the hardware interface.
             self._last_cell_diagnostics = {c.name: c for c in cell_samples}
             fine_sensors = []
+            if configuration.enable_albedo and configuration.enable_fine_albedo and r_meas is not None:
+                reflected_rays, reflected_weights = earth_albedo_rays(r_meas, sun_eci, configuration.albedo_scale)
+                reflected_rays_body = reflected_rays @ body_to_eci
+            else:
+                reflected_rays_body, reflected_weights = np.empty((0,3)), np.empty(0)
             for index, cell in enumerate(cell_samples):
                 cell_config = configuration.cells[index]
                 sensor_to_body = sensor_to_body_matrix(self._n_effective[index], cell_config.sensor_roll_rad)
                 direction_sensor = sensor_to_body.T @ sun_direction_body
                 noise_sigma = cell_config.white_noise_sigma if configuration.enable_white_noise else 0.0
                 direct_brightness = max(0.0, cell.output_fraction - cell.albedo_fraction)
-                albedo_direction_sensor = (None if earth_direction_body is None or not configuration.enable_fine_albedo
-                                           else sensor_to_body.T @ earth_direction_body)
+                reflected_quadrants = fine_albedo_quadrants(reflected_rays_body, reflected_weights,
+                                                           sensor_to_body, configuration)
                 data = simulate_fine_sensor(direction_sensor, direct_brightness,
                     configuration.fine_temperature_k, configuration, noise_sigma, self.rng,
-                    albedo_direction_sensor, cell.albedo_fraction)
+                    albedo_quadrants=reflected_quadrants)
                 fine_sensors.append(RawFineSunSensor(cell.name, 0x11 + index, data))
             self._raw_receipt = RawSunSample(measurement_time_s, sample_time_s, valid,
                 configuration.cells[0].adc_bits, tuple(RawSunCell(c.name, c.adc_counts,

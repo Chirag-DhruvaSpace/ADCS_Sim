@@ -10,6 +10,17 @@ from simulate_startracker import SimulatedStarTracker, StarTrackerMeasurement
 
 
 class StarTrackerTests(unittest.TestCase):
+    def test_receipt_validity_advances_when_external_firmware_runs_estimator(self):
+        navigation = ImuNav()
+        sample = StarTrackerMeasurement(120.,120.,np.array([1.,0.,0.,0.]))
+        navigation.update(120.,None,None,star_tracker=sample)
+        self.assertIsNone(navigation.estimator._last_t)
+        self.assertTrue(navigation.telemetry()['star_tracker_valid'])
+        self.assertFalse(navigation.telemetry()['star_tracker_used'])
+        np.testing.assert_array_equal(navigation.telemetry()['star_tracker_quaternion_eci'],sample.quaternion_eci)
+        navigation.update(121.,None,None)
+        self.assertFalse(navigation.telemetry()['star_tracker_valid'])
+
     def test_yaml_switch_survives_sensor_profile_selection(self):
         from pathlib import Path
         from tempfile import TemporaryDirectory

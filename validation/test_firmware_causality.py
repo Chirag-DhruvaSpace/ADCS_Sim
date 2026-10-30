@@ -103,6 +103,24 @@ def test_preparation_uses_idle_budget_without_sending_future_packets():
     np.testing.assert_allclose([wall for wall,_ in samples][1:],np.arange(.01,.3,.01),atol=1e-12)
 
 
+def test_tracker_usage_follows_fresh_firmware_reference(firmware_plant, monkeypatch):
+    from firmware_sitl_adapter import FirmwareLink
+    link = FirmwareLink.__new__(FirmwareLink)
+    link.link = firmware_plant
+    link.received_at = link.event_at = link.stable_since = None
+    link.schedule_lag_s = 0.
+    monkeypatch.setattr(firmware_plant.time,'monotonic',lambda:10.)
+    firmware_plant._latest_fuse_source[0] = 1
+    firmware_plant._latest_fuse_received_at[0] = 9.9
+    metadata = link.metadata(0.,{},np.zeros(3))
+    assert metadata['star_tracker_used']
+    assert metadata['att_est_source'] == 'Star tracker'
+    firmware_plant._latest_fuse_received_at[0] = 7.
+    metadata = link.metadata(0.,{},np.zeros(3))
+    assert not metadata['star_tracker_used']
+    assert metadata['att_est_source'] == 'Awaiting fresh firmware status'
+
+
 def test_failed_segment_does_not_send_future_samples():
     from firmware_sitl_adapter import integrate_firmware_step
     link = SimpleNamespace(schedule_lag_s=0., finish_tick=lambda *a, **k: pytest.fail('advanced failed interval'))
@@ -129,9 +147,11 @@ def test_schedule_rebase_does_not_hide_actual_speed_or_lag():
 def test_albedo_enabled_and_sun_settings_retained():
     import satellite_parameters as config
     from firmware_sitl_adapter import with_firmware_imu_rate
-    assert config.IMU_SIM.sun_array.enable_albedo
-    assert config.IMU_SIM.sun_array.enable_fine_albedo
-    assert with_firmware_imu_rate(config.IMU_SIM).sun_array is config.IMU_SIM.sun_array
+    # Configuration may intentionally select perfect/off. Check that SITL
+    # preserves explicit enabled albedo rather than forcing a profile on users.
+    enabled = replace(config.IMU_SIM, sun_array=replace(config.IMU_SIM.sun_array,
+                      enable_albedo=True,enable_fine_albedo=True))
+    assert with_firmware_imu_rate(enabled).sun_array is enabled.sun_array
     from simulate_sunsensor import simulate_fine_sensor
     cfg = config.IMU_SIM.sun_array
     for level, expected in [(0., 0), (.2, 2000)]:

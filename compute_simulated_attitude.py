@@ -214,6 +214,7 @@ class ImuNav:
         self.fusion_max_time_skew_s = fusion_max_time_skew_s
         self.estimator.star_tracker_max_age_s = fusion_max_age_s
         self._star_tracker = None
+        self._observation_time = None
         self._unit_receipts = {'gyro': {}, 'mag': {}}
         self._unit_status = {'gyro': [], 'mag': []}
         self._omega = (np.zeros(3) if fallback_omega_rad_s is None
@@ -244,6 +245,7 @@ class ImuNav:
         flag -- a valid receipt may still carry reconstructed_body=None
         (eclipse/degenerate geometry), which is NOT a dropout.
         """
+        self._observation_time = float(t_seconds)
         if star_tracker is not None:
             self._star_tracker = star_tracker
         if isinstance(gyro, list):
@@ -409,7 +411,8 @@ class ImuNav:
 
     def _star_tracker_telemetry(self):
         measurement = self._star_tracker
-        now = self.estimator._last_t
+        times = [t for t in (self._observation_time, self.estimator._last_t) if t is not None]
+        now = max(times) if times else None
         quaternion = (_usable_star_tracker_quaternion(measurement, now, self.fusion_max_age_s)
                       if now is not None else None)
         valid = (measurement is not None and measurement.valid and now is not None

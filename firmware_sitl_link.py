@@ -81,6 +81,7 @@ MODE_STATUS_FORMAT = "<B4fB"
 _latest_mtr_current_mA = [0.0, 0.0, 0.0]
 _latest_fused_quaternion = [None]
 _latest_fuse_source = [0]
+_latest_fuse_received_at = [None]
 FUSE_SOURCE_NAMES = {0: "Gyro only", 1: "Star tracker", 2: "TRIAD", 3: "Sun 2-DOF"}
 
 # Human-readable names, matching base_shared.h's AdsMode enum exactly --
@@ -171,6 +172,13 @@ def poll_mode():
             _latest_ads_mode[0] = mode
             _latest_fused_quaternion[0] = (qw, qx, qy, qz)
             _latest_fuse_source[0] = source
+            _latest_fuse_received_at[0] = time.monotonic()
+
+
+def get_latest_fuse_source_age_s():
+    with _lock:
+        stamp = _latest_fuse_received_at[0]
+    return None if stamp is None else max(0., time.monotonic()-stamp)
 
 
 def get_latest_fused_quaternion():

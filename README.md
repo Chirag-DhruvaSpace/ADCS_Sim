@@ -329,7 +329,21 @@ The model list reports whether accelerated facet shadows are active. Restart the
 simulator after code changes; the normal launcher intentionally has no autoreloader.
 
 SITL honors both `sun_sensor.enable_albedo` and `enable_fine_albedo` (enabled in
-the shipped configuration). Gyro presets and board magnetic calibration are
+the shipped configuration). Fine-head albedo integrates the extended illuminated
+Earth disk through each head's optical window. It does not concentrate a coarse
+cell's hemispheric light into a single Earth-center spot. Reflected light can
+still produce eligible fine readings; firmware must resolve contradictory heads.
+Sensor markers exaggerate faint light for visibility, transitioning from grey
+through yellow to orange at high received light, without changing sensor counts.
+Markers use the same light percentages as the Sun sensor table. Fine-only
+telemetry falls back to quadrant counts with its configured noise envelope. Select
+`sensor_profiles.sun_sensor: perfect` for ideal Sun readings without noise,
+albedo or self-shadowing; `custom` uses the detailed switches below that section.
+Changing a YAML profile requires restarting the simulator. In firmware mode,
+tracker receipt validity follows the sensor clock, while its usage indicator
+follows the firmware's reported reference. A stale firmware report is marked
+as awaiting fresh status rather than displaying a stale usage indication.
+Gyro presets and board magnetic calibration are
 explicit `simulation.firmware_gyro_preset` (`adis16545` or `configured`) and
 `firmware_board_magnetometer_calibration` settings. Restart after changing these
 settings. The `firmware_sensor_configuration` telemetry records effective error
@@ -383,8 +397,10 @@ defines the external firmware's wheel numbering; an empty value uses the physica
 wheel geometry. External firmware retains its own hardware configuration and must
 match the selected satellite. Restart after changing model/physics configuration.
 
-Sun markers are yellow and their brightness follows received fine-head Q sum
-(normalized by the configured full-scale count), with photocell output as fallback.
+Sun markers follow the same received-light percentages shown in the telemetry
+table, even outside the fine head's angle-measurement window. Zero is opaque
+grey; increasing light moves smoothly through yellow (50%) to orange (100%).
+Fine-head Q sum is used only when photocell percentages are unavailable.
 Eligibility does not force a marker to full brightness. `enable_albedo` is the
 master reflected-light switch; `enable_fine_albedo` gates its fine-head subset.
 `albedo_scale` is Earth reflectivity, not a second illumination contribution.

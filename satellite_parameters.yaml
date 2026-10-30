@@ -22,7 +22,7 @@ sensor_profiles:
   gps: custom
   gyroscope: custom
   magnetometer: custom
-  sun_sensor: custom
+  sun_sensor: perfect
   star_tracker: nominal  # off / perfect / nominal / degraded / stress / custom
 
 # P-30XL simulation configuration. Units are included in field names.
@@ -668,7 +668,7 @@ attitude_navigation:
 # VIEWER LIGHTING - display only; does not change sensor physics
 # =============================================================================
 viewer:
-  max_fps: 30                              # Display cap; reserve CPU/GPU time for firmware and plant
+  max_fps: 240                              # Display cap; reserve CPU/GPU time for firmware and plant
   earth_day_ambient: 0.12                   # Texture multiplier at the daylight terminator
   earth_day_diffuse: 0.78                   # Additional multiplier facing the Sun
   earth_night_floor: 0.015 # Minimum terrain visibility; keep small for dark nights

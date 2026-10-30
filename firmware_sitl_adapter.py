@@ -178,7 +178,8 @@ class FirmwareLink:
         if sun is not None:
             import satellite_parameters as config
             self.sensor_link.send_fss(self.state_socket, sun, sun_cells,
-                full_scale_counts=config.IMU_SIM.sun_array.fine_total_signal_counts)
+                full_scale_counts=config.IMU_SIM.sun_array.fine_total_signal_counts,
+                white_noise_enabled=config.IMU_SIM.sun_array.enable_white_noise)
         self.sensor_link.send_imu(self.state_socket, gyro, mag)
         self.sensor_link.send_star_tracker(self.state_socket, star, epoch_unix_s)
         return self.poll_commands(control_period_s)
@@ -211,6 +212,9 @@ class FirmwareLink:
             self.link.send_rw_telemetry()
     def metadata(self, t, errors, rates):
         mode = self.link.get_latest_ads_mode_name()
+        reference = self.link.get_latest_fuse_source_name()
+        reference_age = self.link.get_latest_fuse_source_age_s()
+        reference_fresh = reference_age is not None and reference_age < 2.
         error = errors.get(mode)
         settled = error is not None and error < .5 and np.linalg.norm(np.degrees(rates)) < .05
         self.stable_since = (t if self.stable_since is None else self.stable_since) if settled else None
@@ -230,6 +234,9 @@ class FirmwareLink:
         elif command_state == 'partial_expiry':
             state = 'yellow'
         return dict(ads_mode=mode, firmware_pointing_error_deg=error, custom_pointing_status=state,
+                    att_est_source=reference if reference_fresh else 'Awaiting fresh firmware status',
+                    firmware_reference_age_s=reference_age,
+                    star_tracker_used=reference_fresh and reference == 'Star tracker',
                     firmware_packet_age_s=None if self.received_at is None else now-self.received_at,
                     firmware_wheel_speed_rpm=[h/self.link.RW_MOI*60/(2*np.pi) for h in self.link._wheel_momentum],
                     firmware_command_freshness=freshness,

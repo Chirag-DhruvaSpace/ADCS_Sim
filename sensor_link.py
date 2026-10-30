@@ -139,7 +139,7 @@ def send_gps(sock, raw):
                 (ADS_HOST, ADS_SENSOR_PORT))
 
 
-def send_fss(sock, raw, cells=(), full_scale_counts=10000):
+def send_fss(sock, raw, cells=(), full_scale_counts=10000, white_noise_enabled=True):
     """Send one GETTLM reply per head of a RawSunSample.
 
     A dropped receipt (raw.valid False) sends nothing: the firmware then sees
@@ -179,6 +179,11 @@ def send_fss(sock, raw, cells=(), full_scale_counts=10000):
             "used": bool(in_window and lit),
         }
         if k < len(cells):
+            # Three-sigma envelope of the sum of four half-wave-rectified
+            # zero-mean quadrant noise samples. Display metadata only.
+            sigma = cells[k].white_noise_sigma*full_scale_counts/4 if white_noise_enabled else 0.
+            head['display_noise_floor_counts'] = int(np.ceil(sigma*(4/np.sqrt(2*np.pi)
+                + 3*np.sqrt(4*(.5-1/(2*np.pi))))))
             normal = np.asarray(cells[k].normal_body, dtype=float)
             head["boresight_body"] = (normal / np.linalg.norm(normal)).tolist()
             head["position"] = list(cells[k].position_body_m)

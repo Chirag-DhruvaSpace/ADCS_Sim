@@ -70,6 +70,10 @@ class FirmwareTests(unittest.TestCase):
                                   [-1/2/c, 0, -1/4/s], [0, 1/2/c, -1/4/s]])
             np.testing.assert_allclose(link.link.FLIGHT_WHEEL_AXES_BODY @ torq_dist, np.eye(3), atol=1e-12)
             link.received_at = link.event_at = time.monotonic()
+            # These assertions exercise UI status with fresh actuators. The
+            # cold JVM/dynamics import above can exceed command expiry.
+            link.link._wheel_received_at[0] = link.received_at
+            link.link._mtr_received_at[:] = [link.received_at]*3
             self.assertEqual(link.metadata(0, {'NadirPoint':0},np.zeros(3))['custom_pointing_status'],'green')
             link.event_at = time.monotonic()-3
             self.assertEqual(link.metadata(.5, {'NadirPoint':0},np.zeros(3))['custom_pointing_status'],'yellow')

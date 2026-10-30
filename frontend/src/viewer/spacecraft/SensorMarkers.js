@@ -12,6 +12,7 @@ export function createSensorMarkers({
   let trackerPosition = null;
   const inactiveColor = new THREE.Color(0x303947);
   const sunlightColor = new THREE.Color(0xffe600);
+  const strongSunlightColor = new THREE.Color(0xff7800);
   function createSensorLabel(text) {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
@@ -115,16 +116,25 @@ export function createSensorMarkers({
         // Skip label draw calls entirely once the text is too small to read.
         label.visible = labelOpacity > 0.001;
       }
-      const illuminated = mesh.userData.kind === 'Sun' && mesh.userData.level > 0;
       if (mesh.userData.kind === 'StarTracker') {
         // Light blue when idle; dark blue only when navigation uses a receipt.
         mesh.material.color.setHex(mesh.userData.color);
       } else if (mesh.userData.kind === 'Sun') {
-        mesh.material.color.copy(inactiveColor).lerp(sunlightColor, mesh.userData.level);
+        const light = mesh.userData.level;
+        // Display gain only: raw telemetry and firmware counts stay unchanged.
+        // No brightness jump at zero; faint light brightens gradually.
+        if (light <= 0) mesh.material.color.copy(inactiveColor);
+        else if (light < 0.5) {
+          const visibleLight = Math.pow(light / 0.5, 0.65);
+          mesh.material.color.copy(inactiveColor).lerp(sunlightColor, visibleLight);
+        } else {
+          mesh.material.color.copy(sunlightColor).lerp(strongSunlightColor, (light-0.5)/0.5);
+        }
       } else {
         mesh.material.color.setHex(mesh.userData.active ? mesh.userData.color : 0x303947);
       }
-      mesh.material.opacity = SETTINGS.sensorGlow && (mesh.userData.kind === 'Sun' ? illuminated : mesh.userData.active) ? 1 : 0.85;
+      // Opaque Sun markers keep a dark head grey even over yellow CAD faces.
+      mesh.material.opacity = mesh.userData.kind === 'Sun' ? 1 : SETTINGS.sensorGlow && mesh.userData.active ? 1 : 0.85;
       mesh.scale.setScalar(modelHolder.scale.x);
       mesh.position.copy(mesh.userData.bodyPosition).multiplyScalar(modelHolder.scale.x);
     }
