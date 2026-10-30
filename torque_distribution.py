@@ -107,33 +107,21 @@ _wheel_momentum = [np.zeros(4)]   # per-wheel angular momentum (N*m*s)
 _last_command_limited = [np.zeros(4, dtype=bool)]
 
 
-def _apply_wheel_limits(u, h):
-    """Clamps a per-wheel torque command u to what the wheels can physically
-    deliver RIGHT NOW given their current momenta h:
-
-    (1) TORQUE saturation: |u_i| <= MAX_WHEEL_TORQUE (4 mN*m, RW-40). A
-        clipped wheel still delivers its clamped value -- saturation CAPS a
-        wheel, it doesn't switch it off.
-
-    (2) MOMENTUM saturation: a wheel already AT +MAX_WHEEL_MOMENTUM (40
-        mN*m*s, i.e. spinning at max speed) cannot accelerate FURTHER in the
-        positive direction, so positive commanded torque on it is zeroed
-        (mirrored at -MAX). Backing OUT of saturation (opposite-sign torque)
-        is always allowed -- this is exactly what lets the null-space
-        desaturation pull a saturated wheel back off its limit.
-
-    Simplification (flagged, not hidden): a real wheel's torque authority
-    degrades smoothly near max speed (back-EMF / driver voltage headroom);
-    this is a hard cut at the limit, the same simplification
-    reaction_wheel_model.py's _clip_against_saturation() made.
-    """
+def _apply_wheel_limits(u, h, hold_period_s=None):
+    """u is body-reaction torque; rotor momentum obeys h_dot = -u."""
+    h = np.asarray(h, dtype=float)
     u = np.clip(u, -MAX_WHEEL_TORQUE, MAX_WHEEL_TORQUE)
-    u = np.where((h >= MAX_WHEEL_MOMENTUM) & (u > 0.0), 0.0, u)
-    u = np.where((h <= -MAX_WHEEL_MOMENTUM) & (u < 0.0), 0.0, u)
+    if hold_period_s is not None and hold_period_s > 1e-12:
+        lower = np.maximum(-MAX_WHEEL_TORQUE, (h-MAX_WHEEL_MOMENTUM)/hold_period_s)
+        upper = np.minimum(MAX_WHEEL_TORQUE, (h+MAX_WHEEL_MOMENTUM)/hold_period_s)
+        return np.clip(u, lower, upper)
+    if hold_period_s is None:
+        u = np.where((h >= MAX_WHEEL_MOMENTUM) & (u < 0.), 0., u)
+        u = np.where((h <= -MAX_WHEEL_MOMENTUM) & (u > 0.), 0., u)
     return u
 
 
-def _saturate_and_redistribute(u_ideal, tau_body_command):
+def _saturate_and_redistribute(u_ideal, tau_body_command, wheel_momentum=None, hold_period_s=None):
     """Full RW-40 saturation pass over a 4-wheel command.
 
     Returns (u, limited): u is the physically deliverable per-wheel command,
@@ -149,9 +137,9 @@ def _saturate_and_redistribute(u_ideal, tau_body_command):
     NOT protected during reallocation: when pointing authority and momentum
     housekeeping compete for the same saturated wheels, pointing wins.
     """
-    h = _wheel_momentum[0]
+    h = _wheel_momentum[0] if wheel_momentum is None else np.asarray(wheel_momentum)
 
-    u = _apply_wheel_limits(u_ideal, h)
+    u = _apply_wheel_limits(u_ideal, h, hold_period_s)
     limited = np.abs(u - u_ideal) > 1e-12
 
     if not ENABLE_SATURATION_REALLOCATION:
@@ -166,7 +154,7 @@ def _saturate_and_redistribute(u_ideal, tau_body_command):
         tau_from_limited = A[:, limited] @ u[limited]
         # Ask the free wheels to make up the remainder of the commanded torque:
         u_free_raw = _FREE_WHEEL_INVERSES[tuple(free_idx)] @ (tau_body_command - tau_from_limited)
-        u_free_lim = _apply_wheel_limits(u_free_raw, h[free_idx])
+        u_free_lim = _apply_wheel_limits(u_free_raw, h[free_idx], hold_period_s)
 
         newly_limited = np.abs(u_free_lim - u_free_raw) > 1e-12
         u[free_idx] = u_free_lim
@@ -177,7 +165,7 @@ def _saturate_and_redistribute(u_ideal, tau_body_command):
     return u, limited
 
 
-def reaction_wheel_torque_distribution(T_x, T_y, T_z):
+def reaction_wheel_torque_distribution(T_x, T_y, T_z, *, wheel_momentum=None, hold_period_s=None):
     """
     4-wheel allocation of a commanded body torque under the FULL RW-40
     saturation model. Returns the per-wheel motor torques (N*m) the cluster
@@ -211,8 +199,9 @@ def reaction_wheel_torque_distribution(T_x, T_y, T_z):
     # otherwise silently accumulate forever. tau_null drives that component
     # back toward zero, added on top of the baseline RW_Torques above (which
     # is unaffected, by construction of the null space).
-    h_null_component = np.dot(NULL_VEC, _wheel_momentum[0]) / np.dot(NULL_VEC, NULL_VEC)
-    tau_null = -K_NULL_DESAT * h_null_component * NULL_VEC
+    h = _wheel_momentum[0] if wheel_momentum is None else np.asarray(wheel_momentum)
+    h_null_component = np.dot(NULL_VEC, h) / np.dot(NULL_VEC, NULL_VEC)
+    tau_null = K_NULL_DESAT * h_null_component * NULL_VEC
 
     RW_Torques_final = RW_Torques + tau_null
 
@@ -224,48 +213,15 @@ def reaction_wheel_torque_distribution(T_x, T_y, T_z):
     # knew the wheel was full), and (b) one clipped wheel distorted the
     # achieved body torque even though the remaining 3 wheels can exactly
     # re-achieve it. Both are handled now by _saturate_and_redistribute().
-    RW_Torques_final, limited = _saturate_and_redistribute(RW_Torques_final, T_satellite)
+    RW_Torques_final, limited = _saturate_and_redistribute(RW_Torques_final, T_satellite, h, hold_period_s)
     _last_command_limited[0] = limited
 
     return RW_Torques_final
 
 
 def integrate_wheel_momentum(dt):
-    """
-    Advances the persistent wheel-momentum state by dt, using the wheel
-    torque the dynamics ACTUALLY applied over the step that just finished.
-
-    Torque source: store.rw_torques -- the dynamics writes it
-    unconditionally on every pass of rotational_equations_of_motion, in
-    EVERY mode branch: the post-saturation command in the RW modes, and
-    exact zeros in DETUMBLE and the MTR ("POINTING") mode. Reading it here
-    (instead of a private "_latest_rw_torque_commanded" box written only by
-    the allocator itself, which this replaces) fixes a real leak that box
-    had: after switching from an RW mode to an MTR mode, the box kept
-    holding the LAST RW torque command forever, so this integration kept
-    adding a stale torque every step -- silently driving the (unpowered)
-    wheels toward momentum saturation. It also guarantees the momentum
-    state integrates exactly the torque whose reaction the body actually
-    felt (the same rw_t the dynamics recombines via A @ rw_t).
-
-    MUST still be called exactly ONCE PER OUTER SIMULATION STEP (e.g. once
-    per second in satellite_flight_visualisation.py's run_simulation()
-    loop) -- NEVER from inside the ODE's right-hand-side function
-    (rotational_equations_of_motion), which solve_ivp calls a variable,
-    integrator-dependent number of times per real step (rejected trial
-    steps, internal RK stages, not necessarily in increasing time order).
-    Integrating momentum from in there would double/triple-count torque
-    within a single real second, exactly the same oversampling trap this
-    project already hit and fixed for the DADMOD magnetometer recording
-    and the MEKF's applied-torque feed -- same fix, same reasoning, applied
-    here too.
-
-    reaction_wheel_torque_distribution() itself only READS _wheel_momentum
-    (for the null-space correction and the saturation limits) -- reading it
-    many times per real second from inside the RHS is harmless, since it's
-    not being written there.
-    """
-    _wheel_momentum[0] = _wheel_momentum[0] + np.asarray(store.rw_torques, dtype=float) * dt
+    """Compatibility helper for held commands; live runs commit integrated h."""
+    _wheel_momentum[0] = _wheel_momentum[0] - np.asarray(store.rw_torques, dtype=float) * dt
 
     # Hard clip to the saturation limit -- prevents the tracked state itself
     # from reporting an unphysical value beyond what a real wheel could ever
@@ -277,6 +233,14 @@ def integrate_wheel_momentum(dt):
     # clipping sharply) -- flagged as a simplification, not a complete
     # saturation model.
     _wheel_momentum[0] = np.clip(_wheel_momentum[0], -MAX_WHEEL_MOMENTUM, MAX_WHEEL_MOMENTUM)
+
+
+def set_wheel_momentum(momentum):
+    """Commit the accepted coupled-state result, never an RHS stage."""
+    h = np.asarray(momentum, dtype=float).reshape(4)
+    if not np.all(np.isfinite(h)) or np.any(np.abs(h) > MAX_WHEEL_MOMENTUM+1e-8):
+        raise ValueError('Invalid integrated wheel momentum')
+    _wheel_momentum[0] = np.clip(h, -MAX_WHEEL_MOMENTUM, MAX_WHEEL_MOMENTUM).copy()
 
 
 def get_wheel_momentum():

@@ -1,3 +1,4 @@
+import { sunCellLabel } from '../services/sensorLabels.js';
 /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
 import { createImageryTiles } from './imagery/ImageryTiles.js';
 import { createSensorMarkers } from './spacecraft/SensorMarkers.js';
@@ -959,9 +960,10 @@ export async function startSimulationEngine(configuration) {
         const tbl = $("sen-sun-cells");
         if (tbl) {
           let rows = "<tr><th>cell</th><th>out %</th><th>ADC</th><th>cone°</th><th>status</th></tr>";
-          for (const c of data.sun_arr_cells) {
+          for (const [index,c] of data.sun_arr_cells.entries()) {
             const st = c.shadowed ? "<span class=sens-bad>SHADOW</span>" : !c.in_fov ? "out-FOV" : c.eclipse_factor < 1 ? "<span class=sens-warn>ECLIPSE</span>" : c.used ? "<span class=sens-ok>used</span>" : "in-FOV";
-            rows += `<tr><td>${c.name}</td><td>${c.output_pct.toFixed(1)}</td>` + `<td>${c.adc_counts}</td><td>${c.angle_deg != null ? c.angle_deg.toFixed(1) : "--"}</td>` + `<td>${st}</td></tr>`;
+            const label=sunCellLabel(c,index).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+            rows += `<tr><td>${label}</td><td>${c.output_pct.toFixed(1)}</td>` + `<td>${c.adc_counts}</td><td>${c.angle_deg != null ? c.angle_deg.toFixed(1) : "--"}</td>` + `<td>${st}</td></tr>`;
           }
           tbl.innerHTML = rows;
         }
@@ -1232,7 +1234,11 @@ export async function startSimulationEngine(configuration) {
           $("alpha_y").textContent = "Y acceleration rate: " + latestAY.toFixed(6) + "°/s2";
           $("alpha_z").textContent = "Z acceleration rate: " + latestAZ.toFixed(6) + "°/s2";
           if (data.srp_acceleration_eci_x !== undefined) {
-            loadSpacecraftModel(data.spacecraft_model_url, data.center_of_mass_body_m);
+            loadSpacecraftModel(data.spacecraft_model_url, data.center_of_mass_body_m, {
+              scale: data.spacecraft_model_scale_to_m,
+              recenter: data.spacecraft_model_recenter,
+              trackerNode: data.spacecraft_tracker_node
+            });
             if (data.spacecraft_configuration) $("spacecraft-configuration").textContent = `Configuration: ${data.spacecraft_configuration} · ${data.spacecraft_mass_kg} kg`;
             if (data.disturbance_srp_unm !== undefined) $("srp_torque").textContent = `SRP torque: ${data.disturbance_srp_unm.toFixed(3)} µN·m`;
             $("srp_acceleration").textContent = "SRP acceleration (ECI): [" + data.srp_acceleration_eci_x.toExponential(3) + ", " + data.srp_acceleration_eci_y.toExponential(3) + ", " + data.srp_acceleration_eci_z.toExponential(3) + "] m/s²";
@@ -1748,12 +1754,13 @@ export async function startSimulationEngine(configuration) {
   let bootFaded = false;
   let lastT = performance.now();
   let lastCloudTimeMs = null;
+  const framePeriodMs = 1000 / CONFIG.MAX_FPS;
   function animate(now) {
     requestAnimationFrame(animate);
+    if (document.hidden || now - lastT < framePeriodMs - 0.5) return;
     const frameDt = (now - lastT) / 1000 || 0.016;
     const dt = Math.min(0.1, frameDt);
     lastT = now;
-    if (document.hidden) return;
     if (overviewView) overviewDistance = cosmicExplorer.updateZoom(dt);
     smoothSatellite(dt);
     applyChaseAttitudeLock();

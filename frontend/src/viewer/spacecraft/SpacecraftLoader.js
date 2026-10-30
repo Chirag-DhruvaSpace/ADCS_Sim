@@ -3,6 +3,7 @@ import { reportLoading } from '../../services/loadingProgress.js';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { batchStaticCADAsync } from './cadBatches.js';
+import { disposeModel } from './disposeModel.js';
 export function createSpacecraftLoader({
   CONFIG,
   DRACOLoader,
@@ -39,37 +40,39 @@ export function createSpacecraftLoader({
   /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
   let loadedModelUrl = null;
   let modelLoadVersion = 0;
-  function loadSpacecraftModel(url, com = CONFIG.MODEL_COM) {
-    if (!url || url === loadedModelUrl) return;
-    loadedModelUrl = url;
+  function loadSpacecraftModel(url, com = CONFIG.MODEL_COM, options = {}) {
+    const scale = options.scale ?? CONFIG.MODEL_SCALE_TO_M ?? 1;
+    const recenter = options.recenter ?? CONFIG.MODEL_RECENTER ?? false;
+    const trackerNode = options.trackerNode ?? CONFIG.STAR_TRACKER_MODEL_NODE ?? '';
+    const identity = JSON.stringify([url, com, scale, recenter, trackerNode]);
+    if (!url || identity === loadedModelUrl) return;
+    loadedModelUrl = identity;
     const version = ++modelLoadVersion;
     gltfLoader.load(url, async gltf => {
-      if (version !== modelLoadVersion) return;
+      if (version !== modelLoadVersion) { disposeModel(gltf.scene); return; }
       reportLoading(65, 'Preparing spacecraft geometry');
       // Read the optical aperture before batching removes individual CAD nodes.
-      // Both deployed and stowed exports identify this same baffle plate.
       gltf.scene.updateMatrixWorld(true);
+      const trackerParts = [];
       gltf.scene.traverse(part => {
-        if (part.isMesh && part.name.includes('SGT-ARC-0010-Baffle_plate')) {
-          gltf.scene.userData.starTrackerPositionBodyM = new THREE.Box3()
-            .setFromObject(part).getCenter(new THREE.Vector3()).toArray();
-        }
+        if (trackerNode && (part.name === trackerNode || part.name.endsWith(trackerNode))) trackerParts.push(part);
       });
+      if (trackerParts.length === 1) gltf.scene.userData.starTrackerPositionBodyM = new THREE.Box3()
+        .setFromObject(trackerParts[0]).getCenter(new THREE.Vector3()).multiplyScalar(CONFIG.MODEL_SCALE*scale).toArray();
       window.spacecraftBatchStats = await batchStaticCADAsync(gltf.scene);
-      if (version !== modelLoadVersion) return;
+      if (version !== modelLoadVersion) { disposeModel(gltf.scene); return; }
+      for (const child of modelHolder.children) disposeModel(child);
       modelHolder.clear();
       modelMats.length = 0;
-      const legacy = /\/P-30XL(?:_orignal)?\.glb(?:$|[?#])/.test(url);
-      gltf.scene.scale.setScalar(CONFIG.MODEL_SCALE * (legacy ? .001 : 1));
-      if (legacy) {
-        // The original model is millimetres and has an offset export origin.
+      gltf.scene.scale.setScalar(CONFIG.MODEL_SCALE*scale);
+      if (recenter) {
         gltf.scene.updateMatrixWorld(true);
         const center = new THREE.Box3().setFromObject(gltf.scene).getCenter(new THREE.Vector3());
         gltf.scene.position.sub(center);
         const trackerPosition = gltf.scene.userData.starTrackerPositionBodyM;
         if (trackerPosition) {
           gltf.scene.userData.starTrackerPositionBodyM = new THREE.Vector3(...trackerPosition)
-            .multiplyScalar(CONFIG.MODEL_SCALE * .001).sub(center).toArray();
+            .sub(center).toArray();
         }
       }
       gltf.scene.position.sub(new THREE.Vector3(...com));
@@ -94,8 +97,10 @@ export function createSpacecraftLoader({
       reportLoading(80, 'Spacecraft ready');
       applySettings();
     }, event => {
+      if (version !== modelLoadVersion) return;
       if (event.total > 0) reportLoading(20 + 42 * event.loaded / event.total, 'Loading spacecraft');
     }, err => {
+      if (version !== modelLoadVersion) return;
       window.dispatchEvent(new CustomEvent('viewer-load-error', {detail: 'Spacecraft model could not load. Reload to retry.'}));
       console.warn('CAD GLB failed:', url, err);
       loadedModelUrl = null;

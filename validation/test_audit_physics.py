@@ -22,6 +22,9 @@ def firmware_plant():
     dummy_socket = lambda *a, **k: SimpleNamespace(bind=lambda *a: None, setblocking=lambda *a: None)
     with patch('socket.socket', dummy_socket):
         spec.loader.exec_module(module)
+    import time
+    module._wheel_received_at[:] = [time.monotonic()]*4
+    module._mtr_received_at[:] = [time.monotonic()]*3
     return module
 
 

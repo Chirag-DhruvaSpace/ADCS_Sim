@@ -382,7 +382,7 @@ class SimulatedGPS:
     It NEVER touches the orbit propagator -- truth comes in as arguments.
     """
 
-    def __init__(self, orbit_provider, config) -> None:
+    def __init__(self, orbit_provider, config, *, record_history=True) -> None:
         self.cfg = config
         # Frames/epoch are REUSED from the provider -- no new frames created.
         self.epoch_utc = orbit_provider.epoch_utc
@@ -439,7 +439,7 @@ class SimulatedGPS:
         self.step_count = 0             # constellation-change jumps so far
 
         # In-memory records for the validation harness.
-        self.records = []
+        self.records = [] if record_history else collections.deque(maxlen=2)
         self._geoid = None
 
     def _simulate_receiver_measurement(self, t_seconds, r_eci_m, v_eci_mps):

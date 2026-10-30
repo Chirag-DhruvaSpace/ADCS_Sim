@@ -54,7 +54,7 @@ _orbit_provider = engine_bridge.get_orbit_provider(epoch_utc)
 # satellite_parameters.yaml: gps.enabled and sensor_profiles.gps.
 from simulate_gps import SimulatedGPS
 from compute_simulated_position import GpsNav
-_gps_sim = SimulatedGPS(_orbit_provider, config.GPS_SIM) if config.GPS_SIM.enabled else None
+_gps_sim = SimulatedGPS(_orbit_provider, config.GPS_SIM, record_history=False) if config.GPS_SIM.enabled else None
 _gps_nav = GpsNav(*_orbit_provider.initial_state())   # launch-vehicle-provided start
 
 # ---- Independent simulated sensors (gyroscope + magnetometer) -- see simulate_gyroscope.py and simulate_magnetometer.py --------
@@ -193,21 +193,29 @@ def _acquire_imu(t, q_sensor, omega_body, B_eci):
 def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.control_loop_period_s):
     global _telemetry_sequence, _gyroscope, _magnetometer, _gyro_units, _mag_units, _sun_sensor
 
+    from engine.simulation.sensor_schedule import validate_sensor_schedule
+    validate_sensor_schedule(float(dt), config.IMU_SIM, config.GPS_SIM,
+                             firmware=config.POINTING['strategy'] == 'firmware_sitl')
     firmware = None
+    if config.POINTING['strategy'] != 'firmware_sitl':
+        srd.sun_pointing.validate_gain_schedule()
     if config.POINTING['strategy'] == 'firmware_sitl':
         from firmware_sitl_adapter import (FirmwareLink, with_board_magnetometer, with_firmware_imu_rate,
-                                           with_adis16545_gyro, without_fine_sun_sensor_albedo)
+                                           with_adis16545_gyro, integrate_firmware_step, FIRMWARE_IMU_RATE_HZ, imu_substep_times)
         firmware = FirmwareLink()
         # SITL ONLY: the magnetometer carries the real board's error, which
         # the firmware's calibration removes (see with_board_magnetometer),
         # the gyro carries the ADIS16545's datasheet random errors (see
         # with_adis16545_gyro), and both chips sample at the flight imuTask
-        # rate, 100 Hz (see with_firmware_imu_rate; the extra samples inside
-        # each physics step are taken after the step is integrated, below).
+        # rate, 100 Hz. Captures and command polls are paced every 10 ms.
         # Both chips are rebuilt in the import-time order from freshly seeded
         # generators.
-        rate_config = with_adis16545_gyro(with_firmware_imu_rate(config.IMU_SIM))
-        board_config = with_board_magnetometer(rate_config)
+        rate_config = with_firmware_imu_rate(config.IMU_SIM)
+        if config.SIMULATION.firmware_gyro_preset == 'adis16545':
+            rate_config = with_adis16545_gyro(rate_config)
+        board_config = (with_board_magnetometer(rate_config)
+                        if config.SIMULATION.firmware_board_magnetometer_calibration else rate_config)
+        validate_sensor_schedule(float(dt), board_config, config.GPS_SIM, firmware=True)
         gyro_random = np.random.default_rng(_gyro_seed)
         mag_random = gyro_random if _gyro_seed == _mag_seed else np.random.default_rng(_mag_seed)
         _gyroscope = SimulatedGyroscope(rate_config, record_history=False, random_generator=gyro_random)
@@ -216,11 +224,24 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                        for index, unit in enumerate(rate_config.gyros) if unit.enabled]
         _mag_units = [(unit, SimulatedMagnetometer(board_config.unit_config('mag', unit, index), record_history=False))
                       for index, unit in enumerate(board_config.magnetometers) if unit.enabled]
-        # SITL ONLY: no Earth albedo on the fine FSS heads (see
-        # without_fine_sun_sensor_albedo for why, and what it hides).
-        if _sun_sensor is not None:
-            _sun_sensor = SimulatedSunSensorArray(without_fine_sun_sensor_albedo(config.IMU_SIM).sun_array,
-                                                  record_history=False)
+        firmware.sensor_configuration = {
+            'gyro_preset': config.SIMULATION.firmware_gyro_preset,
+            'board_magnetometer_calibration': config.SIMULATION.firmware_board_magnetometer_calibration,
+            'gyro_units': [{'rate_hz': sensor.cfg.gyro_update_rate_hz,
+                            'white_noise_sigma_rad_s': sensor.cfg.gyro_white_noise_sigma_rad_s,
+                            'bias_sigma_rad_s': sensor.cfg.gyro_bias_sigma_rad_s,
+                            'wander_sigma_rad_s': sensor.cfg.gyro_wander_sigma_rad_s}
+                           for sensor in ([s for _, s in _gyro_units] or [_gyroscope])],
+            'magnetometer_units': [{'rate_hz': sensor.cfg.mag_update_rate_hz,
+                                    'fixed_bias_t': sensor.cfg.mag_fixed_bias_t,
+                                    'response_matrix': sensor.cfg.mag_response_matrix}
+                                   for sensor in ([s for _, s in _mag_units] or [_magnetometer])],
+            'sun_albedo': bool(_sun_sensor and _sun_sensor.cfg.enable_albedo),
+            'fine_sun_albedo': bool(_sun_sensor and _sun_sensor.cfg.enable_fine_albedo),
+            'sun_self_shadowing': bool(_sun_sensor and _sun_sensor.cfg.enable_self_shadowing),
+        }
+        # Sun sensor physics honors the selected YAML profile, including albedo.
+        imu_substep_times(0., float(dt))  # Validate the schedule before sending packets.
     t = 0.0
     tf = float(tf)
     dt = float(dt)
@@ -229,11 +250,16 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     # ADCS data source, matching the validated main.py engine usage.
     X_trans = state0.copy()   # [r, v]
     X_rot   = srd.y0.copy()   # [q, w]
+    if firmware is None:
+        td.set_wheel_momentum(config.REACTION_WHEELS.initial_momentum_Nms)
+    else:
+        firmware.link.set_wheel_momentum(config.REACTION_WHEELS.initial_momentum_Nms)
 
 
     utc_time = epoch_utc 
 
     from engine.simulation.pacing import SimulationPacer
+    _orbit_provider.prepare_runtime()
     # Firmware uses a real-time clock, so keep its plant at 1x. Accelerating
     # only the plant reduces firmware control updates per simulated second.
     pacer = SimulationPacer(1.0 if firmware is not None else config.SIMULATION.speed)
@@ -245,7 +271,13 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
 
         if firmware is None:
             pacer.poll_speed(speed_path, t)
-        pacer.wait_until(t)
+        if firmware is None:
+            pacer.wait_until(t)
+        else:
+            # Prepare the upcoming capture while the previous accepted
+            # interval's remaining wall-time budget is available. Send only
+            # after the acquisition deadline below.
+            firmware.schedule_lag_s = 0.
 
         # ---- ENGINE-BASED TRANSLATION SOURCE ----
         r_vec, v_vec = _orbit_provider.state_at(t)
@@ -296,7 +328,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # The Sun's ECI direction from the GPS clock -- needed by the IMU's
         # coarse sun sensor and the onboard attitude estimator (CLAUDE.md §5:
         # the direction itself needs no sensor, only the time).
-        sun_eci = _orbit_provider.sun_position_eci()
+        sun_eci = _orbit_provider.sun_position_eci() - r_vec
         sun_eci = sun_eci / np.linalg.norm(sun_eci)
     
         # ---- IMU KNOWLEDGE (simulated gyro + magnetometer; see simulate_gyroscope.py and simulate_magnetometer.py)
@@ -339,9 +371,10 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             # software computes the same model onboard -- this is not the
             # truth channel, it is a model + the sensor's own reading).
             # SITL uses the external firmware's own attitude estimate.
-            B_model_eci = _orbit_provider.magnetic_field_eci(t, r_vec_nav)
             if firmware is None:
-                _imu_nav.estimate(t, B_model_eci, sun_eci)
+                B_model_eci = _orbit_provider.magnetic_field_eci(t, r_vec_nav)
+                from sun_vector_eci import sun_vector_eci
+                _imu_nav.estimate(t, B_model_eci, sun_vector_eci(utc_time, r_vec_nav))
             _processed_imu = _imu_nav.get_processed_data()
             if config.IMU_SIM.use_mag_for_control:
                 B_sensor_eci = srd._dcm_bi_from_q(_att_est.q_eci) @ _imu_nav.B_body()
@@ -363,11 +396,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         
         # Environment is sampled once per 0.1 s control tick; facet incidence
         # and moment arms are re-evaluated at every attitude RK stage.
-        tick_sun = _orbit_provider.sun_position_eci()
-        from org.hipparchus.geometry.euclidean.threed import Vector3D
-        air = _orbit_provider._atmosphere.getVelocity(_orbit_provider.clock.absolute_date(),
-            Vector3D(*map(float, r_vec)), _orbit_provider.inertial_frame)
-        tick_air = np.array([air.getX(), air.getY(), air.getZ()])
+        tick_sun, _, _, tick_air = _orbit_provider._surface_environment(t, r_vec, v_vec)
         facet_cache = [None, None, None]
         def facets_at(stage_t, stage_q):
             # SRP and drag request the same RK-stage geometry; evaluate it once.
@@ -380,6 +409,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         drag_torque_for_step = lambda stage_t, stage_q: facets_at(stage_t, stage_q).drag_torque_body_nm
 
         if firmware is not None:
+            # Environment/acquisition preparation may have missed the deadline;
+            # anchor this capture before transmission, not after the first solve.
+            firmware.schedule_lag_s = max(firmware.schedule_lag_s,
+                pacer.wait_firmware_sample(t, 1/FIRMWARE_IMU_RATE_HZ))
+            if t > 0:
+                firmware.link.send_rw_telemetry()
             # Transform the inertial field with the transpose of body-to-ECI.
             # This tick's raw
             # GPS fix, FSS replies and gyro/magnetometer words go out with the
@@ -388,63 +423,47 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 srd._dcm_bi_from_q(X_rot[:4]).T @ B_eci,
                 gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells,
                 gyro=_gyro_msg, mag=_mag_msg,
-                star=_star_msg, epoch_unix_s=epoch_utc.timestamp(), control_period_s=dt)
+                star=_star_msg, epoch_unix_s=epoch_utc.timestamp(), control_period_s=1/FIRMWARE_IMU_RATE_HZ)
             srd.set_firmware_tick(wheels, dipole)
         custom_tick_command = cs.get_pointing_command()
         srd.set_custom_tick_target(custom_tick_command['desired_quaternion'])
-        try:
-            sol_rot = solve_ivp(
-                lambda t, y: srd.rotational_equations_of_motion(
-                    t, y, B_sensor_eci, r_vec_nav, v_vec_nav,
-                    truth_field_eci=B_eci, truth_position_eci=r_vec, truth_velocity_eci=v_vec,   # ADCS navigates on GPS knowledge;
+        def solve_segment(start, end, state):
+            if len(state) == 7:
+                momentum = td.get_wheel_momentum() if firmware is None else firmware.link.get_wheel_momentum()
+                state = np.r_[state, momentum]
+            return solve_ivp(
+                lambda stage_t, y: srd.rotational_equations_of_motion(
+                    stage_t, y, B_sensor_eci, r_vec_nav, v_vec_nav,
+                    truth_field_eci=B_eci, truth_position_eci=r_vec, truth_velocity_eci=v_vec,
                     external_torque_body=srp_torque_for_step if cd.DISTURBANCES_ENABLED and sp.ENABLE_SRP and sp.ENABLE_SRP_TORQUE else None,
                     aerodynamic_torque_body=drag_torque_for_step,
-                ),                                             # controllers sense the B_sensor_eci field above
-                (t, t + dt),
-                X_rot,
+                    wheel_time_remaining=end-stage_t),
+                (start, end), state,
                 rtol=config.SIMULATION.attitude_integrator_rel_tolerance,
                 atol=config.SIMULATION.attitude_integrator_abs_tolerance,
-                dense_output=firmware is not None,
-            )
+                method='RK23' if firmware is not None else 'RK45',
+                first_step=end-start if firmware is not None else None)
+        try:
+            if firmware is None:
+                sol_rot = solve_segment(t, t+dt, X_rot)
+                if not sol_rot.success:
+                    raise RuntimeError(f'Attitude integration failed: {sol_rot.message}')
+                X_rot_next = sol_rot.y[:7, -1].copy()
+                X_rot_next[:4] /= np.linalg.norm(X_rot_next[:4])
+                td.set_wheel_momentum(sol_rot.y[7:11, -1])
+            else:
+                X_rot_next = integrate_firmware_step(t, dt, X_rot, solve_segment,
+                    firmware, pacer,
+                    lambda sample_t, q, w: _acquire_imu(sample_t, q, w, B_eci),
+                    srd.set_firmware_tick, defer_endpoint_publish=True)[:7]
         finally:
             srd.set_custom_tick_target(None)
 
-        # SITL: the rest of this step's 100 Hz IMU samples (the one at t went
-        # out with firmware.tick() above). Attitude and rate at each 10 ms point
-        # come from the integrator's own continuous solution over this step, so
-        # the firmware's estimator sees the motion the plant actually made.
-        # The field is held at its tick value; it changes by nT over 0.1 s.
-        if firmware is not None and config.IMU_SIM.enabled:
-            from firmware_sitl_adapter import imu_substep_times
-            for t_sample in imu_substep_times(t, dt):
-                y_sample = sol_rot.sol(t_sample)
-                q_sample = y_sample[:4] / np.linalg.norm(y_sample[:4])
-                firmware.send_imu(*_acquire_imu(t_sample, q_sample,
-                                                y_sample[4:7], B_eci))
+        # Publish tick-start measurements; commit the endpoint after publication.
+        X_rot[:4] /= np.linalg.norm(X_rot[:4])
 
-
-        # Publish measurements and truth at the same sampling epoch t.
-        # Commit the propagated state only after publishing this tick.
-        X_rot_next = sol_rot.y[:, -1].copy()
-        X_rot_next[:4] /= np.linalg.norm(X_rot_next[:4])
-        q = X_rot[:4]
-        X_rot[:4] = q / np.linalg.norm(q)
-
-        # Advance the null-space wheel-momentum desaturation state by this
-        # chunk's duration. Done here (once per OUTER step), same reasoning
-        # as the sun-pointing reference governor just below: this MUST NOT
-        # be called from inside rotational_equations_of_motion's ODE
-        # right-hand-side, which solve_ivp evaluates an integrator-dependent
-        # number of times per chunk (rejected trial steps, internal RK
-        # stages, not necessarily in increasing time order) -- integrating
-        # momentum in there would double/triple-count torque within a
-        # single real second. td.reaction_wheel_torque_distribution() itself
-        # (called from inside the RHS, once per mode branch) only READS the
-        # current momentum state to compute the null-space correction --
-        # that's safe to do many times per step; only the WRITE needs to
-        # happen exactly once, here.
-        if firmware is None:
-            td.integrate_wheel_momentum(dt)
+        # Rotor momentum is integrated with attitude and committed only from
+        # accepted solver endpoints. There is no second outer-step impulse.
 
         # ---- RW SATURATION READOUT (once per outer step, after the momentum
         # state has advanced) ----
@@ -468,8 +487,6 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         # on solver internals instead of real elapsed time. See periodic_gain_sun_pointing.py.
         srd.sun_pointing.step_governor(dt)
 
-        if firmware is not None:
-            firmware.finish_tick(dt)
 
         # Physical integration, sensor sampling, momentum and reference governor
         # always advance. Display calculations run only when publication is due.
@@ -537,7 +554,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         
         # ---- SUN DIRECTION (for the sun-pointing line in the viewer) ----
         # Sun unit vector in ECI, converted to ECEF (Cesium's world frame is ECEF-based).
-        sun_eci = _orbit_provider.sun_position_eci()
+        sun_eci = _orbit_provider.sun_position_eci() - r_vec
         sun_eci = sun_eci / np.linalg.norm(sun_eci)
         sun_ecef = _orbit_provider.vector_eci_to_ecef(sun_eci, t)
         sun_ecef = sun_ecef / np.linalg.norm(sun_ecef)
@@ -780,6 +797,9 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             "panels_deployed": config.SPACECRAFT.panels_deployed,
             "spacecraft_mass_kg": config.MASS_KG,
             "spacecraft_model_url": config.SPACECRAFT.model_url,
+            "spacecraft_model_scale_to_m": config.SPACECRAFT.model_scale_to_m,
+            "spacecraft_model_recenter": config.SPACECRAFT.model_recenter,
+            "spacecraft_tracker_node": config.SPACECRAFT.star_tracker_model_node,
             "center_of_mass_body_m": list(config.GEOMETRY.center_of_mass_body_m),
             "inertia_tensor_kg_m2": config.SPACECRAFT.inertia_matrix.tolist(),
             "srp_torque_body_x": float(srp_result.torque_body_nm[0]),
@@ -993,7 +1013,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                     1 for cell in _sun_rec.cells if cell.used and sun_solution_current)
                 data_to_send["sun_arr_cells_total"] = int(len(_sun_rec.cells))
                 data_to_send["sun_arr_cells"] = [
-                    {"name": c.name,
+                    {"name": c.name, "fss_id": f'FSS{index+1}',
                      "output_pct": float(c.output_pct),
                      "adc_counts": int(c.adc_counts),
                      "angle_deg": (None if c.angle_deg is None else float(c.angle_deg)),
@@ -1001,7 +1021,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                      "shadowed": _sun_diagnostic(c.name, 'shadowed'), "saturated": bool(c.saturated),
                      "eclipse_factor": _sun_diagnostic(c.name, 'eclipse_factor_applied'),
                      "albedo_pct": _sun_diagnostic(c.name, 'albedo_fraction', 100.0)}
-                    for c in _sun_rec.cells]
+                    for index, c in enumerate(_sun_rec.cells)]
                 data_to_send["sun_arr_method"] = str(_sun_rec.method)
                 data_to_send["sun_arr_eclipse_factor"] = (
                     _sun_diagnostic(_sun_rec.cells[0].name, 'eclipse_factor_applied') if _sun_rec.cells else None)
@@ -1130,7 +1150,11 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 'Inertial frame': 'EME2000 (J2000)',
                 'Sun ephemeris': type(_orbit_provider._sun_ephemeris).__name__,
                 'Moon ephemeris': 'Meeus J2000',
-                'Magnetic field': type(_orbit_provider.magnetic_field).__name__.replace('Orekit', 'Orekit '),
+                'Magnetic field': 'Orekit '+_orbit_provider.magnetic_field.model_name,
+                'Orekit data': str(config.MODEL_DATA.orekit_data_path),
+                'Space weather pattern': config.MODEL_DATA.space_weather_file_pattern,
+                'Facet shadows': ('JVM accelerated' if _orbit_provider._surface_model._native_visibility is not None else 'NumPy fallback'),
+                'Magnetic gain design': srd.sun_pointing._schedule_status or 'Not used in firmware mode',
             },
         )
 
@@ -1156,3 +1180,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
 
 
         # ---- REAL-TIME SYNC ----
+
+    if firmware is not None:
+        pacer.wait_firmware_sample(t, 1/FIRMWARE_IMU_RATE_HZ)
+        firmware.link.send_rw_telemetry()

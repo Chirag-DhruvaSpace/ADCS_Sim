@@ -11,7 +11,7 @@ from engine.math.vector3 import Vector3
 class OrekitIGRF:
     """Time-varying IGRF field queried through Orekit's geomagnetic model."""
 
-    def __init__(self, earth_shape, inertial_frame, earth_fixed_frame) -> None:
+    def __init__(self, earth_shape, inertial_frame, earth_fixed_frame, model_name=None) -> None:
         from org.orekit.models.earth import GeoMagneticFieldFactory
 
         self.earth_shape = earth_shape
@@ -19,6 +19,12 @@ class OrekitIGRF:
         self.earth_fixed_frame = earth_fixed_frame
         self._factory = GeoMagneticFieldFactory
         self._models: dict[float, object] = {}
+        if model_name is None:
+            from satellite_parameters import MODEL_DATA
+            model_name = MODEL_DATA.magnetic_model
+        if model_name not in ('WMM', 'IGRF'):
+            raise ValueError('Unsupported magnetic model: '+str(model_name))
+        self.model_name = model_name
 
     @staticmethod
     def _decimal_year(utc_dt: datetime) -> float:
@@ -39,10 +45,8 @@ class OrekitIGRF:
             # The repository's WMM resource covers the current operational
             # epoch; keep IGRF available for historical dates through Orekit's
             # own validity selection rather than embedding coefficients here.
-            try:
-                model = self._factory.getIGRF(float(decimal_year))
-            except Exception:
-                model = self._factory.getWMM(float(decimal_year))
+            getter = self._factory.getWMM if self.model_name == 'WMM' else self._factory.getIGRF
+            model = getter(float(decimal_year))
             self._models[model_year] = model
 
         elements = model.calculateField(

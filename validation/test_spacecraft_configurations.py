@@ -121,6 +121,10 @@ def test_advanced_flag_and_mode_are_independent(tmp_path):
     basic['use_advanced_satellite_model'] = True
     basic['spacecraft']['panels_deployed'] = True
     advanced['panels_deployed'] = False
+    # The isolated YAML copy still points to the real, configured test assets.
+    for mode in advanced['configurations'].values():
+        if mode['spacecraft'].get('model_file'):
+            mode['spacecraft']['model_file'] = str((Path(config.__file__).parent / mode['spacecraft']['model_file']).resolve())
     source = tmp_path / 'satellite_parameters.yaml'
     source.write_text(yaml.safe_dump(basic), encoding='utf-8')
     (tmp_path/'advanced_satellite_parameters.yaml').write_text(yaml.safe_dump(advanced), encoding='utf-8')

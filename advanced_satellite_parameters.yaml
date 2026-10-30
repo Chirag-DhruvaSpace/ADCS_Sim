@@ -23,7 +23,10 @@ configurations:
       - [-0.00685571, -0.01546644, 1.0857535]
       drag_reference_area_m2: 0.30584820275100444
       srp_reference_area_m2: 0.30584820275100444
-      model_url: /assets/models/P-30XL-stowed.glb
+      model_file: frontend/assets/models/P-30XL-stowed.glb
+      model_scale_to_m: 1.0
+      model_recenter: false
+      star_tracker_model_node: SGT-ARC-0010-Baffle_plate
     geometry:
       center_of_mass_body_m: [-0.01682, -0.01421, -0.12967]
       surfaces:
@@ -398,6 +401,7 @@ configurations:
         center_body_m: [0.0, 0.0, -0.17]
         half_extents_m: [0.18, 0.21, 0.17]
       - name: panel-1:SPPXPBSPB001_v3_04_02_2026
+        sensor_model_node: SPPXPBSPB001_v3_04_02_2026
         center_body_m: [-0.006018999999999969, -5.999999999825589e-06, -0.34422192081464875]
         half_extents_m: [0.1720000000000001, 0.19650000000000006, 0.010009519628015578]
       - name: panel-2:SPPXMOSPD21002
@@ -460,7 +464,10 @@ configurations:
       - [0.0144817, -0.00581086, 1.83157276]
       drag_reference_area_m2: 0.7154396341127507
       srp_reference_area_m2: 0.7154396341127507
-      model_url: /assets/models/P-30XL-deployed.glb
+      model_file: frontend/assets/models/P-30XL-deployed.glb
+      model_scale_to_m: 1.0
+      model_recenter: false
+      star_tracker_model_node: SGT-ARC-0010-Baffle_plate
     geometry:
       center_of_mass_body_m: [-0.01855, -0.01489, -0.16821]
       surfaces:
@@ -836,6 +843,7 @@ configurations:
         center_body_m: [0.0, 0.0, -0.17]
         half_extents_m: [0.18, 0.21, 0.17]
       - name: panel-1:SPPXPBSPB001_v3_04_02_2026
+        sensor_model_node: SPPXPBSPB001_v3_04_02_2026
         center_body_m: [-0.006018999999999969, -5.999999999825589e-06, -0.34422192081464875]
         half_extents_m: [0.1720000000000001, 0.19650000000000006, 0.010009519628015578]
       - name: panel-2:SPPXMOSPD21002

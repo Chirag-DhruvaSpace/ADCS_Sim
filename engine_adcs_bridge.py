@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from collections import OrderedDict
 
 import numpy as np
 import satellite_parameters as config
@@ -54,6 +55,7 @@ class EngineOrbitProvider:
         self.clock.set_epoch(self._to_absolute_date(self.epoch_utc))
         self._epoch_date = self._to_absolute_date(self.epoch_utc)
         self._dense = None
+        self._environment_cache = OrderedDict()
         self._dense_generator = None
         self._dense_start = self._dense_end = 0.0
         self._attitude_time = 0.0
@@ -109,6 +111,7 @@ class EngineOrbitProvider:
         ensure_initialized()
         from org.orekit.time import AbsoluteDate, TimeScalesFactory
 
+        utc_dt = utc_dt.astimezone(timezone.utc)
         return AbsoluteDate(
             utc_dt.year,
             utc_dt.month,
@@ -253,6 +256,25 @@ class EngineOrbitProvider:
         self.clock.time = target
         return np.array([p.getX(),p.getY(),p.getZ()]), np.array([v.getX(),v.getY(),v.getZ()])
 
+    def prepare_runtime(self):
+        """Initialize native models before starting a real-time packet clock.
+
+        This prepares resources only; it neither propagates the orbit nor
+        advances a sensor or its random stream.
+        """
+        settings = config.SIMULATION
+        self.universe.integrator_config = IntegratorConfig(
+            min_step=settings.orbit_integrator_min_step_s,
+            max_step=settings.orbit_integrator_max_step_s,
+            abs_tolerance=settings.orbit_integrator_abs_tolerance,
+            rel_tolerance=settings.orbit_integrator_rel_tolerance)
+        self.universe._ensure_propagator(self.spacecraft)
+        t = float(self.clock.time)
+        position = np.array([self.spacecraft.position.x, self.spacecraft.position.y, self.spacecraft.position.z])
+        velocity = np.array([self.spacecraft.velocity.x, self.spacecraft.velocity.y, self.spacecraft.velocity.z])
+        self._surface_environment(t, position, velocity)
+        self.magnetic_field_eci(t, position)
+
     def magnetic_field_eci(self, elapsed_seconds: float, position_eci_m=None):
         """Return the Orekit IGRF field in EME2000, in tesla."""
         if position_eci_m is None:
@@ -295,7 +317,15 @@ class EngineOrbitProvider:
         # exp(Omega dt/2) uses exactly the attitude ODE multiplication.
         return np.array([[d,-a,-b,-c],[a,d,c,-b],[b,-c,d,a],[c,b,-a,d]]) @ self._attitude_q
 
-    def surface_result(self, elapsed_seconds, position_eci_m, velocity_eci_mps, quaternion):
+    def _surface_environment(self, elapsed_seconds, position_eci_m, velocity_eci_mps):
+        # Environment depends on epoch and PV, not attitude. Never reuse a
+        # lighting/density query for another time or another spacecraft state.
+        position_eci_m = np.asarray(position_eci_m, dtype=float).reshape(3)
+        velocity_eci_mps = np.asarray(velocity_eci_mps, dtype=float).reshape(3)
+        key = (float(elapsed_seconds), position_eci_m.tobytes(), velocity_eci_mps.tobytes())
+        if key in self._environment_cache:
+            self._environment_cache.move_to_end(key)
+            return self._environment_cache[key]
         Vector3D, CartesianOrbit, SpacecraftState, PVCoordinates = self._surface_java
         date = self._epoch_date.shiftedBy(float(elapsed_seconds))
         position = Vector3D(*map(float, position_eci_m))
@@ -306,9 +336,19 @@ class EngineOrbitProvider:
         illumination = float(self._srp_model.getLightingRatio(state))
         density = float(self._atmosphere.getDensity(date, position, self.inertial_frame))
         air = self._atmosphere.getVelocity(date, position, self.inertial_frame)
+        sun_array = np.array([sun.getX(), sun.getY(), sun.getZ()])
+        air_array = np.array([air.getX(), air.getY(), air.getZ()])
+        sun_array.setflags(write=False); air_array.setflags(write=False)
+        environment = (sun_array, illumination, density, air_array)
+        self._environment_cache[key] = environment
+        if len(self._environment_cache) > 8:
+            self._environment_cache.popitem(last=False)
+        return environment
+
+    def surface_result(self, elapsed_seconds, position_eci_m, velocity_eci_mps, quaternion):
+        sun, illumination, density, air = self._surface_environment(elapsed_seconds, position_eci_m, velocity_eci_mps)
         result = self._surface_model.evaluate(quaternion, np.asarray(position_eci_m), np.asarray(velocity_eci_mps),
-            np.array([sun.getX(), sun.getY(), sun.getZ()]), illumination, density,
-            np.array([air.getX(), air.getY(), air.getZ()]))
+            sun, illumination, density, air)
         import calculate_disturbances as disturbances
         if not disturbances.DISTURBANCES_ENABLED or not disturbances.ENABLE_ATMOSPHERIC_DRAG:
             result.drag_force_eci_n[:] = 0

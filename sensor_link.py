@@ -139,7 +139,7 @@ def send_gps(sock, raw):
                 (ADS_HOST, ADS_SENSOR_PORT))
 
 
-def send_fss(sock, raw, cells=()):
+def send_fss(sock, raw, cells=(), full_scale_counts=10000):
     """Send one GETTLM reply per head of a RawSunSample.
 
     A dropped receipt (raw.valid False) sends nothing: the firmware then sees
@@ -170,6 +170,7 @@ def send_fss(sock, raw, cells=()):
             "cell": sensor.name,
             "slave": sensor.slave_id,
             "q_sum": int(q_sum),
+            "full_scale_counts": int(full_scale_counts),
             "alpha_deg": r["Alpha"] / 100.0,
             "beta_deg": r["Beta"] / 100.0,
             "sensor_eclipse": bool(r["Eclipse"]),    # the FSS's own flag

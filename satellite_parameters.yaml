@@ -60,6 +60,8 @@ spacecraft:
   inertia_kg_m2: [1.465, 1.176, 1.244]  # Legacy P-30XL open-panel diagonal inertia
   drag_reference_area_m2: 0.09    # Legacy reference cross-section [m²]
   srp_reference_area_m2: 0.09     # Legacy reference cross-section [m²]
+  model_scale_to_m: 0.001           # Legacy model is millimetres
+  model_recenter: true              # Legacy export origin is offset
   model_url: /assets/models/P-30XL.glb  # Original simplified viewer model
   name: "P-30XL"
   drag_coefficient: 2.2  # ASSUMPTION: no measured aerodynamic coefficient
@@ -219,6 +221,14 @@ geometry:
 # Four-wheel pyramid with a 35 degree cant. The legacy matrix below was defined
 # in wheel-assembly coordinates. The mounting drawing rotates it into body axes.
 reaction_wheels:
+  initial_momentum_Nms: [0.0, 0.0, 0.0, 0.0] # Physical spin momentum along each configured axis
+  rotor_inertia_kg_m2: 5.4e-5 # Per-wheel inertia used for physical speed telemetry
+  # Body spin axes in the external firmware's wheel numbering. Empty uses the
+  # configured physical wheel axes. Keep this synchronized with flight config.
+  firmware_axis_matrix_body:
+    - [0.8191520442889918, 0.0, -0.8191520442889918, 0.0]
+    - [0.0, -0.8191520442889918, 0.0, 0.8191520442889918]
+    - [-0.573576436351046, -0.573576436351046, -0.573576436351046, -0.573576436351046]
   count: 4
   axis_matrix_assembly:
     - [0.5792279653395692, -0.5792279653395692, -0.5792279653395692, 0.5792279653395692]
@@ -233,6 +243,11 @@ reaction_wheels:
 # SIMULATION EXECUTION
 # =============================================================================
 simulation:
+  # Firmware runs at 1x. Expire each wheel/rod independently on wall time.
+  firmware_command_timeout_s: 2.0
+  firmware_gyro_preset: adis16545 # configured preserves YAML gyro error values
+  firmware_board_magnetometer_calibration: true # Match firmware magApplyCal
+  allow_unverified_magnetic_gains: true # Historical schedule; fingerprint checked, design provenance unavailable
   default_duration_s: 100000.0            # ASSUMPTION: launcher demo duration
   telemetry_publish_period_s: 0.25         # Viewer/telemetry update period
   speed: 10.0                              # Simulated seconds per real second; no upper limit (e.g. 100). CPU limits actual speed.
@@ -441,6 +456,7 @@ sun_sensor:
   fine_total_signal_counts: 10000
   fine_quadrant_max_counts: 10000
   fine_eclipse_threshold_counts: 250
+  enable_fine_albedo: true                  # Fine-head subset; requires enable_albedo below
   fine_temperature_k: 298.15                # Configured internal sensor temperature
   fine_temperature_zero_k: 273.15
   fine_temperature_counts_per_k: 100.0
@@ -557,7 +573,7 @@ sun_sensor:
   enable_white_noise: true
   enable_saturation: true
   enable_quantization: true
-  enable_albedo: true
+  enable_albedo: true                       # Master Earth-reflected-light switch (coarse + fine)
   enable_penumbra: true
   enable_self_shadowing: true
 
@@ -652,6 +668,7 @@ attitude_navigation:
 # VIEWER LIGHTING - display only; does not change sensor physics
 # =============================================================================
 viewer:
+  max_fps: 30                              # Display cap; reserve CPU/GPU time for firmware and plant
   earth_day_ambient: 0.12                   # Texture multiplier at the daylight terminator
   earth_day_diffuse: 0.78                   # Additional multiplier facing the Sun
   earth_night_floor: 0.015 # Minimum terrain visibility; keep small for dark nights

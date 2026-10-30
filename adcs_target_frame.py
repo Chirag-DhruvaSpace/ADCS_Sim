@@ -7,7 +7,7 @@ import numpy as np
 from engine.orekit_runtime import ensure_initialized
 
 
-EPOCH_UTC = datetime(2026, 10, 1, 15, 0, 0, tzinfo=timezone.utc)
+from satellite_parameters import EPOCH_UTC
 
 
 def build_target_frame(epoch_utc: datetime = EPOCH_UTC):
@@ -36,6 +36,7 @@ def build_target_frame(epoch_utc: datetime = EPOCH_UTC):
 def _absolute_date(utc_dt: datetime):
     from org.orekit.time import AbsoluteDate, TimeScalesFactory
 
+    utc_dt = utc_dt.astimezone(timezone.utc)
     return AbsoluteDate(
         utc_dt.year,
         utc_dt.month,

@@ -91,13 +91,18 @@ def get_quaternion_error(q_target, q_curr):
     return q_err
 
 def rotmat_to_quaternion(R):
+    """Scalar-first Hamilton quaternion for a finite proper rotation, including pi."""
+    from scipy.spatial.transform import Rotation
+    matrix = np.asarray(R, dtype=float)
+    if (matrix.shape != (3, 3) or not np.all(np.isfinite(matrix))
+            or not np.allclose(matrix.T @ matrix, np.eye(3), atol=1e-7, rtol=0)
+            or not np.isclose(np.linalg.det(matrix), 1., atol=1e-7, rtol=0)):
+        raise ValueError('Expected a finite proper 3x3 rotation matrix')
+    q = Rotation.from_matrix(matrix).as_quat()[[3, 0, 1, 2]]
+    if q[0] < 0:
+        q = -q
+    return q
 
-    q0 = np.sqrt(1 + R[0,0] + R[1,1] + R[2,2]) / 2
-    q1 = (R[2,1] - R[1,2]) / (4*q0)
-    q2 = (R[0,2] - R[2,0]) / (4*q0)
-    q3 = (R[1,0] - R[0,1]) / (4*q0)
-
-    return np.array([q0, q1, q2, q3])
 
 def quaternion_inverse(q):
     return np.array([q[0], -q[1], -q[2], -q[3]])

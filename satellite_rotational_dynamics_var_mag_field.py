@@ -125,7 +125,7 @@ get_spacecraft_location = None
 # All orbit and target dates use the same configured UTC epoch.
 EPOCH_UTC = config.ORBIT.epoch_utc
 
-from attitude_frames import body_to_eci as _dcm_bi_from_q
+from attitude_frames import body_to_eci as _dcm_bi_from_q, cross3
 
 
 def detumbling_torque(q, w, threshold_deg_s, B_eci):
@@ -143,11 +143,11 @@ def detumbling_torque(q, w, threshold_deg_s, B_eci):
         # and B stay in the same body frame inside this law.
         _C = _dcm_bi_from_q(q)
         B_body = _C.T @ np.asarray(B_eci, dtype=float)
-        B_body_dot = -np.cross(w, B_body)
+        B_body_dot = -cross3(w, B_body)
         B_body_dot_sign = np.array([np.sign(B_body_dot[0]), np.sign(B_body_dot[1]), np.sign(B_body_dot[2])])
         M_max_vector = np.array([sp.M_max, sp.M_max, sp.M_max])
         M = -M_max_vector * B_body_dot_sign
-        Torque = np.cross(M, B_body)
+        Torque = cross3(M, B_body)
         return Torque, M, B_body
 
     C_bi = _dcm_bi_from_q(q)
@@ -155,12 +155,12 @@ def detumbling_torque(q, w, threshold_deg_s, B_eci):
     B_body = C_bi.T @ B_eci 
     #B_body = C_bi @ B_eci
 
-    B_body_dot = -np.cross(w, B_body)
+    B_body_dot = -cross3(w, B_body)
     B_body_dot_sign = np.array([np.sign(B_body_dot[0]), np.sign(B_body_dot[1]), np.sign(B_body_dot[2])])
     M_max_vector = np.array([sp.M_max, sp.M_max, sp.M_max])
     M = -M_max_vector * B_body_dot_sign
 
-    Torque = np.cross(M, B_body)  
+    Torque = cross3(M, B_body)
 
     return Torque, M, B_body 
 
@@ -361,14 +361,12 @@ def _sun_sweep_control_torque(q, omega, t):
     issue reproduces here is an open question worth testing fresh, not
     assumed to be the same.
 
-    Unlike moon-pointing, no r_eci is needed at all -- sun_vector_eci() is
-    purely a function of time (topocentric/geocentric difference is
-    ~0.0007deg, negligible), so utc_time is the only input needed for the
-    target itself.
+    The target uses Orekit DE ephemerides in EME2000 and the navigated
+    spacecraft position for its Sun line of sight.
     """
     utc_time = EPOCH_UTC + timedelta(seconds=float(t))
 
-    q_target_sun = spr.sun_pointing_quaternion(utc_time)
+    q_target_sun = spr.sun_pointing_quaternion(utc_time, _latest_r_eci[0])
 
     q_err_sun = q2e.get_quaternion_error(q_target_sun, q)
     angle_err_deg = 2.0 * np.degrees(np.arccos(np.clip(abs(q_err_sun[0]), -1.0, 1.0)))
@@ -457,7 +455,7 @@ def _sun_pointing_rw_control_torque(q, omega, t):
     orbit (~95min) rotation which produced a real, measurable tracking lag.
     """
     utc_time = EPOCH_UTC + timedelta(seconds=float(t))
-    q_target = sprz.sun_pointing_rw_z_quaternion(utc_time)
+    q_target = sprz.sun_pointing_rw_z_quaternion(utc_time, _latest_r_eci[0])
 
     q_err = q2e.get_quaternion_error(q_target, q)
     e = q_err[1:4]
@@ -686,11 +684,14 @@ def _firmware_wheel_axes():
     from firmware_sitl_link import FLIGHT_WHEEL_AXES_BODY
     return FLIGHT_WHEEL_AXES_BODY
 
-def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external_torque_body=None, truth_field_eci=None, truth_position_eci=None, truth_velocity_eci=None, aerodynamic_torque_body=None):
+def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external_torque_body=None, truth_field_eci=None, truth_position_eci=None, truth_velocity_eci=None, aerodynamic_torque_body=None, wheel_time_remaining=None):
      
     global detumbling_complete
 
-    q0,q1,q2,q3,w_x,w_y,w_z = y 
+    state = np.asarray(y, dtype=float)
+    if state.shape not in ((7,), (11,)):
+        raise ValueError('Attitude state must have 7 or 11 components')
+    q0,q1,q2,q3,w_x,w_y,w_z = state[:7]
     q = np.array([q0,q1,q2,q3])
     omega = np.array([w_x, w_y, w_z])
 
@@ -727,14 +728,22 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     q_ctrl, omega_ctrl, _ = _imu_adcs_state(q, omega, np.zeros(3))
 
     firmware_mode = cs.get_mode() == 'FIRMWARE_SITL'
+    if len(state) == 11:
+        rotor_momentum = state[7:11]
+    elif firmware_mode:
+        import sys
+        link = sys.modules.get('firmware_sitl_link')
+        rotor_momentum = link.get_wheel_momentum() if link is not None else np.zeros(4)
+    else:
+        rotor_momentum = td.get_wheel_momentum()
     if firmware_mode:
-        rw_t = _firmware_wheels.copy()
+        rw_t = td._apply_wheel_limits(_firmware_wheels, rotor_momentum, wheel_time_remaining)
         M = _firmware_dipole.copy()
         field = np.asarray(B_eci if truth_field_eci is None else truth_field_eci)
         # q maps body to ECI in every mode; its transpose maps the field to body.
         # The wheel torques act along the flight wheel axes, the geometry the
         # firmware's TorqDistMat distributes for -- not td.A (the yaml axes).
-        tau_actual = _firmware_wheel_axes() @ rw_t + np.cross(M, _dcm_bi_from_q(q).T @ field)
+        tau_actual = _firmware_wheel_axes() @ rw_t + cross3(M, _dcm_bi_from_q(q).T @ field)
         store.mode = 'FIRMWARE_SITL'
     elif not detumbling_complete:
         # Detumble damps the MEASURED rate (omega_ctrl = gyro belief when the
@@ -760,7 +769,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # and display the individual wheel torques.
             tau_actual = _rw_control_torque(q_ctrl, omega_ctrl)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             # FIXED: previously tau_actual (the idealized, uncapped PD
             # torque) was what actually drove the physics below, while
             # rw_t was only ever displayed -- meaning RW-40 torque
@@ -779,7 +789,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # -> Earth center). Same allocation pattern as RW/MOON modes.
             tau_actual, q_nadir_target = _nadir_pointing_control_torque(q_ctrl, omega_ctrl)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             tau_actual = td.A @ rw_t   # recombine achieved (clipped/desat) torque -- see RW branch's note
             store.mode = "NADIR"
             store.nadir_target_quat[:] = q_nadir_target
@@ -794,7 +805,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # allocation/display split.
             tau_actual, q_moon_target = _moon_pointing_control_torque(q_ctrl, omega_ctrl, t)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             tau_actual = td.A @ rw_t   # recombine achieved (clipped/desat) torque -- see RW branch's note
             store.mode = "MOON"
             store.moon_target_quat[:] = q_moon_target
@@ -811,7 +823,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # untouched, this is a new, separate mode.
             tau_actual, q_sun_target = _sun_sweep_control_torque(q_ctrl, omega_ctrl, t)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             tau_actual = td.A @ rw_t   # recombine achieved (clipped/desat) torque -- see RW branch's note
             store.mode = "SUN_SWEEP"
             store.sun_sweep_target_quat[:] = q_sun_target
@@ -827,7 +840,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # Same allocation pattern as the other RW modes.
             tau_actual, q_sun_rw_target = _sun_pointing_rw_control_torque(q_ctrl, omega_ctrl, t)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             tau_actual = td.A @ rw_t   # recombine achieved (clipped/desat) torque -- see RW branch's note
             store.mode = "SUN_POINTING_RW"
             store.sun_pointing_rw_target_quat[:] = q_sun_rw_target
@@ -841,7 +855,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # allocation pattern as the other RW modes.
             tau_actual, q_nom_target = _nominal_in_orbit_control_torque(q_ctrl, omega_ctrl)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             tau_actual = td.A @ rw_t   # recombine achieved (clipped/desat) torque -- see RW branch's note
             store.mode = "NOMINAL_IN_ORBIT"
             store.nominal_in_orbit_target_quat[:] = q_nom_target
@@ -856,7 +871,8 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             # Same allocation pattern as the other RW modes.
             tau_actual, q_kr_target = _kinematic_robustness_control_torque(q_ctrl, omega_ctrl, t)
             rw_t = td.reaction_wheel_torque_distribution(
-                tau_actual[0], tau_actual[1], tau_actual[2])
+                tau_actual[0], tau_actual[1], tau_actual[2],
+                wheel_momentum=rotor_momentum, hold_period_s=wheel_time_remaining)
             tau_actual = td.A @ rw_t   # recombine achieved (clipped/desat) torque -- see RW branch's note
             store.mode = "KINEMATIC_ROBUSTNESS"
             store.kinematic_robustness_target_quat[:] = q_kr_target
@@ -881,12 +897,12 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     actual_B_body = _dcm_bi_from_q(q).T @ np.asarray(truth_field_eci if truth_field_eci is not None else B_eci)
     if truth_field_eci is not None and not firmware_mode:
         sensed_B_body = _dcm_bi_from_q(q_ctrl).T @ np.asarray(B_eci)
-        tau_actual = tau_actual + np.cross(M, actual_B_body - sensed_B_body)
+        tau_actual = tau_actual + cross3(M, actual_B_body - sensed_B_body)
     store.rw_torques[:] = rw_t
     store.mtr_dipole[:] = M
     # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
     # Magnetic telemetry excludes the achieved wheel torque; plant torque is unchanged.
-    store.mtr_torques[:] = np.cross(M, actual_B_body)
+    store.mtr_torques[:] = cross3(M, actual_B_body)
     store.tau_body[:] = tau_actual
     store.time = t
     store.mtr_currents[:] = compute_MTR_power(M)[1:4]
@@ -940,7 +956,9 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     store.disturbance_torque_residual_dipole[:] = tau_dist_parts["residual_dipole"]
     store.disturbance_torque_atmospheric_drag[:] = tau_dist_parts["atmospheric_drag"]
 
-    w_dot = I_inv @ (tau_actual + external_torque + tau_disturbance - np.cross(omega, I @ omega))       #Iω˙=τ−ω×(Iω)
+    axes = _firmware_wheel_axes() if firmware_mode else td.A
+    total_momentum_body = I @ omega + axes @ rotor_momentum
+    w_dot = I_inv @ (tau_actual + external_torque + tau_disturbance - cross3(omega, total_momentum_body))       #Iω˙=τ−ω×(Iω)
     #w_dot = I_inv @ tau 
     q_dot = 0.5 * Omega @ q
     q = q / np.linalg.norm(q)
@@ -955,11 +973,12 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
 
 
     store.angular_acceleration[:] = w_dot
-    return [q0_dot, q1_dot, q2_dot, q3_dot, w_dot[0], w_dot[1], w_dot[2]]
+    derivative = [q0_dot, q1_dot, q2_dot, q3_dot, w_dot[0], w_dot[1], w_dot[2]]
+    return np.r_[derivative, -rw_t] if len(state) == 11 else derivative
     
 #y0 = [1.0, 0.0, 0.0, 0.0, sp.w_x*np.pi/180, sp.w_y*np.pi/180, sp.w_z*np.pi/180, 0.0]
 
-y0 = [1.0, 0.0, 0.0, 0.0, sp.w_x*np.pi/180, sp.w_y*np.pi/180, sp.w_z*np.pi/180]
+y0 = [*config.ATTITUDE.initial_quaternion_scalar_first, *config.initial_body_rates_rad_s()]
 
 # RW slider target is measured relative to the initial orientation (see _rw_control_torque).
 Q_INITIAL_RW = np.array(y0[:4], dtype=float)

@@ -10,16 +10,14 @@ This one is for the new RW-based mode specifically, using body -X (matching
 the moon-pointing mode's convention, per explicit confirmation) rather than
 the MTR controller's -Z.
 
-Reuses sun_vector_eci() for the actual Sun direction -- geocentric, no
-spacecraft-position dependence needed (the Sun is ~1 AU away; per that
-module's own docstring, the topocentric/geocentric difference is ~0.0007deg,
-utterly negligible for attitude pointing purposes).
+Uses the Orekit DE Sun vector in EME2000. When position_eci_m is supplied,
+the target follows the spacecraft-to-Sun line of sight in the same frame.
 """
 import numpy as np
 from sun_vector_eci import sun_vector_eci
 
 
-def sun_pointing_quaternion(timestamp_utc):
+def sun_pointing_quaternion(timestamp_utc, position_eci_m=None):
     """
     Desired attitude for:
 
@@ -31,7 +29,7 @@ def sun_pointing_quaternion(timestamp_utc):
     Returns:
         q_desired = [q0, q1, q2, q3]
     """
-    sun_los = sun_vector_eci(timestamp_utc)   # already a unit vector, Earth->Sun
+    sun_los = sun_vector_eci(timestamp_utc, position_eci_m)
 
     # -X body points toward Sun, so +X body points away from it.
     x_body_eci = -sun_los

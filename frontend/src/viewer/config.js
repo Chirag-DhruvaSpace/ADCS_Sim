@@ -4,6 +4,9 @@ export function createViewerConfig(configuration) {
   return {
     MODEL_URL: configuration.spacecraft_model_url,
     MODEL_COM: configuration.spacecraft_com,
+    MODEL_SCALE_TO_M: configuration.spacecraft_model_scale_to_m ?? 1,
+    MODEL_RECENTER: configuration.spacecraft_model_recenter ?? false,
+    STAR_TRACKER_MODEL_NODE: configuration.spacecraft_tracker_node || '',
     MODEL_SCALE: 1.0,
     // CAD export uses SI metres
     AXIS_LEN: 1500.0,
@@ -20,6 +23,7 @@ export function createViewerConfig(configuration) {
     FOV_DEG: 60,
     /* performance (the ⚙ preset overrides budget/concurrent; sharpness in SETTINGS) */
     PIXEL_RATIO_CAP: 2.0,
+    MAX_FPS: configuration.viewer_lighting?.max_fps ?? 60,
     TILE_BUDGET: 160,
     // max visible tiles (main view)
     STREAM_TILE_BUDGET: 48,

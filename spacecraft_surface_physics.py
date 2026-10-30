@@ -14,7 +14,7 @@ from satellite_parameters import DISTURBANCES
 PRESSURE_AT_AU_PA = DISTURBANCES.solar_pressure_at_1au_pa
 
 
-from attitude_frames import body_to_eci
+from attitude_frames import body_to_eci, cross3
 
 
 
@@ -51,27 +51,42 @@ class SurfaceForceModel:
         self.arm = self.position - geometry.center_of_mass_body_m
         self.diffuse = np.array([p[3] for p in patches])
         self.specular = np.array([p[4] for p in patches])
+        self._arm_cross_normal = np.cross(self.arm, self.normal)
+        self._absorbed_fraction = 1-self.specular
+        self._diffuse_recoil = 2*self.diffuse/3
         self.blockers = geometry.blockers
         self._blocker_lo = np.array([np.asarray(box.center_body_m)-box.half_extents_m for box in self.blockers])
         self._blocker_hi = np.array([np.asarray(box.center_body_m)+box.half_extents_m for box in self.blockers])
+        from engine.physics.facet_visibility import make_visibility
+        self._native_visibility = make_visibility(self.position, self._blocker_lo, self._blocker_hi) if self.blockers else None
 
     def visibility(self, direction, active=None):
         """Ray/box visibility per quadrature patch, including folded panels."""
         if not self.blockers:
             return np.ones(len(self.position), dtype=bool)
+        native = getattr(self, '_native_visibility', None)
+        if native is not None:
+            return native(direction, active)
         # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
         # Zero projected-area patches contribute exactly zero force. Preserve
         # slab arithmetic for every contributing patch, without tracing others.
         selected = self.position if active is None else self.position[active]
-        origins = (selected + direction*1e-6)[:, None, :]
-        parallel = np.abs(direction) < 1e-12
-        a = self._blocker_lo[None, :, :]-origins
-        b = self._blocker_hi[None, :, :]-origins
-        np.divide(a, direction, out=a, where=~parallel)
-        np.divide(b, direction, out=b, where=~parallel)
-        near = np.max(np.where(parallel, -np.inf, np.minimum(a,b)), axis=2)
-        far = np.min(np.where(parallel, np.inf, np.maximum(a,b)), axis=2)
-        outside = np.any(parallel & ((origins < self._blocker_lo) | (origins > self._blocker_hi)), axis=2)
+        origins = selected + direction*1e-6
+        shape = (len(selected), len(self.blockers))
+        near = np.full(shape, -np.inf)
+        far = np.full(shape, np.inf)
+        outside = np.zeros(shape, dtype=bool)
+        # Slabs in two dimensions avoid materializing several N x boxes x 3
+        # temporaries for every integrator stage. The ray test is unchanged.
+        for axis in range(3):
+            origin = origins[:, axis, None]
+            lo, hi = self._blocker_lo[None, :, axis], self._blocker_hi[None, :, axis]
+            if abs(direction[axis]) < 1e-12:
+                outside |= (origin < lo) | (origin > hi)
+            else:
+                a, b = (lo-origin)/direction[axis], (hi-origin)/direction[axis]
+                np.maximum(near, np.minimum(a, b), out=near)
+                np.minimum(far, np.maximum(a, b), out=far)
         hit = ~outside & (far >= np.maximum(near, 0)) & (far > 1e-7)
         visible = ~np.any(hit, axis=1)
         if active is None:
@@ -93,15 +108,19 @@ class SurfaceForceModel:
         cosine *= self.visibility(to_sun, cosine > 0)
         pressure = PRESSURE_AT_AU_PA * (AU_M / distance)**2
         # Incoming momentum points away from Sun; reflected recoil is inward.
-        srp = -pressure * illumination * (self.area * cosine)[:, None] * (
-            (1-self.specular)[:, None] * to_sun +
-            (2*self.specular*cosine + 2*self.diffuse/3)[:, None] * self.normal)
+        scale = -pressure * illumination * self.area * cosine
+        absorbed = scale * self._absorbed_fraction
+        reflected = scale * (2*self.specular*cosine + self._diffuse_recoil)
+        # Distribute the sums over cross products. Fixed facet arms/normals
+        # are prepared once; each stage avoids two patch-by-3 force arrays.
+        srp_force = absorbed.sum()*to_sun + reflected @ self.normal
+        srp_torque = cross3(absorbed @ self.arm, to_sun) + reflected @ self._arm_cross_normal
         relative = rotation.T @ (np.asarray(velocity_eci_mps) - atmospheric_velocity_eci_mps)
         speed = np.linalg.norm(relative)
         wind = relative / speed if speed > 0 else np.zeros(3)
         projected = np.maximum(self.normal @ wind, 0)
         projected *= self.visibility(wind, projected > 0)
-        drag = (-.5*density_kg_m3*self.cd*speed**2*self.area*projected)[:, None] * wind
-        return SurfaceResult(rotation @ srp.sum(axis=0), np.cross(self.arm, srp).sum(axis=0),
-                             rotation @ drag.sum(axis=0), np.cross(self.arm, drag).sum(axis=0),
+        drag_scale = -.5*density_kg_m3*self.cd*speed**2*self.area*projected
+        return SurfaceResult(rotation @ (srp_force), srp_torque,
+                             rotation @ (drag_scale.sum()*wind), cross3(drag_scale @ self.arm, wind),
                              pressure, pressure*illumination, illumination, distance, density_kg_m3)

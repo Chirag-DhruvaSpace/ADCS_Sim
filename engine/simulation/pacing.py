@@ -11,6 +11,7 @@ class SimulationPacer:
         self.speed = speed
         self.now, self.sleep = now, sleep
         self.started = now()
+        self._metrics_started = self.started
         self.simulation_origin = 0.0
         self._checked_at = -float('inf')
         self._signature = None
@@ -23,6 +24,7 @@ class SimulationPacer:
         if speed != self.speed:
             self.speed = speed
             self.started = self.now()
+            self._metrics_started = self.started
             self.simulation_origin = simulation_seconds
 
     def poll_speed(self, path, simulation_seconds):
@@ -48,8 +50,21 @@ class SimulationPacer:
         if delay > 0:
             self.sleep(delay)
 
+    def wait_firmware_sample(self, simulation_seconds, period_s):
+        """Pace acquisition; rebase after a missed period instead of bursting.
+
+        An overloaded host runs slower than real time and reports lateness.
+        It must not emit a backlog of fixed-dt IMU packets instantaneously.
+        """
+        deadline = self.started + (simulation_seconds-self.simulation_origin)/self.speed
+        late = max(0., self.now()-deadline)
+        if late >= period_s:
+            self.started += late
+        self.wait_until(simulation_seconds)
+        return late
+
     def metrics(self, simulation_seconds):
-        elapsed = max(0.0, self.now() - self.started)
+        elapsed = max(0.0, self.now() - self._metrics_started)
         return dict(simulation_speed_requested=self.speed,
                     simulation_speed_actual=(simulation_seconds-self.simulation_origin) / elapsed if elapsed else 0.0,
                     simulation_lag_s=max(0.0, elapsed * self.speed - (simulation_seconds-self.simulation_origin)),

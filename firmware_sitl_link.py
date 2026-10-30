@@ -10,14 +10,15 @@ same UDP, non-blocking, module-level-state pattern.
 
 The plant latches bounded wheel and magnetic commands once per physics step.
 Wheel momentum uses the achieved torque (dh/dt = -T_body_axis); returned
-wheel telemetry reports that same torque. Rotor momentum is still separate
-from the bus Euler equation: full gyroscopic rotor coupling is not modeled.
+wheel telemetry reports that same torque. Live simulation integrates rotor
+momentum with bus attitude, including the wheel-cluster gyroscopic term.
 """
 
 import math
 import socket
 import struct
 import threading
+import time
 
 import numpy as np
 
@@ -38,25 +39,24 @@ CMD_MODE_RW_SPEED = 1       # rwNo = wheel 0..3, value = raw speed command
 CMD_MODE_MTR_CURRENT = 2    # rwNo = torquer rod 0..2 (body X/Y/Z), value = signed current, mA
 TLM_FORMAT = "<3d"   # rwNo, currspeed_rpm, actual_torque_mNm -- matches acs_sim_link.h exactly
 
-RW_MOI = 5.4e-5   # kg*m^2 -- matches acs.h's confirmed value, reused here for the momentum estimate
-
-# The flight reaction-wheel spin axes in body axes, one column per wheel
-# (RW1..RW4), as the flight firmware's resetDefaults() TorqDistMat is built
-# for: a pyramid canted 35 deg below the XY plane, all tilted toward -Z.
-#     RW1 ( cos35,      0, -sin35)      RW3 (-cos35,      0, -sin35)
-#     RW2 (     0, -cos35, -sin35)      RW4 (     0,  cos35, -sin35)
-# The FIRMWARE_SITL plant applies the firmware's wheel torques along these, so
-# that A @ TorqDistMat is the identity, as on the satellite. Other simulator
-# modes keep the wheel axes from satellite_parameters.yaml.
-_C35, _S35 = math.cos(math.radians(35.0)), math.sin(math.radians(35.0))
-FLIGHT_WHEEL_AXES_BODY = np.array([[_C35, 0.0,   -_C35, 0.0],
-                                   [0.0,  -_C35, 0.0,   _C35],
-                                   [-_S35, -_S35, -_S35, -_S35]])
+# Compatibility name retained for callers; geometry is configured in YAML.
+from satellite_parameters import REACTION_WHEELS
+RW_MOI = REACTION_WHEELS.rotor_inertia_kg_m2
+if REACTION_WHEELS.firmware_axis_matrix_body:
+    FLIGHT_WHEEL_AXES_BODY = np.asarray(REACTION_WHEELS.firmware_axis_matrix_body, dtype=float)
+elif REACTION_WHEELS.axis_matrix_body:
+    FLIGHT_WHEEL_AXES_BODY = np.asarray(REACTION_WHEELS.axis_matrix_body, dtype=float)
+else:
+    from torque_distribution import A
+    FLIGHT_WHEEL_AXES_BODY = A.copy()
+FLIGHT_WHEEL_AXES_BODY.setflags(write=False)
 
 _lock = threading.Lock()
 _latest_torque_mNm = [0.0, 0.0, 0.0, 0.0]
 _wheel_momentum = [0.0, 0.0, 0.0, 0.0]   # kg*m^2*rad/s, separate bookkeeping only -- see module docstring
 _applied_torque_Nm = np.zeros(4)
+_wheel_received_at = [None]*4
+_mtr_received_at = [None]*3
 
 _cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 _cmd_sock.bind(("0.0.0.0", CMD_LISTEN_PORT))
@@ -103,7 +103,7 @@ def poll_rw_torques():
     doesn't lag behind by multiple outer-loop iterations. Call once per
     outer loop iteration, BEFORE the rotation solve_ivp() call, so the
     latest command is actually used by that same step's integration."""
-    while True:
+    for _ in range(256):
         try:
             data, _ = _cmd_sock.recvfrom(1024)
         except BlockingIOError:
@@ -115,6 +115,9 @@ def poll_rw_torques():
             continue
 
         rwNo_f, mode_f, value = struct.unpack(CMD_FORMAT, data)
+        if (not all(math.isfinite(v) for v in (rwNo_f, mode_f, value))
+                or rwNo_f != round(rwNo_f) or mode_f not in (0, 2)):
+            continue
         rwNo = int(round(rwNo_f))
         mode = int(round(mode_f))
 
@@ -125,8 +128,10 @@ def poll_rw_torques():
         with _lock:
             if mode == CMD_MODE_RW_TORQUE:
                 _latest_torque_mNm[rwNo] = value
+                _wheel_received_at[rwNo] = time.monotonic()
             elif mode == CMD_MODE_MTR_CURRENT:
                 _latest_mtr_current_mA[rwNo] = value
+                _mtr_received_at[rwNo] = time.monotonic()
             else:
                 print(f"firmware_sitl_link: mode={mode} (speed command) "
                       f"not yet supported, ignoring")
@@ -146,7 +151,7 @@ def poll_mode():
     pending mode-update packets this call. Call once per outer loop
     iteration, same cadence as poll_rw_torques()."""
     expected_len = struct.calcsize(MODE_STATUS_FORMAT)
-    while True:
+    for _ in range(256):
         try:
             data, _ = _mode_sock.recvfrom(1024)
         except BlockingIOError:
@@ -199,6 +204,20 @@ def mtr_dipole_per_amp():
     return (1+coil.gain_ratio)*np.pi*coil.r**2*coil.N*1e-6
 
 
+def command_freshness(now=None):
+    """Independent receive ages on wall time; status traffic cannot refresh commands."""
+    import satellite_parameters as config
+    now = time.monotonic() if now is None else now
+    timeout = config.SIMULATION.firmware_command_timeout_s
+    with _lock:
+        wheel_ages = [None if t is None else max(0., now-t) for t in _wheel_received_at]
+        rod_ages = [None if t is None else max(0., now-t) for t in _mtr_received_at]
+    return dict(wheel_age_s=wheel_ages, rod_age_s=rod_ages,
+                wheel_fresh=[age is not None and age < timeout for age in wheel_ages],
+                rod_fresh=[age is not None and age < timeout for age in rod_ages],
+                timeout_s=timeout)
+
+
 def apply_actuator_limits(dt):
     """Latch achieved commands for one held physics step, in SI units.
 
@@ -213,16 +232,19 @@ def apply_actuator_limits(dt):
     import satellite_parameters as config
     if not math.isfinite(dt) or dt <= 0:
         raise ValueError('Actuator hold period must be finite and positive')
+    freshness = command_freshness()
     with _lock:
         h = np.asarray(_wheel_momentum)
         limit = config.WHEEL_MAX_MOMENTUM_NMS
         lower = np.maximum(-config.WHEEL_MAX_TORQUE_NM, (h-limit)/dt)
         upper = np.minimum(config.WHEEL_MAX_TORQUE_NM, (h+limit)/dt)
-        _applied_torque_Nm[:] = np.clip(np.asarray(_latest_torque_mNm)*1e-3, lower, upper)
+        wheel_command = np.where(freshness['wheel_fresh'], _latest_torque_mNm, 0.)
+        _applied_torque_Nm[:] = np.clip(wheel_command*1e-3, lower, upper)
         dipole_per_amp = mtr_dipole_per_amp()
         dipole_limit = np.minimum(config.MTR_MAX_DIPOLE_AM2,
                                  np.asarray(config.SPACECRAFT.mtr_max_current_A)*dipole_per_amp)
-        dipole = np.clip(np.asarray(_latest_mtr_current_mA)*1e-3*dipole_per_amp, -dipole_limit, dipole_limit)
+        rod_command = np.where(freshness['rod_fresh'], _latest_mtr_current_mA, 0.)
+        dipole = np.clip(rod_command*1e-3*dipole_per_amp, -dipole_limit, dipole_limit)
         step = config.MTR_DIPOLE_STEP_AM2
         if step > 0:
             dipole_limit = np.floor(dipole_limit/step)*step
@@ -241,6 +263,20 @@ def step_wheel_momentum(dt):
         for i in range(4):
             torque_Nm = _applied_torque_Nm[i]
             _wheel_momentum[i] += -torque_Nm * dt
+
+
+def get_wheel_momentum():
+    with _lock:
+        return np.asarray(_wheel_momentum, dtype=float).copy()
+
+
+def set_wheel_momentum(momentum):
+    import satellite_parameters as config
+    h = np.asarray(momentum, dtype=float).reshape(4)
+    if not np.all(np.isfinite(h)) or np.any(np.abs(h) > config.WHEEL_MAX_MOMENTUM_NMS+1e-8):
+        raise ValueError('Invalid integrated wheel momentum')
+    with _lock:
+        _wheel_momentum[:] = np.clip(h, -config.WHEEL_MAX_MOMENTUM_NMS, config.WHEEL_MAX_MOMENTUM_NMS).tolist()
 
 
 def send_rw_telemetry():

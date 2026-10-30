@@ -8,6 +8,13 @@ encoding; mount_to_body converts those explicitly, independently of attitude.
 import numpy as np
 
 
+def cross3(a, b):
+    """Cross product for two three-vectors, without NumPy's axis machinery."""
+    return np.array([a[1]*b[2]-a[2]*b[1],
+                     a[2]*b[0]-a[0]*b[2],
+                     a[0]*b[1]-a[1]*b[0]])
+
+
 def body_to_eci(quaternion):
     q = np.asarray(quaternion, dtype=float).reshape(4)
     q = q / np.linalg.norm(q)

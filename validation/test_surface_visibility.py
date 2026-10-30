@@ -5,6 +5,35 @@ import numpy as np
 from spacecraft_surface_physics import SurfaceForceModel
 
 class VisibilityTests(unittest.TestCase):
+    def test_reduced_force_sums_match_individual_patch_moments(self):
+        import satellite_parameters as config
+        from attitude_frames import body_to_eci
+        from spacecraft_surface_physics import AU_M, PRESSURE_AT_AU_PA
+        model = SurfaceForceModel(config.SPACECRAFT, config.GEOMETRY)
+        rng = np.random.default_rng(39)
+        for _ in range(30):
+            q = rng.normal(size=4); q /= np.linalg.norm(q)
+            rotation = body_to_eci(q)
+            r = np.array([7e6, 0., 0.]); v = rng.normal(size=3)*7500
+            sun = rng.normal(size=3)*AU_M; air = np.array([0., 450., 0.])
+            actual = model.evaluate(q, r, v, sun, .73, 2e-12, air)
+            distance = np.linalg.norm(sun-r)
+            light = rotation.T @ ((sun-r)/distance)
+            cosine = np.maximum(model.normal @ light, 0)
+            cosine *= model.visibility(light)
+            srp = -PRESSURE_AT_AU_PA*(AU_M/distance)**2*.73*(model.area*cosine)[:,None]*(
+                (1-model.specular)[:,None]*light +
+                (2*model.specular*cosine+2*model.diffuse/3)[:,None]*model.normal)
+            relative = rotation.T @ (v-air); speed = np.linalg.norm(relative)
+            wind = relative/speed
+            projected = np.maximum(model.normal @ wind, 0)*model.visibility(wind)
+            drag = (-.5*2e-12*model.cd*speed**2*model.area*projected)[:,None]*wind
+            for got, expected in [(actual.srp_force_eci_n, rotation@srp.sum(axis=0)),
+                                  (actual.srp_torque_body_nm, np.cross(model.arm,srp).sum(axis=0)),
+                                  (actual.drag_force_eci_n, rotation@drag.sum(axis=0)),
+                                  (actual.drag_torque_body_nm, np.cross(model.arm,drag).sum(axis=0))]:
+                np.testing.assert_allclose(got, expected, atol=1e-18, rtol=2e-13)
+
     def test_vectorized_visibility_preserves_slab_intersections(self):
         rng = np.random.default_rng(42)
         model = SurfaceForceModel.__new__(SurfaceForceModel)

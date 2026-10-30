@@ -268,13 +268,140 @@ sensor mounting quaternions retain their historical passive encoding through
 `mount_to_body`; they are not spacecraft attitude quaternions. The configured
 star-tracker mounting matches firmware `RelQuat[3]`/`RelDCM[3]`.
 
-Firmware commands are held for each existing physics tick. Wheel torque and
-step impulse are bounded by the configured torque/momentum capacity; telemetry
-returns achieved torque. Pre-driver magnetic dipoles are bounded by the configured
-dipole/current limits using the existing coil model and dipole increment.
-This remains a bounded actuator approximation, without full rotor gyroscopic
-coupling or a reproduction of firmware current encoding. Launch commands,
-UDP packet layouts, sensor cadence and simulation pacing are unchanged.
+Firmware actuator commands are held for each 10 ms attitude interval inside the
+existing outer control/display tick. IMU acquisition is paced before the next
+interval is integrated; ACS commands are polled between intervals. The existing
+UDP layouts, outer telemetry rate, launch commands and legacy speed controls are
+preserved. Late firmware intervals rebase the pacing deadline rather than replay
+queued captures in a burst. Actual speed and lag still include the delay; a busy
+host may run slower than 1x. This is not a hard real-time or HIL timing guarantee.
+
+Each wheel and torquer command expires independently after
+`simulation.firmware_command_timeout_s` wall seconds (default 2), producing zero
+actuation until a new valid command for that actuator arrives. Mode/status packets
+cannot refresh actuator lifetimes. Wheel momentum persists through expiry.
+Telemetry publishes per-actuator ages/freshness, command state and scheduling lag.
+Wheel torque/impulse and ACS-commanded rod current/dipole remain bounded by the
+configured plant. The live plant integrates `[q, omega, h_wheels]` together:
+positive wheel commands mean positive body reaction torque and `h_dot = -u`.
+The Euler equation includes `omega cross (I omega + A h)`, using the active
+mode's configured wheel axes. Set `reaction_wheels.initial_momentum_Nms` in YAML
+to initialize spinning wheels. This is an ideal momentum-exchange model, without
+motor electrical dynamics. The seven-component derivative API remains available
+for existing analysis callers; live runs commit accepted eleven-component states.
+
+Native orbit/environment models initialize before the firmware pacing clock
+starts. The viewer caps rendering at `viewer.max_fps` (shipped value 30) to reduce
+contention on high-refresh displays; this does not change physics or sensor rates.
+
+Facet shadow rays use the bundled generic Java helper when a Java compiler is
+available, compiled once into `.cache` for the active JVM. NumPy remains the
+fallback. Both paths test the same quadrature points and blocker geometry.
+SITL prepares the next outer tick before its packet deadline, then sends at the
+deadline; it does not replay missed samples in a burst or accelerate firmware.
+
+Initial plant attitude and the surface predictor use the same validated,
+normalized `attitude.initial_quaternion_scalar_first`; the estimator prior stays
+independent. Sensor rates above their actual acquisition cadence now raise a
+clear startup error (legacy: outer tick; SITL: gyro/magnetometer 100 Hz, other
+sensors outer tick). Reduce the rate or control step instead of losing samples.
+
+Orekit loads `model_data.orekit_data_path` relative to the YAML file. Magnetic
+selection is explicitly `WMM` or `IGRF`, with no automatic substitution; the
+weather loader uses `space_weather_file_pattern`. Restart to change datasets.
+Actual selections and paths appear in telemetry's model list.
+
+Historical magnetic-pointing gains have no recoverable design/Floquet provenance.
+`magnetic_gain_manifest.json` records a compatibility baseline with plant, orbit,
+epoch, frames, dataset and gain hashes; it does **not** certify those gains.
+Configuration/artifact mismatches are rejected. The shipped
+`simulation.allow_unverified_magnetic_gains: true` explicitly preserves historical
+legacy operation and emits a warning. Set it false to require verified designs.
+The magnetic target deliberately remains fixed on the configured epoch Sun;
+reaction-wheel Sun targets track the current Sun. A new gain design requires its
+own reproducible generator and validation evidence, not relabeling this baseline.
+
+For an isolated timing check, run
+`.venv/Scripts/python.exe -B validation/tools/benchmark_sitl_timing.py --duration 30`.
+Add `--unpaced` to measure CPU headroom. This harness starts with nonzero tumble
+rates and uses private UDP ports; it does not execute or validate external firmware.
+The model list reports whether accelerated facet shadows are active. Restart the
+simulator after code changes; the normal launcher intentionally has no autoreloader.
+
+SITL honors both `sun_sensor.enable_albedo` and `enable_fine_albedo` (enabled in
+the shipped configuration). Gyro presets and board magnetic calibration are
+explicit `simulation.firmware_gyro_preset` (`adis16545` or `configured`) and
+`firmware_board_magnetometer_calibration` settings. Restart after changing these
+settings. The `firmware_sensor_configuration` telemetry records effective error
+values, rates and albedo/shadow switches. Enabling albedo exposes the firmware to
+reflected-light measurements; it does not assert that its estimator rejects them.
+
+Python Sun targets use the Orekit DE ephemeris in EME2000. Live Sun RW/sweep
+targets include navigated spacecraft position; sensor truth uses true spacecraft
+position. The initial orbit is unchanged: true anomaly 180 degrees. Commit
+`c775cb51` changed it from 0 to 180 degrees, reversing the starting side of the
+circular orbit for the same RAAN. RAAN alone does not determine eclipse or the
+Sun-relative starting side; epoch, argument of perigee and true anomaly matter.
+
+Sun-head shadowing first checks configured blocker envelopes. Blockers with
+`sensor_model_node` also use triangles from the configured GLB, preserving real
+openings. The engine contains generic geometry code only. Generated trees live in
+ignored `.cache/model-occlusion`, keyed by source content, node selector and unit
+scale. Replacing a model invalidates its cache automatically. Normal startup
+prepares missing caches; no satellite-specific builder or engine data is needed.
+The standard setup's Node/frontend dependencies are needed for first preparation;
+warm runtime ray tests use NumPy only. An optional warmup command remains
+`.venv/Scripts/python.exe -B validation/geometry/build_occluders.py`.
+
+### Replacing a satellite with two YAML files and root GLBs
+
+Place your two GLBs beside `satellite_parameters.yaml` and
+`advanced_satellite_parameters.yaml`. Edit each selected configuration, for example:
+
+```yaml
+# advanced_satellite_parameters.yaml: configurations.stowed.spacecraft
+model_file: MySatellite-stowed.glb
+model_scale_to_m: 1.0        # Use 0.001 for millimetre geometry
+model_recenter: false       # Sensor geometry uses the CAD body-frame origin
+star_tracker_model_node: MyTrackerBaffle  # Optional unique CAD node name/suffix
+```
+
+Use the corresponding deployed filename under `configurations.deployed`.
+`model_file` is relative to the YAML directory; the viewer serves that configured
+file automatically, so no move into frontend assets or Python edit is required.
+The root-file workflow accepts GLB 2.0 with uncompressed or meshopt geometry for
+sensor shadows. Convert STEP/STL to GLB; Draco-compressed sensor geometry must be
+exported uncompressed or with meshopt. Node hierarchy, transforms, unit scale,
+multiple primitives and sparse/interleaved accessors are handled during import.
+A `sensor_model_node` identifies the occluding mesh/group in a blocker definition;
+its envelope and all sensor positions remain body-frame SI values in YAML.
+
+Update mass, inertia, force facets/optics, wheel axes and sensor mounts/error
+settings in the two YAML files for the new satellite. Geometry alone cannot
+supply those physical/calibration values. `firmware_axis_matrix_body` explicitly
+defines the external firmware's wheel numbering; an empty value uses the physical
+wheel geometry. External firmware retains its own hardware configuration and must
+match the selected satellite. Restart after changing model/physics configuration.
+
+Sun markers are yellow and their brightness follows received fine-head Q sum
+(normalized by the configured full-scale count), with photocell output as fallback.
+Eligibility does not force a marker to full brightness. `enable_albedo` is the
+master reflected-light switch; `enable_fine_albedo` gates its fine-head subset.
+`albedo_scale` is Earth reflectivity, not a second illumination contribution.
+
+The performance brief's allocation/lifecycle items are also addressed by bounded
+live GPS diagnostics, an eight-entry time/PV-keyed environment cache, disposal of
+replaced/stale viewer models, and reuse of marker vectors/colors. Java environment
+queries are cached independently of attitude; facet forces are still evaluated
+for the actual attitude. Validation checks state/time cache keys and a synthetic
+replacement satellite loaded from root GLBs and the two YAML files.
+
+For the 10 ms firmware intervals, attitude integration uses adaptive RK23 with
+the existing absolute/relative error tolerances and an initial step equal to the
+interval. Legacy integration continues using RK45. The scalar cross product and
+facet slab intersections avoid unnecessary NumPy temporaries. Regression checks
+compare the firmware path against high-accuracy DOP853, retain real-time sample
+boundaries, and verify that envelope visibility results are unchanged.
 
 - Orbit (engine/ + engine_adcs_bridge.py): Orekit NumericalPropagator DOP853 -- central + EGM2008 Holmes-Featherstone, NRLMSISE-00 + CSSI weather, SRP + shadow. EngineOrbitProvider gives state, dense output, ECI/ECEF, Sun/Moon, IGRF, facet-coupled forces.
 - Attitude: solve_ivp Euler + quaternion per 0.1 s tick; orbit segments extrapolate tick attitude; dense output resets at attitude updates.

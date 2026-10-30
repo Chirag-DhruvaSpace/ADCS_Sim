@@ -18,6 +18,7 @@ hs_err_pid*.log
 .vscode/
 .tools/
 .pytest_cache/
+.cache/
 # Generated validation output; keep validation source code in Git
 validation/results/
 validation/**/*.png

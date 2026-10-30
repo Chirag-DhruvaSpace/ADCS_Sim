@@ -351,6 +351,15 @@ class SimulatedSunSensorArray:
     def __init__(self, config, record_history=True) -> None:
         configuration = config
         self.cfg = configuration
+        from engine.physics.mesh_shadow import load_occluder, load_model_occluder
+        self._shadow_meshes = [
+            load_model_occluder(b.sensor_model_file, b.sensor_model_node, b.sensor_model_scale_to_m)
+            if b.sensor_model_node else load_occluder(b.sensor_mesh_path) if b.sensor_mesh_path else None
+            for b in configuration.blockers] if configuration.enable_self_shadowing else []
+        self._shadow_envelopes = [
+            ((mesh.lo[0]+mesh.hi[0])*.5, (mesh.hi[0]-mesh.lo[0])*.5)
+            if mesh is not None else (blocker.center_body_m, blocker.half_extents_m)
+            for blocker, mesh in zip(configuration.blockers, self._shadow_meshes)]
         # SunSensorArrayParameters.post_init already validated everything
         # (fail loudly at startup); re-check the cheap invariants defensively.
         if len(configuration.cells) < 3:
@@ -609,9 +618,13 @@ class SimulatedSunSensorArray:
         # (c) SELF-SHADOWING: ray from the cell position along the sun ray
         shadowed = False
         if configuration.enable_self_shadowing and signal > 0.0:
-            for blocker in configuration.blockers:
+            for index, blocker in enumerate(configuration.blockers):
+                center, half_extents = self._shadow_envelopes[index]
                 if _ray_hits_box(self._positions[cell_index], sun_direction_body,
-                                 blocker.center_body_m, blocker.half_extents_m):
+                                 center, half_extents):
+                    mesh = self._shadow_meshes[index]
+                    if mesh is not None and not mesh.intersects(self._positions[cell_index], sun_direction_body):
+                        continue  # Envelope hit, but light passes through a CAD opening.
                     shadowed = True
                     break
         if shadowed:

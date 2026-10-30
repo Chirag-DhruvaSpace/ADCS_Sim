@@ -1,46 +1,8 @@
-"""
-periodic_gain_sun_pointing.py
+"""Historical periodic magnetic-pointing controller with a paced governor.
 
-Sun-pointing controller using the Floquet-verified periodic gain schedule (K_seq.npy /
-t_grid.npy, produced by periodic_lqr_design.py against the REAL IGRF field this project
-already uses).
-
-Two deliberate choices here, both to avoid bugs found elsewhere in this codebase:
-
-1. Quaternion error convention is copied VERBATIM from periodic_lqr_design.py (not from
-   quat2eul.py's get_quaternion_error, which uses q_target * conj(q_curr) -- the OPPOSITE
-   Hamilton-product order from what K_seq.npy was designed against: conj(q_target) * q_curr).
-   Mixing the two would silently feed the gain schedule a differently-signed error.
-
-2. The B-cross actuator step calls MTR_allocator.torque_to_dipole() directly instead of
-   reimplementing the cross product locally. cross_b_torque.py in this project computes
-   mu = cross(tau_des, B_body)/|B|^2, which is the REVERSE argument order from the correct
-   law (mu = cross(B_body, tau_des)/|B|^2, as used in MTR_allocator.py and as derived in
-   periodic_lqr_design.py's docstring). The reversed order produces tau_actual = -P(t)@u,
-   i.e. torque in the OPPOSITE direction of what was commanded -- an inverted-sign actuator
-   that actively destabilizes a feedback loop instead of correcting it. MTR_allocator.py's
-   implementation is already correct, so we reuse it here rather than risk a third copy of
-   this same bug.
-
-3. ACHIEVABILITY-GATED REFERENCE GOVERNOR (added -- this was the missing piece that caused
-   the large see-saw oscillation observed in testing). K_seq/K(t) was only ever Floquet-
-   verified as a SMALL-SIGNAL regulator near the target -- feeding it the FINAL target
-   directly from a large initial error (e.g. the ~171deg gap between identity attitude and
-   Q_TARGET at simulation start) reproduced a real, confirmed oscillation swinging the
-   pointing error from ~171deg down to a few degrees, overshooting back out past 170deg, and
-   only damping out after a multi-thousand-second transient. The fix (same approach validated
-   in periodic_gain_governor_180.py): instead of tracking Q_TARGET directly, track a PACED
-   reference q_ref that SLERPs from wherever the vehicle was when sun-pointing control was
-   last (re-)entered, toward Q_TARGET, advancing only when the current geometry can actually
-   deliver correction torque in roughly the needed direction (the achievability fraction) and
-   only while body rate stays contained. This is intentionally NOT integrated as part of the
-   ODE state vector (unlike periodic_gain_governor_180.py's single-solve_ivp-call design) --
-   this codebase's live loop advances the rotation state in independent, fixed dt-second
-   chunks (see satellite_flight_visualisation.py), re-evaluating mode/B_eci once per chunk,
-   so the governor's progress is advanced the same way: once per OUTER time step via
-   step_governor(dt), not from inside the ODE right-hand-side (which gets evaluated an
-   integrator-dependent, non-physical number of times per chunk -- advancing state there
-   would make the maneuver's pacing depend on solver internals instead of wall-clock time).
+The gain manifest checks plant, epoch, data, frames and artifact hashes.
+Original design/Floquet provenance is unavailable; use requires explicit
+YAML permission. The target is deliberately fixed to the epoch Sun in EME2000.
 """
 import os
 import numpy as np
@@ -55,9 +17,23 @@ t_grid = np.load(os.path.join(_here, "t_grid.npy"))   # (N,)
 _N = len(t_grid)
 _dt_grid = t_grid[1] - t_grid[0]
 _T_orb = _N * _dt_grid
+if (K_seq.shape != (_N, 3, 6) or _N < 2 or not np.all(np.isfinite(K_seq))
+        or not np.all(np.isfinite(t_grid)) or abs(t_grid[0]) > 1e-12
+        or _dt_grid <= 0 or not np.allclose(np.diff(t_grid), _dt_grid)):
+    raise ValueError('Invalid magnetic gain/grid artifacts')
+_schedule_status = None
+
+
+def validate_gain_schedule():
+    global _schedule_status
+    if _schedule_status is None:
+        from magnetic_gain_contract import validate_schedule
+        _schedule_status = validate_schedule()
+    return _schedule_status
 
 
 def K_of_t(t):
+    validate_gain_schedule()
     phase = t % _T_orb
     k = int(phase // _dt_grid) % _N
     return K_seq[k]
@@ -99,14 +75,8 @@ def slerp(q0, q1, s):
 # EPOCH_UTC must match the epoch periodic_lqr_design.py used to build K_seq (it imports
 # EPOCH_UTC from there internally via build_target_frame(), so this stays in sync automatically).
 _C_target, _sun0 = build_target_frame()
-_R = _C_target
-_tr = np.trace(_R)
-_qw = np.sqrt(max(0, 1 + _tr)) / 2
-_qx = (_R[2, 1] - _R[1, 2]) / (4 * _qw)
-_qy = (_R[0, 2] - _R[2, 0]) / (4 * _qw)
-_qz = (_R[1, 0] - _R[0, 1]) / (4 * _qw)
-Q_TARGET = np.array([_qw, _qx, _qy, _qz])
-Q_TARGET /= np.linalg.norm(Q_TARGET)
+from quat2eul import rotmat_to_quaternion
+Q_TARGET = rotmat_to_quaternion(_C_target)
 
 
 # --- Achievability-gated reference governor state (persists across calls) --------------

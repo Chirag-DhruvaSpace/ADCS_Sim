@@ -216,7 +216,7 @@ RESIDUAL_DIPOLE_BODY = np.asarray(config.DISTURBANCES.residual_dipole_Am2, dtype
 DRAG_CP_ARM_BODY = np.asarray(config.DISTURBANCES.center_of_pressure_arm_body_m, dtype=float)
 
 
-from attitude_frames import body_to_eci as _dcm_bi_from_q
+from attitude_frames import body_to_eci as _dcm_bi_from_q, cross3
 
 
 
@@ -244,7 +244,7 @@ def gravity_gradient_torque_body(q, r_eci):
         return np.zeros(3)
     C_bi = _dcm_bi_from_q(q)
     u_body = C_bi.T @ (r_eci / r_mag)          # local vertical, body frame
-    return (3.0 * mu_earth / r_mag**3) * np.cross(u_body, I_BODY @ u_body)
+    return (3.0 * mu_earth / r_mag**3) * cross3(u_body, I_BODY @ u_body)
 
 
 def residual_dipole_torque_body(q, B_eci):
@@ -261,7 +261,7 @@ def residual_dipole_torque_body(q, B_eci):
         return np.zeros(3)
     C_bi = _dcm_bi_from_q(q)
     B_body = C_bi.T @ np.asarray(B_eci, dtype=float)
-    return np.cross(RESIDUAL_DIPOLE_BODY, B_body)      # tau = m x B
+    return cross3(RESIDUAL_DIPOLE_BODY, B_body)      # tau = m x B
 
 
 def atmospheric_drag_torque_body(surface_result):

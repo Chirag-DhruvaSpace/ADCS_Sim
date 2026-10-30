@@ -11,41 +11,7 @@ a rotated attitude relative to what actually flies, not an equivalent one.
 import numpy as np
 
 
-def _rotmat_to_quaternion_robust(R):
-    """Shepperd's method: picks the numerically best of 4 formulas based on
-    the largest denominator, avoiding the sqrt(1+trace)/2 singularity that a
-    naive implementation hits when trace is close to -1 (large rotation
-    angles). Returns [q0,q1,q2,q3] scalar-first, matching this project's
-    convention throughout."""
-    trace = R[0, 0] + R[1, 1] + R[2, 2]
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        q0 = 0.25 / s
-        q1 = (R[2, 1] - R[1, 2]) * s
-        q2 = (R[0, 2] - R[2, 0]) * s
-        q3 = (R[1, 0] - R[0, 1]) * s
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
-        q0 = (R[2, 1] - R[1, 2]) / s
-        q1 = 0.25 * s
-        q2 = (R[0, 1] + R[1, 0]) / s
-        q3 = (R[0, 2] + R[2, 0]) / s
-    elif R[1, 1] > R[2, 2]:
-        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
-        q0 = (R[0, 2] - R[2, 0]) / s
-        q1 = (R[0, 1] + R[1, 0]) / s
-        q2 = 0.25 * s
-        q3 = (R[1, 2] + R[2, 1]) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
-        q0 = (R[1, 0] - R[0, 1]) / s
-        q1 = (R[0, 2] + R[2, 0]) / s
-        q2 = (R[1, 2] + R[2, 1]) / s
-        q3 = 0.25 * s
-    q = np.array([q0, q1, q2, q3])
-    if q[0] < 0:          # shortest-path convention, matches quat2eul usage elsewhere
-        q = -q
-    return q / np.linalg.norm(q)
+from quat2eul import rotmat_to_quaternion as _rotmat_to_quaternion_robust
 
 
 def nadir_pointing_quaternion(r_eci, v_eci):

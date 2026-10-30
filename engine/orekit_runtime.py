@@ -20,6 +20,7 @@ from pathlib import Path
 
 _JVM_STARTED = False
 _DATA_LOADED = False
+LOADED_DATA_PATH = None
 
 _DEFAULT_DATA_CANDIDATES = [
     os.environ.get("OREKIT_DATA"),
@@ -71,17 +72,17 @@ def load_orekit_data(
                If None, the default candidates list is searched.
         force: If True, re-run even if already loaded.
     """
-    global _DATA_LOADED
+    global _DATA_LOADED, LOADED_DATA_PATH
     if _DATA_LOADED and not force:
+        if path is not None and Path(path).resolve() != LOADED_DATA_PATH:
+            raise RuntimeError('Orekit data is already initialized from another path; restart to change datasets')
         return
 
     # ---- Resolve the path ------------------------------------------------
     resolved: str | None = None
     if path is None:
-        for c in _DEFAULT_DATA_CANDIDATES:
-            if c and Path(c).exists():
-                resolved = c
-                break
+        from satellite_parameters import MODEL_DATA
+        resolved = str(MODEL_DATA.orekit_data_path)
     else:
         resolved = str(path)
 
@@ -94,7 +95,7 @@ def load_orekit_data(
             f"  Looked for: {_DEFAULT_DATA_CANDIDATES}"
         )
 
-    p = Path(resolved)
+    p = Path(resolved).resolve()
     if not p.exists():
         raise FileNotFoundError(f"Orekit-data path does not exist: {resolved}")
 
@@ -152,6 +153,7 @@ def load_orekit_data(
         ) from e
 
     _DATA_LOADED = True
+    LOADED_DATA_PATH = p
 
 
 # ---------------------------------------------------------------------------

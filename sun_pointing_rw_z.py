@@ -20,15 +20,14 @@ file is untouched by this one.
 No oscillation/sweep here: this is plain sun-tracking, analogous to the
 nadir/moon RW modes before any spin was layered on top.
 
-Reuses sun_vector_eci() for the actual Sun direction -- geocentric, no
-spacecraft-position dependence needed (per that module's own docstring,
-the topocentric/geocentric difference is ~0.0007deg, utterly negligible).
+Uses the Orekit DE Sun vector in EME2000. When position_eci_m is supplied,
+the target follows the spacecraft-to-Sun line of sight in the same frame.
 """
 import numpy as np
 from sun_vector_eci import sun_vector_eci
 
 
-def sun_pointing_rw_z_quaternion(timestamp_utc):
+def sun_pointing_rw_z_quaternion(timestamp_utc, position_eci_m=None):
     """
     Desired attitude for:
 
@@ -42,7 +41,7 @@ def sun_pointing_rw_z_quaternion(timestamp_utc):
     Returns:
         q_desired = [q0, q1, q2, q3]
     """
-    sun_los = sun_vector_eci(timestamp_utc)   # unit vector, Earth->Sun
+    sun_los = sun_vector_eci(timestamp_utc, position_eci_m)
 
     # -Z body points toward Sun, so +Z body points away from it.
     z_body_eci = -sun_los

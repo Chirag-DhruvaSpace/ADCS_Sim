@@ -51,6 +51,7 @@ class NullAtmosphere(AtmosphericModel):
 # Cached space-weather data (shared by drag force, query atmosphere, main.py)
 # ---------------------------------------------------------------------------
 _CSSI_SPACE_WEATHER = None
+_CSSI_CONFIGURATION = None
 
 
 def get_cssi_space_weather_data():
@@ -62,8 +63,12 @@ def get_cssi_space_weather_data():
     this process.  Uses the Orekit 11+ constructor with the strict regex
     supportedNames pattern and the default DataContext + UTC timescale.
     """
-    global _CSSI_SPACE_WEATHER
-    if _CSSI_SPACE_WEATHER is None:
+    global _CSSI_SPACE_WEATHER, _CSSI_CONFIGURATION
+    from satellite_parameters import MODEL_DATA
+    from engine.orekit_runtime import ensure_initialized
+    ensure_initialized(MODEL_DATA.orekit_data_path)
+    configuration = (str(MODEL_DATA.orekit_data_path), MODEL_DATA.space_weather_file_pattern)
+    if _CSSI_SPACE_WEATHER is None or configuration != _CSSI_CONFIGURATION:
         from org.orekit.models.earth.atmosphere.data import CssiSpaceWeatherData
         from org.orekit.data import DataContext
         from org.orekit.time import TimeScalesFactory
@@ -71,7 +76,8 @@ def get_cssi_space_weather_data():
         dpm = DataContext.getDefault().getDataProvidersManager()
         utc = TimeScalesFactory.getUTC()
         # Regex pattern strictly required by Orekit (NOT a file glob).
-        _CSSI_SPACE_WEATHER = CssiSpaceWeatherData("SpaceWeather.*\\.txt", dpm, utc)
+        _CSSI_SPACE_WEATHER = CssiSpaceWeatherData(MODEL_DATA.space_weather_file_pattern, dpm, utc)
+        _CSSI_CONFIGURATION = configuration
     return _CSSI_SPACE_WEATHER
 
 

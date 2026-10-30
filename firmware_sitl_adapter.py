@@ -67,26 +67,47 @@ def with_adis16545_gyro(imu_config):
                    gyro_wander_sigma_rad_s=math.radians(ADIS16545_IN_RUN_BIAS_STABILITY_DEG_HR / 3600.0))
 
 
-def without_fine_sun_sensor_albedo(imu_config):
-    """imu_config with Earth albedo kept off the fine FSS heads; the coarse
-    photocells keep it. SITL only, by choice: with albedo on, the Earth-facing
-    head reads 6-13% of full Sun over sunlit Earth, above the firmware's 4%
-    lit threshold (FSS_ECLIPSE_QSUM_THRESH), and the firmware takes it as a
-    Sun sighting -- TRIAD then corrupts the attitude estimate and Sun and
-    Nadir pointing fail in sunlight. That is a real flight-firmware exposure
-    (no albedo guard in computeSunVectorBody()); this only lets SITL test the
-    pointing modes around it."""
-    return replace(imu_config, sun_array=replace(imu_config.sun_array, enable_fine_albedo=False))
-
-
 def imu_substep_times(t, dt):
-    """The IMU sample times strictly inside the physics step [t, t + dt): the
-    sample at t itself goes out with the step's other sensors (tick()), these
-    follow once the step has been integrated (send_imu())."""
+    """Capture boundaries strictly inside the outer step; never look ahead."""
     count = int(round(dt * FIRMWARE_IMU_RATE_HZ))
     if count < 1 or not math.isclose(count / FIRMWARE_IMU_RATE_HZ, dt, rel_tol=1e-9, abs_tol=1e-12):
         raise ValueError(f'physics step {dt} s is not a whole number of {1/FIRMWARE_IMU_RATE_HZ} s IMU periods')
     return [t + k * dt / count for k in range(1, count)]
+
+
+def integrate_firmware_step(t, dt, state, solve_segment, firmware, pacer,
+                            acquire_imu, set_commands, *, defer_endpoint_publish=False):
+    """Integrate only to the next IMU capture, then acquire and accept commands.
+
+    The first capture/command poll is done by tick(). All subsequent captures
+    use committed states, paced on wall time, before their following solve.
+    No dense-output lookahead samples are transmitted.
+
+    With defer_endpoint_publish, accepted state stays internal until the next
+    acquisition deadline. The caller publishes endpoint wheel telemetry there;
+    this leaves preparation work inside the packet interval's wall-time budget.
+    """
+    boundaries = [t, *imu_substep_times(t, dt), t+dt]
+    for index, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
+        if index:
+            lag = pacer.wait_firmware_sample(start, 1/FIRMWARE_IMU_RATE_HZ)
+            firmware.schedule_lag_s = max(firmware.schedule_lag_s, lag)
+            firmware.send_imu(*acquire_imu(start, state[:4], state[4:7]))
+            set_commands(*firmware.poll_commands(end-start))
+        result = solve_segment(start, end, state)
+        if not result.success or not math.isclose(result.t[-1], end, abs_tol=1e-10):
+            raise RuntimeError(f'Firmware attitude step failed: {result.message}')
+        state = result.y[:, -1].copy()
+        state[:4] /= np.linalg.norm(state[:4])
+        if not defer_endpoint_publish:
+            lag = pacer.wait_firmware_sample(end, 1/FIRMWARE_IMU_RATE_HZ)
+            firmware.schedule_lag_s = max(firmware.schedule_lag_s, lag)
+        publish = index == len(boundaries)-2 and not defer_endpoint_publish
+        if len(state) == 11:
+            firmware.finish_tick(end-start, publish=publish, wheel_momentum=state[7:11])
+        else:
+            firmware.finish_tick(end-start, publish=publish)
+    return state
 
 
 def _valid_actuator_command(values):
@@ -106,7 +127,8 @@ class PacketSocket:
     def __init__(self, sock, fmt, notify, wheel=False):
         self.sock, self.fmt, self.notify, self.wheel = sock, fmt, notify, wheel
     def recvfrom(self, size):
-        while True:
+        # Malformed traffic must not consume an unbounded sensor interval.
+        for _ in range(256):
             data, address = self.sock.recvfrom(size)
             if len(data) != struct.calcsize(self.fmt):
                 continue
@@ -117,6 +139,7 @@ class PacketSocket:
                 continue
             self.notify()
             return data, address
+        raise BlockingIOError('Packet validation budget exhausted')
     def __getattr__(self, name):
         return getattr(self.sock, name)
 
@@ -130,6 +153,7 @@ class FirmwareLink:
         self.received_at = self.event_at = None
         self.last_mode = None
         self.stable_since = None
+        self.schedule_lag_s = 0.
         link._cmd_sock = PacketSocket(link._cmd_sock, link.CMD_FORMAT, self.received, True)
         link._mode_sock = PacketSocket(link._mode_sock, link.MODE_STATUS_FORMAT, self.received)
     # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
@@ -152,9 +176,15 @@ class FirmwareLink:
         if gps is not None:
             self.sensor_link.send_gps(self.state_socket, gps)
         if sun is not None:
-            self.sensor_link.send_fss(self.state_socket, sun, sun_cells)
+            import satellite_parameters as config
+            self.sensor_link.send_fss(self.state_socket, sun, sun_cells,
+                full_scale_counts=config.IMU_SIM.sun_array.fine_total_signal_counts)
         self.sensor_link.send_imu(self.state_socket, gyro, mag)
         self.sensor_link.send_star_tracker(self.state_socket, star, epoch_unix_s)
+        return self.poll_commands(control_period_s)
+
+    def poll_commands(self, control_period_s=None):
+        """Drain new commands before the next causal physics interval."""
         self.link.poll_rw_torques()
         self.link.poll_mode()
         if control_period_s is None:
@@ -170,22 +200,39 @@ class FirmwareLink:
             self.stable_since = None
         return wheels, dipole
     def send_imu(self, gyro, mag):
-        """One extra 10 ms IMU sample from inside the physics step (see
-        imu_substep_times). Sent in time order; the firmware queues them and
-        runs one imuTask pass per sample."""
+        """Send the current committed 10 ms capture at its paced boundary."""
         self.sensor_link.send_imu(self.state_socket, gyro, mag)
-    def finish_tick(self, dt):
-        self.link.step_wheel_momentum(dt)
-        self.link.send_rw_telemetry()
+    def finish_tick(self, dt, publish=True, wheel_momentum=None):
+        if wheel_momentum is None:
+            self.link.step_wheel_momentum(dt)
+        else:
+            self.link.set_wheel_momentum(wheel_momentum)
+        if publish:
+            self.link.send_rw_telemetry()
     def metadata(self, t, errors, rates):
         mode = self.link.get_latest_ads_mode_name()
         error = errors.get(mode)
         settled = error is not None and error < .5 and np.linalg.norm(np.degrees(rates)) < .05
         self.stable_since = (t if self.stable_since is None else self.stable_since) if settled else None
         now = time.monotonic()
+        freshness = self.link.command_freshness()
+        known = [(age, fresh) for ages, flags in
+                 [(freshness['wheel_age_s'], freshness['wheel_fresh']),
+                  (freshness['rod_age_s'], freshness['rod_fresh'])]
+                 for age, fresh in zip(ages, flags) if age is not None]
+        command_state = ('waiting' if not known else 'expired' if not any(f for _, f in known)
+                         else 'partial_expiry' if not all(f for _, f in known) else 'fresh')
         state = ('red' if self.received_at is None or now-self.received_at > 2 else
                  'green' if self.event_at is not None and now-self.event_at < 2 else
                  'blue' if self.stable_since is not None and t-self.stable_since >= 1 else 'yellow')
+        if command_state in ('waiting', 'expired'):
+            state = 'red'
+        elif command_state == 'partial_expiry':
+            state = 'yellow'
         return dict(ads_mode=mode, firmware_pointing_error_deg=error, custom_pointing_status=state,
                     firmware_packet_age_s=None if self.received_at is None else now-self.received_at,
-                    firmware_wheel_speed_rpm=[h/self.link.RW_MOI*60/(2*np.pi) for h in self.link._wheel_momentum])
+                    firmware_wheel_speed_rpm=[h/self.link.RW_MOI*60/(2*np.pi) for h in self.link._wheel_momentum],
+                    firmware_command_freshness=freshness,
+                    firmware_command_state=command_state,
+                    firmware_schedule_lag_s=self.schedule_lag_s,
+                    firmware_sensor_configuration=getattr(self, "sensor_configuration", {}))

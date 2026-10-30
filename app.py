@@ -3,7 +3,7 @@ import mimetypes
 from pathlib import Path
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
-from flask import Flask, request, jsonify, redirect, Response, send_from_directory
+from flask import Flask, request, jsonify, redirect, Response, send_from_directory, send_file, abort
 from threading import Lock
 import gzip
 import hashlib
@@ -82,11 +82,23 @@ def viewer_asset(filename):
     return send_from_directory(Path(app.root_path) / 'frontend' / 'assets', filename, max_age=86400)
 
 
+@app.route('/spacecraft-model/<filename>')
+def configured_spacecraft_model(filename):
+    import satellite_parameters as config
+    model = config.SPACECRAFT.model_file
+    if not model or filename != Path(model).name:
+        abort(404)
+    return send_file(model, mimetype='model/gltf-binary', conditional=True, max_age=0)
+
+
 @app.route('/api/viewer/config')
 def viewer_configuration():
     import satellite_parameters as config
     active = latest_telemetry.get('spacecraft_model_url', config.SPACECRAFT.model_url)
     return jsonify(spacecraft_model_url=active, viewer_lighting=config.VIEWER,
+                   spacecraft_model_scale_to_m=config.SPACECRAFT.model_scale_to_m,
+                   spacecraft_model_recenter=config.SPACECRAFT.model_recenter,
+                   spacecraft_tracker_node=config.SPACECRAFT.star_tracker_model_node,
                    pointing_strategy=config.POINTING['strategy'], legacy_mode=config.POINTING['legacy_mode'],
                    spacecraft_com=latest_telemetry.get('center_of_mass_body_m', config.GEOMETRY.center_of_mass_body_m))
 

@@ -33,8 +33,16 @@ class SpacecraftParameters:
     inertia_tensor_kg_m2: tuple = ()
     configuration: str = 'deployed'
     model_url: str = '/assets/models/P-30XL.glb'
+    model_file: str = ''  # GLB path relative to the two YAML files
+    model_scale_to_m: float = 1.0
+    model_recenter: bool = False
+    star_tracker_model_node: str = ''
 
     def __post_init__(self) -> None:
+        if not np.isfinite(self.model_scale_to_m) or self.model_scale_to_m <= 0:
+            raise ValueError('model_scale_to_m must be finite and positive')
+        if not isinstance(self.model_recenter, bool):
+            raise ValueError('model_recenter must be boolean')
         if self.mass_kg <= 0.0 or self.body_radius_m <= 0.0:
             raise ValueError("spacecraft mass and radius must be positive")
         if len(self.inertia_kg_m2) != 3 or any(x <= 0.0 for x in self.inertia_kg_m2):
@@ -89,6 +97,16 @@ class AttitudeParameters:
     initial_body_rates_deg_s: tuple[float, float, float]
     inertia_is_principal_axes: bool = True
 
+    def __post_init__(self):
+        q = np.asarray(self.initial_quaternion_scalar_first, dtype=float)
+        rates = np.asarray(self.initial_body_rates_deg_s, dtype=float)
+        if q.shape != (4,) or not np.all(np.isfinite(q)) or np.max(np.abs(q)) < 1e-12:
+            raise ValueError('Initial attitude must be a finite nonzero scalar-first quaternion')
+        if rates.shape != (3,) or not np.all(np.isfinite(rates)):
+            raise ValueError('Initial body rates must be three finite values')
+        q = q / np.max(np.abs(q))
+        object.__setattr__(self, 'initial_quaternion_scalar_first', tuple(q / np.linalg.norm(q)))
+
 
 @dataclass(frozen=True)
 class ModelDataParameters:
@@ -97,6 +115,12 @@ class ModelDataParameters:
     space_weather_file_pattern: str = r"SpaceWeather.*\.txt"
     gravity_degree: int = 36
     gravity_order: int = 36
+
+    def __post_init__(self):
+        if self.magnetic_model not in ('WMM', 'IGRF'):
+            raise ValueError('magnetic_model must be WMM or IGRF; no implicit fallback')
+        import re
+        re.compile(self.space_weather_file_pattern)
 
 
 @dataclass(frozen=True)
@@ -198,16 +222,24 @@ class SimulationParameters:
     telemetry_timeout_s: float = 0.25
     speed: float = 1.0
     orbit_output_window_s: float = 0.1
+    firmware_command_timeout_s: float = 2.0
+    firmware_gyro_preset: str = 'adis16545'
+    firmware_board_magnetometer_calibration: bool = True
+    allow_unverified_magnetic_gains: bool = False
 
     def __post_init__(self):
         for name in ('orbit_output_window_s', 'speed', 'orbit_integrator_min_step_s', 'orbit_integrator_max_step_s',
                      'orbit_integrator_abs_tolerance', 'orbit_integrator_rel_tolerance',
                      'attitude_integrator_abs_tolerance', 'attitude_integrator_rel_tolerance',
-                     'telemetry_timeout_s'):
+                     'telemetry_timeout_s', 'firmware_command_timeout_s'):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f'{name} must be finite and positive')
         if self.orbit_integrator_max_step_s < self.orbit_integrator_min_step_s:
             raise ValueError('Orbit maximum step must be >= minimum step')
+        if self.firmware_gyro_preset not in ('configured', 'adis16545'):
+            raise ValueError('firmware_gyro_preset must be configured or adis16545')
+        if not isinstance(self.firmware_board_magnetometer_calibration, bool):
+            raise ValueError('firmware_board_magnetometer_calibration must be boolean')
 
 
 @dataclass(frozen=True)
@@ -218,10 +250,22 @@ class ReactionWheelParameters:
     null_space_desaturation_gain: float
     axis_matrix_body: tuple = ()
     axis_matrix_assembly: tuple = ()
+    firmware_axis_matrix_body: tuple = ()  # Explicit actuator numbering used by the external firmware
+    rotor_inertia_kg_m2: float = 5.4e-5
+    initial_momentum_Nms: tuple = (0., 0., 0., 0.)
     saturation_reallocation_enabled: bool = True
     max_reallocation_passes: int = 4
 
     def __post_init__(self):
+        if not np.isfinite(self.rotor_inertia_kg_m2) or self.rotor_inertia_kg_m2 <= 0:
+            raise ValueError('rotor_inertia_kg_m2 must be finite and positive')
+        h = np.asarray(self.initial_momentum_Nms, dtype=float)
+        if h.shape != (self.count,) or not np.all(np.isfinite(h)) or np.any(np.abs(h) > self.max_momentum_Nms):
+            raise ValueError('initial_momentum_Nms must fit each wheel momentum capacity')
+        if self.firmware_axis_matrix_body:
+            axes = np.asarray(self.firmware_axis_matrix_body, dtype=float)
+            if axes.shape != (3, self.count) or not np.all(np.isfinite(axes)) or not np.allclose(np.linalg.norm(axes, axis=0), 1.):
+                raise ValueError('firmware_axis_matrix_body must contain unit spin axes, one column per wheel')
         if self.axis_matrix_body and self.axis_matrix_assembly:
             raise ValueError('Define wheel axes in body or assembly coordinates, not both')
         if self.axis_matrix_assembly:
@@ -240,11 +284,14 @@ class ReactionWheelParameters:
 
 @dataclass(frozen=True)
 class ViewerParameters:
+    max_fps: float = 60.
     earth_day_ambient: float = 0.12
     earth_day_diffuse: float = 0.78
     earth_night_floor: float = 0.015
 
     def __post_init__(self):
+        if not np.isfinite(self.max_fps) or not 1 <= self.max_fps <= 240:
+            raise ValueError('Viewer max_fps must be between 1 and 240')
         if any(not np.isfinite(v) or not 0 <= v <= 2 for v in
                (self.earth_day_ambient, self.earth_day_diffuse, self.earth_night_floor)):
             raise ValueError('Earth lighting values must be finite and between 0 and 2')
@@ -438,11 +485,17 @@ class SunSensorCellParameters:
 
 @dataclass(frozen=True)
 class ShadowBlockerParameters:
-    """One axis-aligned box (body frame) that blocks the direct sun term of
-    any cell whose ray to the sun passes through it."""
+    """Body-frame blocker envelope, with optional CAD detail for sensor rays.
+
+    Force facets use the envelope; sensors can resolve its physical openings.
+    """
     name: str
     center_body_m: tuple[float, float, float]
     half_extents_m: tuple[float, float, float]
+    sensor_mesh_path: str = ''  # Optional CAD narrow phase for sensor rays only
+    sensor_model_node: str = ''  # Exact node name or unique suffix in spacecraft.model_file
+    sensor_model_file: str = ''  # Resolved by configuration loader
+    sensor_model_scale_to_m: float = 1.0
 
 
 def _default_sun_cells() -> tuple:
@@ -1215,6 +1268,13 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     mode = 'deployed' if spacecraft_data['panels_deployed'] else 'stowed'
     spacecraft_data.update(selected.get('spacecraft', {}))
     spacecraft_data['configuration'] = mode if advanced else 'legacy'
+    if spacecraft_data.get('model_file'):
+        model_file = (source.parent / spacecraft_data['model_file']).resolve()
+        if not model_file.is_file() or model_file.suffix.lower() != '.glb':
+            raise ValueError(f'spacecraft.model_file must identify an existing GLB: {model_file}')
+        spacecraft_data['model_file'] = str(model_file)
+        from urllib.parse import quote
+        spacecraft_data['model_url'] = '/spacecraft-model/' + quote(model_file.name)
     spacecraft = _from_yaml(SpacecraftParameters, spacecraft_data)
     # Physical limits have one editable source; control/allocation inherit them.
     for key in ('mtr_max_dipole_Am2', 'mtr_dipole_step_Am2'):
@@ -1232,7 +1292,17 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     model_data['orekit_data_path'] = (source.parent / model_data['orekit_data_path']).resolve()
     geometry_data = dict(selected.get('geometry', data['geometry']))
     geometry_data['surfaces'] = tuple(_from_yaml(SurfaceParameters, item) for item in geometry_data['surfaces'])
-    geometry_data['blockers'] = tuple(_from_yaml(ShadowBlockerParameters, item) for item in geometry_data.get('blockers', []))
+    def shadow_blocker(item):
+        values = dict(item)
+        if values.get('sensor_model_node'):
+            if not spacecraft.model_file:
+                raise ValueError('sensor_model_node requires spacecraft.model_file')
+            if spacecraft.model_recenter:
+                raise ValueError('CAD sensor shadows require body-frame geometry: model_recenter must be false')
+            values['sensor_model_file'] = spacecraft.model_file
+            values['sensor_model_scale_to_m'] = spacecraft.model_scale_to_m
+        return _from_yaml(ShadowBlockerParameters, values)
+    geometry_data['blockers'] = tuple(shadow_blocker(item) for item in geometry_data.get('blockers', []))
     geometry = _from_yaml(GeometryParameters, geometry_data)
     # YAML describes independent sensors. The existing runtime bundle remains
     # an internal adapter so acquisition/navigation and firmware SITL stay stable.
@@ -1269,7 +1339,7 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     sun_data['cells'] = [{**base_cells.get(cell['name'], {}), **cell} for cell in sun_data['cells']]
     sun_data['cells'] = tuple(_from_yaml(SunSensorCellParameters, item) for item in sun_data['cells'])
     sun_data['blockers'] = tuple(item if isinstance(item, ShadowBlockerParameters) else
-                                 _from_yaml(ShadowBlockerParameters, item) for item in sun_data['blockers'])
+                                 shadow_blocker(item) for item in sun_data['blockers'])
     sun = _apply_sensor_profile(_from_yaml(SunSensorArrayParameters, sun_data), profiles['sun_sensor'])
     sun = replace(sun, enabled=data['sun_sensor']['enabled'] and sun.enabled)
     imu_data['sun_array'] = sun
