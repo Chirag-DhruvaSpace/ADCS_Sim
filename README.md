@@ -225,7 +225,18 @@ sensor_profiles:
   star_tracker: perfect
 ```
 
-Each sensor has its own `enabled` master switch and settings under `gps`, `gyroscope`, `magnetometer`, `sun_sensor`, or `star_tracker`. A false master switch overrides its profile. Star tracker profiles are custom (ideal), perfect, and off.
+Each sensor has its own `enabled` master switch and settings under `gps`, `gyroscope`, `magnetometer`, `sun_sensor`, or `star_tracker`. A false master switch overrides its profile. Star tracker supports the same profile names; `custom` uses its YAML errors and `perfect` removes modeled errors.
+
+`magnetorquers` defines the coil plant in `simulate_magnetorquers.py`: any number
+of named rods with YAML positions, axes, electrical constants, current/dipole
+limits and individual `enabled` switches. The selected advanced configuration
+supplies the three CAD-derived P-30XL rod placements. Settings > Sensors >
+Magnetorquer markers controls their visibility; orange illumination follows
+achieved coil dipole. Physical disabling uses YAML. Multiple magnetometers use
+`magnetometer.units`; each Sun-sensor head also has its own `enabled` switch.
+All sensors may be disabled together. Use `custom` profiles for literal error
+settings. See [magnetic hardware configuration](CAD_CONFIGURATION.md#configurable-magnetic-hardware)
+for YAML inheritance, firmware channel mapping, hardware scales and limitations.
 
 `gyroscope.use_for_control`, `magnetometer.use_for_control`, `attitude_navigation.use_for_control`, and `attitude_navigation.render_estimated_attitude` select sensor belief versus truth for A/B tests.
 

@@ -10,12 +10,9 @@ import torque_distribution as td
 import calculate_disturbances as cd   # NEW: live environmental disturbance torques (gravity gradient / residual dipole / drag)
 import store 
 #import spin_stabilisation_torque as sst
-import MTR_allocator as mtr 
-import MTR_parameters_P30xl as mtr_P30 
+from simulate_magnetorquers import configured_model as magnetorquer_model, compute_MTR_power, magnetic_torque_body
 import time 
-import cross_b_torque as sat_torques 
 import periodic_gain_sun_pointing as sun_pointing
-import calculate_satellite_body_torques as rw_torques_ctrl
 import quat2eul as q2e
 
 import moon_pointing as mpt
@@ -137,104 +134,9 @@ def detumbling_torque(q, w, threshold_deg_s, B_eci):
     q, w, _B_body_sensed = _imu_adcs_state(np.asarray(q, dtype=float),
                                            np.asarray(w, dtype=float),
                                            np.zeros(3))
-    if _imu_adcs_enabled[0]:
-        # Recompute the body field from the propagated quaternion and the
-        # SENSED ECI field (the RHS passes B_sensor_eci in as B_eci), so w
-        # and B stay in the same body frame inside this law.
-        _C = _dcm_bi_from_q(q)
-        B_body = _C.T @ np.asarray(B_eci, dtype=float)
-        B_body_dot = -cross3(w, B_body)
-        B_body_dot_sign = np.array([np.sign(B_body_dot[0]), np.sign(B_body_dot[1]), np.sign(B_body_dot[2])])
-        M_max_vector = np.array([sp.M_max, sp.M_max, sp.M_max])
-        M = -M_max_vector * B_body_dot_sign
-        Torque = cross3(M, B_body)
-        return Torque, M, B_body
-
-    C_bi = _dcm_bi_from_q(q)
-
-    B_body = C_bi.T @ B_eci 
-    #B_body = C_bi @ B_eci
-
-    B_body_dot = -cross3(w, B_body)
-    B_body_dot_sign = np.array([np.sign(B_body_dot[0]), np.sign(B_body_dot[1]), np.sign(B_body_dot[2])])
-    M_max_vector = np.array([sp.M_max, sp.M_max, sp.M_max])
-    M = -M_max_vector * B_body_dot_sign
-
-    Torque = cross3(M, B_body)
-
-    return Torque, M, B_body 
-
-'''
-def detumbling_torque_decoupled(q, w, threshold_deg_s):
-
-    # Ensure proper shapes
-    q = np.asarray(q).reshape(4,)
-    w = np.asarray(w).reshape(3,)
-
-    q0, q1, q2, q3 = q
-
-    # Angular velocity magnitude in deg/s
-    w_net_deg = np.linalg.norm(w) * 180.0 / np.pi
-
-    # Magnetic field in ECI frame (Tesla)
-    B_n = 3.75e-5
-    B_e = 3.75e-5
-    B_d = 3.75e-5
-
-    B_eci = np.array([B_n, B_e, B_d]).reshape(3,)
-
-    # Direction cosine matrix (Body ← ECI)
-    C_bi = np.array([
-        [1 - 2*(q2**2 + q3**2),     2*(q1*q2 + q0*q3),     2*(q1*q3 - q0*q2)],
-        [2*(q1*q2 - q0*q3),         1 - 2*(q1**2 + q3**2), 2*(q2*q3 + q0*q1)],
-        [2*(q1*q3 + q0*q2),         2*(q2*q3 - q0*q1),     1 - 2*(q1**2 + q2**2)]
-    ])
-
-    # Magnetic field in body frame
-    B_body = (C_bi.T @ B_eci).reshape(3,)
-
-    # If below threshold → no torque
-    if w_net_deg < threshold_deg_s:
-
-        Torque = np.zeros(3)
-        M = np.zeros(3)
-
-    else:
-           
-        # --- DECOUPLED MODE (independent axis torque) ---
-        tau_max = sp.M_max * np.linalg.norm(B_body)
-
-        Torque = np.array([
-            -tau_max * np.sign(w[0]),
-            -tau_max * np.sign(w[1]),
-            -tau_max * np.sign(w[2])
-        ])
-
-        # Magnetic moment not physically meaningful here
-        M = np.zeros(3)
-
-
-    # Force correct shapes before returning
-    return Torque.reshape(3,), M.reshape(3,)
-'''
-
-def compute_MTR_power(m):
-
-    m_X = m[0]
-    m_Y = m[1]
-    m_Z = m[2]
-
-    I_X = m_X/(1 + mtr_P30.gain_ratio) * 1/(np.pi*mtr_P30.r**2 * mtr_P30.N) * 10**6
-    I_Y = m_Y/(1 + mtr_P30.gain_ratio) * 1/(np.pi*mtr_P30.r**2 * mtr_P30.N) * 10**6
-    I_Z = m_Z/(1 + mtr_P30.gain_ratio) * 1/(np.pi*mtr_P30.r**2 * mtr_P30.N) * 10**6 
-
-    Power_X = (I_X ** 2) * mtr_P30.R
-    Power_Y = (I_Y ** 2) * mtr_P30.R 
-    Power_Z = (I_Z ** 2) * mtr_P30.R
-
-    power_consumed = Power_X + Power_Y + Power_Z
-    return power_consumed, np.abs(I_X), np.abs(I_Y), np.abs(I_Z) 
-
+    B_body = _dcm_bi_from_q(q).T @ np.asarray(B_eci, dtype=float)
+    state = magnetorquer_model().detumble(w, B_body)
+    return state.torque_body_Nm, state.body_dipole_Am2, B_body
 
 DETUMBLE_ON_DEG_S = config.CONTROL.detumble_on_rate_deg_s
 DETUMBLE_OFF_DEG_S = config.CONTROL.detumble_off_rate_deg_s
@@ -673,10 +575,13 @@ def _imu_adcs_state(q_true, omega_true, B_body_true):
 
 _firmware_wheels = np.zeros(4)
 _firmware_dipole = np.zeros(3)
+_firmware_magnetorquer_state = None
 
-def set_firmware_tick(wheels, dipole):
+def set_firmware_tick(wheels, dipole, magnetorquer_state=None):
+    global _firmware_magnetorquer_state
     _firmware_wheels[:] = wheels
     _firmware_dipole[:] = dipole
+    _firmware_magnetorquer_state = magnetorquer_state
 
 def _firmware_wheel_axes():
     # Imported lazily: firmware_sitl_link binds its UDP ports on import, which
@@ -739,11 +644,10 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     if firmware_mode:
         rw_t = td._apply_wheel_limits(_firmware_wheels, rotor_momentum, wheel_time_remaining)
         M = _firmware_dipole.copy()
-        field = np.asarray(B_eci if truth_field_eci is None else truth_field_eci)
         # q maps body to ECI in every mode; its transpose maps the field to body.
         # The wheel torques act along the flight wheel axes, the geometry the
         # firmware's TorqDistMat distributes for -- not td.A (the yaml axes).
-        tau_actual = _firmware_wheel_axes() @ rw_t + cross3(M, _dcm_bi_from_q(q).T @ field)
+        tau_actual = _firmware_wheel_axes() @ rw_t
         store.mode = 'FIRMWARE_SITL'
     elif not detumbling_complete:
         # Detumble damps the MEASURED rate (omega_ctrl = gyro belief when the
@@ -893,19 +797,30 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
             reset_moon_spin()
             reset_sun_sweep()
 
-    # Actuator physics uses the real field; controller allocation uses belief.
+    # All modes share the configured coil plant, evaluated in the true field.
     actual_B_body = _dcm_bi_from_q(q).T @ np.asarray(truth_field_eci if truth_field_eci is not None else B_eci)
-    if truth_field_eci is not None and not firmware_mode:
-        sensed_B_body = _dcm_bi_from_q(q_ctrl).T @ np.asarray(B_eci)
-        tau_actual = tau_actual + cross3(M, actual_B_body - sensed_B_body)
+    plant = magnetorquer_model()
+    if firmware_mode and _firmware_magnetorquer_state is not None:
+        magnetic_state = plant.with_field(_firmware_magnetorquer_state, actual_B_body)
+    else:
+        magnetic_state = plant.apply_dipole(M, actual_B_body)
+    # Controllers return their anticipated magnetic torque. Replace it with
+    # achieved hardware torque without changing wheel torque in mixed modes.
+    if not firmware_mode:
+        allocation_field = _dcm_bi_from_q(q_ctrl).T @ np.asarray(B_eci)
+        tau_actual = tau_actual - magnetic_torque_body(M, allocation_field)
+    tau_actual = tau_actual + magnetic_state.torque_body_Nm
+    M = magnetic_state.body_dipole_Am2
     store.rw_torques[:] = rw_t
     store.mtr_dipole[:] = M
     # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
     # Magnetic telemetry excludes the achieved wheel torque; plant torque is unchanged.
-    store.mtr_torques[:] = cross3(M, actual_B_body)
+    store.mtr_torques[:] = magnetic_state.torque_body_Nm
+    store.mtr_units = plant.telemetry(magnetic_state)
+    store.mtr_power_W = magnetic_state.power_W
     store.tau_body[:] = tau_actual
     store.time = t
-    store.mtr_currents[:] = compute_MTR_power(M)[1:4]
+    store.mtr_currents[:] = np.abs(plant.axes) @ np.abs(magnetic_state.currents_A)
 
     Omega = np.array([
     [0,   -w_x, -w_y, -w_z],

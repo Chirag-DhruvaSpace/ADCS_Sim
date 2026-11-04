@@ -18,12 +18,15 @@ pointing:
 # nominal resets those channels to nominal defaults. Geometry/seeds are retained.
 # Each sensor has its own profile and master switch below.
 # enabled: false always wins over the selected profile.
+# For literal sensor values, select custom. Presets intentionally replace errors.
+# Sensors can be disabled independently, including every sensor at once.
+# Each sun_sensor.cells entry and gyroscope/magnetometer.units entry has enabled.
 sensor_profiles:
   gps: custom
   gyroscope: custom
   magnetometer: custom
   sun_sensor: perfect
-  star_tracker: nominal  # off / perfect / nominal / degraded / stress / custom
+  star_tracker: custom  # off / perfect / nominal / degraded / stress / custom
 
 # P-30XL simulation configuration. Units are included in field names.
 # =============================================================================
@@ -379,6 +382,35 @@ gyroscope:
   mount_overrides: {}                       # Optional positions keyed by sensor name
 
 # =============================================================================
+# MAGNETORQUERS - shared electrical model and configurable rod list
+# =============================================================================
+magnetorquers:
+  enabled: true                         # Physical master switch, all modes
+  quantize_commands: false               # Preserve continuous legacy control
+  # Firmware current commands always use each rod's dipole_step_Am2.
+  # Existing P-30XL coil model; replace with supplier/calibration values.
+  dipole_per_amp_Am2_per_A: 6.149961754311725
+  resistance_ohm: 18.2
+  # A nonempty list is exactly the installed rods. Add any number of units.
+  # Current and dipole limits inherit spacecraft above unless overridden here.
+  # axis_body is positive dipole direction for positive current (polarity assumed).
+  # Firmware rod index is the zero-based list index; keep X/Y/Z for current ACS.
+  # Advanced deployment configurations replace this list with CAD placements.
+  units:
+    - name: MTR-X
+      axis_body: [1.0, 0.0, 0.0]
+      position_body_m: [0.0, 0.159, -0.3215]
+      enabled: true
+    - name: MTR-Y
+      axis_body: [0.0, 1.0, 0.0]
+      position_body_m: [0.1325, 0.0265, -0.3215]
+      enabled: true
+    - name: MTR-Z
+      axis_body: [0.0, 0.0, 1.0]
+      position_body_m: [-0.1325, 0.1885, -0.2605]
+      enabled: true
+
+# =============================================================================
 # MAGNETOMETER - independent hardware and error settings
 # =============================================================================
 magnetometer:
@@ -413,6 +445,9 @@ magnetometer:
   disturbance_wander_sigma_t: 2.0e-08       # Slow spacecraft-field variation (20 nT)
   disturbance_wander_tau_s: 200.0           # Disturbance time constant
   range_t: 0.001                            # Legacy update() range; raw AK09916 uses +/-4900 uT
+  hardware_range_t: 0.0049                  # Raw physical measurement range
+  hardware_scale_t_per_count: 1.5e-7       # Default AK09916: 150 nT/count
+  # Firmware must use the same register scale if replacing the sensor hardware.
   dropout_probability: 0.0                  # Chance a scheduled receipt is absent
   latency_mean_s: 0.01                      # Typical staleness (10 ms)
   latency_sigma_s: 0.002
@@ -432,6 +467,19 @@ magnetometer:
   # Unit fields: name, enabled, seed, position_body_m, mount_quaternion,
   # fusion_weight, calibration_matrix, calibration_bias, overrides.
   # Overrides use runtime field names (gyro_* or mag_*).
+  # CAD does not identify a magnetometer die; the single mount above is assumed.
+  # To install two independently simulated chips, replace units: [] with:
+  # units:
+  #   - name: Mag-A
+  #     position_body_m: [0.0, 0.0, 0.2]
+  #     mount_quaternion: [0.0, 1.0, 0.0, 0.0]
+  #     seed: 101
+  #     fusion_weight: 1.0
+  #   - name: Mag-B
+  #     position_body_m: [0.1, 0.0, 0.2]
+  #     mount_quaternion: [0.0, 1.0, 0.0, 0.0]
+  #     seed: 102
+  #     fusion_weight: 1.0
   units: []
   mount_overrides: {}                       # Optional positions keyed by sensor name
 
@@ -464,6 +512,7 @@ sun_sensor:
   # Individual heads; array order follows firmware slave addresses
   cells:
     - name: "-Z"                            # FSS1, slave 0x11
+      enabled: true                        # Off preserves FSS address/order
       normal_body:
         [0.0, 0.0, -1.0]
       position_body_m:
@@ -479,6 +528,7 @@ sun_sensor:
       white_noise_sigma: 0.003
       adc_bits: 12
     - name: "-X"                            # FSS2, slave 0x12
+      enabled: true
       normal_body:
         [-1.0, 0.0, 0.0]
       position_body_m:
@@ -494,6 +544,7 @@ sun_sensor:
       white_noise_sigma: 0.003
       adc_bits: 12
     - name: "+Y"                            # FSS3, slave 0x13, 15 deg to +Z
+      enabled: true
       normal_body:
         [0.0, 0.9659258262890683, 0.25881904510252074]
       position_body_m:
@@ -509,6 +560,7 @@ sun_sensor:
       white_noise_sigma: 0.003
       adc_bits: 12
     - name: "+X"                            # FSS4, slave 0x14
+      enabled: true
       normal_body:
         [1.0, 0.0, 0.0]
       position_body_m:
@@ -524,6 +576,7 @@ sun_sensor:
       white_noise_sigma: 0.003
       adc_bits: 12
     - name: "-Y"                            # FSS5, slave 0x15, 15 deg to +Z
+      enabled: true
       normal_body:
         [0.0, -0.9659258262890683, 0.25881904510252074]
       position_body_m:
@@ -539,6 +592,7 @@ sun_sensor:
       white_noise_sigma: 0.003
       adc_bits: 12
     - name: "+Z"                            # FSS6, slave 0x16
+      enabled: true
       normal_body:
         [0.0, 0.0, 1.0]
       position_body_m:

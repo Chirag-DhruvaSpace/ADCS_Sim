@@ -50,22 +50,5 @@ def control_torque(desired_eular, current_quaternion, omega, B_body):
     # 3. Calculate Raw Ideal Desired Torque (Standard PD Law)
     tau_des = (kp * error_vector) - (kd * omega)
 
-    # 4. Apply B-Cross Steering Law to Project Torque into a Dipole Moment
-    B_mag_sq = np.dot(B_body, B_body)
-    
-    # Avoid division by zero if the magnetic field magnitude is negligible
-    if B_mag_sq > 1e-12:
-        # mu = (tau_des x B) / ||B||^2
-        mu = np.cross(tau_des, B_body) / B_mag_sq
-    else:
-        mu = np.array([0.0, 0.0, 0.0])
-
-    # 5. Enforce Physical Actuator Hardware Limits (Max 2 Am2 per MTR axis)
-    # This represents the saturation block of your physical hardware coils
-    mu_limited = np.clip(mu, -2.0, 2.0)
-
-    # 6. Calculate the True Physical Torque acting on the spacecraft plant
-    # tau_actual = mu_limited x B
-    tau_actual = np.cross(mu_limited, B_body)
-
-    return tau_actual
+    from simulate_magnetorquers import torque_to_dipole
+    return torque_to_dipole(tau_des, B_body)[1]

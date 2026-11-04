@@ -1,5 +1,8 @@
 import numpy as np
 
+mtr_units = []
+mtr_power_W = 0.0
+
 rw_torques = np.zeros(4)      # 4 reaction-wheel torques (Nm)
 mtr_torques = np.zeros(3)
 mtr_dipole = np.zeros(3)

@@ -445,6 +445,25 @@ configurations:
         normal_body: [0, 0, 1]
         position_body_m: [0.03400000000000011, -0.15900000000000641, 0.0017599999999999502]
         sensor_roll_rad: 3.141592653589793   # 180 deg
+    # SPPE113_003 centroids and long axes from the stowed CAD inventory.
+    # Mechanical axis is known; positive winding polarity remains an assumption.
+    magnetorquers:
+      units:
+        - name: MTR-X
+          cad_node: 0352_SPPE113_003
+          position_body_m: [0.0, 0.159, -0.3215]
+          axis_body: [1.0, 0.0, 0.0]
+          enabled: true
+        - name: MTR-Y
+          cad_node: 0361_SPPE113_003
+          position_body_m: [0.1325, 0.0265, -0.3215]
+          axis_body: [0.0, 1.0, 0.0]
+          enabled: true
+        - name: MTR-Z
+          cad_node: 0724_SPPE113_003
+          position_body_m: [-0.1325, 0.1885, -0.2605]
+          axis_body: [0.0, 0.0, 1.0]
+          enabled: true
     sensor_mounts:
       gyro_position_body_m: [-0.13249999999999956, 2.6081177838359337e-06, -0.3249999999999983]
     reaction_wheels:
@@ -887,6 +906,24 @@ configurations:
         normal_body: [0, 0, 1]
         position_body_m: [0.03400000000000011, -0.15900000000000641, 0.0017599999999999502]
         sensor_roll_rad: 3.141592653589793   # 180 deg
+    # SPPE113_003 centroids and long axes from the deployed CAD inventory.
+    magnetorquers:
+      units:
+        - name: MTR-X
+          cad_node: 0338_SPPE113_003
+          position_body_m: [0.0, 0.159, -0.3215]
+          axis_body: [1.0, 0.0, 0.0]
+          enabled: true
+        - name: MTR-Y
+          cad_node: 0347_SPPE113_003
+          position_body_m: [0.1325, 0.0265, -0.3215]
+          axis_body: [0.0, 1.0, 0.0]
+          enabled: true
+        - name: MTR-Z
+          cad_node: 0710_SPPE113_003
+          position_body_m: [-0.1325, 0.1885, -0.2605]
+          axis_body: [0.0, 0.0, 1.0]
+          enabled: true
     sensor_mounts:
       gyro_position_body_m: [-0.13249999999999956, 2.6081177838359337e-06, -0.3249999999999983]
     reaction_wheels:

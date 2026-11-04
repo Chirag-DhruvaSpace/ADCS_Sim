@@ -95,6 +95,20 @@ def configuration(mode):
     if any(axis is None for axis in wheel_axes):
         raise ValueError('Run node validation/tools/extract_cad_mounts.mjs first to extract wheel mounting axes')
     # No unambiguous magnetometer chip label: retain the documented assumption.
+    rods = []
+    rod_names = {}
+    for part in parts:
+        if part['name'] != 'SPPE113_003':
+            continue
+        size = np.diff(np.asarray(part['bounds_body_m']), axis=0)[0]
+        axis = int(np.argmax(size))
+        name = 'MTR-' + 'XYZ'[axis]
+        rod_names[name] = rod_names.get(name, 0) + 1
+        if rod_names[name] > 1:
+            name += str(rod_names[name])
+        rods.append(dict(name=name, cad_node=part['node'],
+                         position_body_m=part['center_body_m'], axis_body=np.eye(3)[axis].tolist(), enabled=True))
+    rods.sort(key=lambda rod: int(np.argmax(rod['axis_body'])))
     bounds = np.array(inventory['bounds_body_m'])
     return dict(
         spacecraft=dict(mass_kg=report['mass'], body_radius_m=float(np.max(np.linalg.norm(bounds-np.array(report['com']),axis=1))),
@@ -105,6 +119,7 @@ def configuration(mode):
         geometry=dict(center_of_mass_body_m=report['com'],surfaces=surfaces,blockers=blockers),
         sun_array=dict(cells=cells,blockers=blockers),
         sensor_mounts=dict(gyro_position_body_m=gyro['center_body_m']),
+        magnetorquers=dict(units=rods),
         reaction_wheels=dict(axis_matrix_body=np.array(wheel_axes).T.tolist()),
         provenance=dict(mass_inertia='User mass-property report, 22 September 2026; kg mm² divided by 1e6; positive-notation products negated for Euler inertia matrix',
                         principal_moments_kg_m2=report['principal'],

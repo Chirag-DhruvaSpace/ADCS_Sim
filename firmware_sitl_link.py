@@ -36,11 +36,12 @@ CMD_FORMAT = "<3d"   # rwNo, mode, value -- matches acs_sim_link.h's AcsRwCmdPac
 # AcsRwCmdPacket.mode values (acs_sim_link.h ACS_SIM_CMD_*).
 CMD_MODE_RW_TORQUE = 0      # rwNo = wheel 0..3, value = torque, mNm
 CMD_MODE_RW_SPEED = 1       # rwNo = wheel 0..3, value = raw speed command
-CMD_MODE_MTR_CURRENT = 2    # rwNo = torquer rod 0..2 (body X/Y/Z), value = signed current, mA
+CMD_MODE_MTR_CURRENT = 2    # rwNo = configured rod index (default 0..2 X/Y/Z), signed current, mA
 TLM_FORMAT = "<3d"   # rwNo, currspeed_rpm, actual_torque_mNm -- matches acs_sim_link.h exactly
 
 # Compatibility name retained for callers; geometry is configured in YAML.
 from satellite_parameters import REACTION_WHEELS
+from simulate_magnetorquers import configured_model as magnetorquer_model
 RW_MOI = REACTION_WHEELS.rotor_inertia_kg_m2
 if REACTION_WHEELS.firmware_axis_matrix_body:
     FLIGHT_WHEEL_AXES_BODY = np.asarray(REACTION_WHEELS.firmware_axis_matrix_body, dtype=float)
@@ -56,7 +57,8 @@ _latest_torque_mNm = [0.0, 0.0, 0.0, 0.0]
 _wheel_momentum = [0.0, 0.0, 0.0, 0.0]   # kg*m^2*rad/s, separate bookkeeping only -- see module docstring
 _applied_torque_Nm = np.zeros(4)
 _wheel_received_at = [None]*4
-_mtr_received_at = [None]*3
+_mtr_received_at = [None]*len(magnetorquer_model().cfg.units)
+_applied_mtr_state = None
 
 _cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 _cmd_sock.bind(("0.0.0.0", CMD_LISTEN_PORT))
@@ -78,7 +80,7 @@ MODE_STATUS_FORMAT = "<B4fB"
 # Magnetorquer rod currents in mA, signed (+ve = dipole along +body axis), as
 # the ACS last commanded them: the firmware's mtrCurrDist() via flight acs.c
 # AcsSetMtrCurrAll() -> ACS SITL.
-_latest_mtr_current_mA = [0.0, 0.0, 0.0]
+_latest_mtr_current_mA = [0.0]*len(_mtr_received_at)
 _latest_fused_quaternion = [None]
 _latest_fuse_source = [0]
 _latest_fuse_received_at = [None]
@@ -122,7 +124,7 @@ def poll_rw_torques():
         rwNo = int(round(rwNo_f))
         mode = int(round(mode_f))
 
-        if not (0 <= rwNo <= (2 if mode == CMD_MODE_MTR_CURRENT else 3)):
+        if not (0 <= rwNo < (len(_mtr_received_at) if mode == CMD_MODE_MTR_CURRENT else 4)):
             print(f"firmware_sitl_link: actuator {rwNo} out of range for mode {mode}, discarding")
             continue
 
@@ -207,9 +209,15 @@ def get_latest_ads_mode_name():
 
 def mtr_dipole_per_amp():
     """Magnetorquer rod dipole per ampere, A*m^2/A -- the same dipole/current
-    relation as compute_MTR_power()."""
-    import MTR_parameters_P30xl as coil
-    return (1+coil.gain_ratio)*np.pi*coil.r**2*coil.N*1e-6
+    relation as compute_MTR_power(). Scalar for identical coils (compatibility),
+    otherwise one constant per configured rod."""
+    constants = magnetorquer_model().constants
+    return float(constants[0]) if len(constants) and np.all(constants == constants[0]) else constants.copy()
+
+
+def get_magnetorquer_state():
+    """The held per-rod plant state; retains independently commanded coils."""
+    return _applied_mtr_state
 
 
 def command_freshness(now=None):
@@ -237,6 +245,7 @@ def apply_actuator_limits(dt):
     its model of the same rods), then bounded by the plant's current and
     dipole limits.
     """
+    global _applied_mtr_state
     import satellite_parameters as config
     if not math.isfinite(dt) or dt <= 0:
         raise ValueError('Actuator hold period must be finite and positive')
@@ -248,17 +257,9 @@ def apply_actuator_limits(dt):
         upper = np.minimum(config.WHEEL_MAX_TORQUE_NM, (h+limit)/dt)
         wheel_command = np.where(freshness['wheel_fresh'], _latest_torque_mNm, 0.)
         _applied_torque_Nm[:] = np.clip(wheel_command*1e-3, lower, upper)
-        dipole_per_amp = mtr_dipole_per_amp()
-        dipole_limit = np.minimum(config.MTR_MAX_DIPOLE_AM2,
-                                 np.asarray(config.SPACECRAFT.mtr_max_current_A)*dipole_per_amp)
         rod_command = np.where(freshness['rod_fresh'], _latest_mtr_current_mA, 0.)
-        dipole = np.clip(rod_command*1e-3*dipole_per_amp, -dipole_limit, dipole_limit)
-        step = config.MTR_DIPOLE_STEP_AM2
-        if step > 0:
-            dipole_limit = np.floor(dipole_limit/step)*step
-            dipole = np.round(dipole/step)*step
-        dipole = np.clip(dipole, -dipole_limit, dipole_limit)
-        return _applied_torque_Nm.copy(), dipole
+        _applied_mtr_state = magnetorquer_model().apply_currents(rod_command*1e-3)
+        return _applied_torque_Nm.copy(), _applied_mtr_state.body_dipole_Am2.copy()
 
 
 def step_wheel_momentum(dt):

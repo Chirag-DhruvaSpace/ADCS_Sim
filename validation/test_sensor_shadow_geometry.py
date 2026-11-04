@@ -16,6 +16,7 @@ def perfect_array(deployed):
     cfg = config._load_configuration(use_advanced_satellite_model=True, panels_deployed=deployed)[10].sun_array
     return replace(cfg, enable_alignment_error=False, enable_bias_drift=False,
         enable_scale_nonlinearity=False, enable_white_noise=False, enable_albedo=False,
+        enable_self_shadowing=True,
         dropout_probability=0., latency_mean_s=0., latency_sigma_s=0., latency_min_s=0., latency_max_s=0.)
 
 

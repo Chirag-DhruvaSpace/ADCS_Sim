@@ -13,6 +13,7 @@ export function createSensorMarkers({
   const inactiveColor = new THREE.Color(0x303947);
   const sunlightColor = new THREE.Color(0xffe600);
   const strongSunlightColor = new THREE.Color(0xff7800);
+  const torquerColor = new THREE.Color(0xff8a3d);
   function createSensorLabel(text) {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
@@ -42,7 +43,7 @@ export function createSensorMarkers({
   function updateSensorMarkers(data) {
     latestData = data;
     trackerPosition = modelHolder.children[0]?.userData.starTrackerPositionBodyM;
-    const layout = [...(data.imu_mounts || [])];
+    const layout = [...(data.imu_mounts || []), ...(data.mtr_units || [])];
     if (trackerPosition) {
       layout.push({ name: 'Star tracker', kind: 'StarTracker', position: trackerPosition });
     }
@@ -50,8 +51,10 @@ export function createSensorMarkers({
     let sunSensorNumber = 0;
     for (const item of layout) {
       if (item.kind === 'Sun') sunSensorNumber += 1;
-      alive.add(item.name);
-      let mesh = sensorMarkers.get(item.name);
+      // Actuator names may match a sensor name in a replacement satellite.
+      const markerKey = item.kind === 'MTR' ? `MTR:${item.name}` : item.name;
+      alive.add(markerKey);
+      let mesh = sensorMarkers.get(markerKey);
       if (!mesh) {
         mesh = new THREE.Mesh(new THREE.SphereGeometry(0.025, 10, 8), new THREE.MeshBasicMaterial({
           color: 0x777777,
@@ -61,12 +64,12 @@ export function createSensorMarkers({
           toneMapped: false
         }));
         mesh.renderOrder = 500;
-        const label = item.kind === 'Sun' ? `FSS${sunSensorNumber}`
+        const label = item.kind === 'Sun' ? (item.fss_id || `FSS${sunSensorNumber}`)
           : item.kind === 'StarTracker' ? 'ST'
-          : item.kind === 'Gyro' ? 'Gyro' : item.kind === 'Mag' ? 'Mag' : item.name;
+          : item.kind === 'Gyro' ? 'Gyro' : item.name;
         mesh.add(createSensorLabel(label));
         satGroup.add(mesh);
-        sensorMarkers.set(item.name, mesh);
+        sensorMarkers.set(markerKey, mesh);
       }
       const [x, y, z] = item.position;
       const com = data.center_of_mass_body_m || CONFIG.MODEL_COM;
@@ -86,11 +89,13 @@ export function createSensorMarkers({
       const unit = (data.imu_units?.[item.kind === 'Gyro' ? 'gyro' : 'mag'] || []).find(u => u.name === item.name);
       /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
       const level = item.kind === 'Sun' ? sunSignalLevel(data, item.name, sunEnabled)
+        : item.kind === 'MTR' ? (item.enabled !== false ? Number(item.level || 0) : 0)
         : item.kind === 'StarTracker' ? Number(data.star_tracker_used === true)
         : Number(unit ? unit.used : item.kind === 'Gyro' ? data.imu_gyro_valid : data.imu_mag_valid);
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;
       mesh.userData.active = item.kind === 'Sun' ? sunUsed : level > 0;
       mesh.userData.color = item.kind === 'Sun' ? 0xffe600
+        : item.kind === 'MTR' ? 0xff8a3d
         : item.kind === 'StarTracker' ? (data.star_tracker_used === true ? 0x1565c0 : 0x9bdcff) : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
     }
     for (const [name, mesh] of sensorMarkers) if (!alive.has(name)) {
@@ -130,6 +135,9 @@ export function createSensorMarkers({
         } else {
           mesh.material.color.copy(sunlightColor).lerp(strongSunlightColor, (light-0.5)/0.5);
         }
+      } else if (mesh.userData.kind === 'MTR') {
+        mesh.material.color.copy(inactiveColor).lerp(
+          torquerColor, SETTINGS.sensorGlow ? Math.sqrt(mesh.userData.level) : 0);
       } else {
         mesh.material.color.setHex(mesh.userData.active ? mesh.userData.color : 0x303947);
       }

@@ -20,7 +20,7 @@ def validate_sensor_schedule(dt, imu, gps, *, firmware=False):
             if unit.enabled:
                 cfg = imu.unit_config(kind, unit, index)
                 check(unit.name, getattr(cfg, kind+'_update_rate_hz'), .01 if firmware else dt)
-    if imu.enable_sun_sensor and imu.sun_array.enabled:
+    if imu.enable_sun_sensor and imu.sun_array.enabled and any(c.enabled for c in imu.sun_array.cells):
         check('Sun sensor', imu.sun_array.update_rate_hz, dt)
     if imu.enable_star_tracker and imu.star_tracker.enabled:
         check('Star tracker', imu.star_tracker.update_rate_hz, dt)

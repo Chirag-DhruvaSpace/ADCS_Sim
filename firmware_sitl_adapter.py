@@ -1,4 +1,3 @@
-# made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
 """Tick-boundary adapter for the unchanged supplied UDP modules."""
 import math
 import socket
@@ -112,14 +111,15 @@ def integrate_firmware_step(t, dt, state, solve_segment, firmware, pacer,
 
 def _valid_actuator_command(values):
     """An ACS SITL actuator packet (rwNo, mode, value): a wheel torque for
-    wheels 0..3 or a torquer current for rods 0..2."""
+    wheels 0..3 or a torquer current for a configured rod index."""
     index, mode = values[0], values[1]
     if index != round(index):
         return False
     if mode == 0:
         return 0 <= index <= 3
     if mode == 2:
-        return 0 <= index <= 2
+        from simulate_magnetorquers import configured_model
+        return 0 <= index < len(configured_model().cfg.units)
     return False
 
 
@@ -156,7 +156,7 @@ class FirmwareLink:
         self.schedule_lag_s = 0.
         link._cmd_sock = PacketSocket(link._cmd_sock, link.CMD_FORMAT, self.received, True)
         link._mode_sock = PacketSocket(link._mode_sock, link.MODE_STATUS_FORMAT, self.received)
-    # made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag
+
     def received(self):
         now = time.monotonic()
         if self.received_at is None or now-self.received_at > 2:

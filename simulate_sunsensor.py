@@ -353,6 +353,7 @@ class RawFineSunSensor:
     name: str
     slave_id: int
     data: dict                         # Fields returned by FSS_GetTelemetry
+    enabled: bool = True               # simulator metadata; never packed on wire
 
 
 @dataclass(frozen=True)
@@ -389,8 +390,8 @@ class SimulatedSunSensorArray:
             for blocker, mesh in zip(configuration.blockers, self._shadow_meshes)]
         # SunSensorArrayParameters.post_init already validated everything
         # (fail loudly at startup); re-check the cheap invariants defensively.
-        if len(configuration.cells) < 3:
-            raise ValueError("sun sensor array needs at least 3 cells")
+        if not configuration.cells:
+            raise ValueError("sun sensor array needs at least one configured head")
         self.rng = np.random.default_rng(configuration.seed)   # ONE generator, all randomness
 
         cells = list(configuration.cells)
@@ -509,6 +510,8 @@ class SimulatedSunSensorArray:
         disables albedo that tick).
         """
         configuration = self.cfg
+        if not configuration.enabled or not any(c.enabled for c in configuration.cells):
+            return None
         time_s = float(t_seconds)
         quaternion = np.asarray(q_truth, dtype=float).reshape(4)
         sun_eci = np.asarray(sun_eci_truth, dtype=float).reshape(3)
@@ -603,13 +606,17 @@ class SimulatedSunSensorArray:
                 sensor_to_body = sensor_to_body_matrix(self._n_effective[index], cell_config.sensor_roll_rad)
                 direction_sensor = sensor_to_body.T @ sun_direction_body
                 noise_sigma = cell_config.white_noise_sigma if configuration.enable_white_noise else 0.0
+                if not cell_config.enabled:
+                    noise_sigma = 0.
                 direct_brightness = max(0.0, cell.output_fraction - cell.albedo_fraction)
                 reflected_quadrants = fine_albedo_quadrants(reflected_rays_body, reflected_weights,
                                                            sensor_to_body, configuration)
+                if not cell_config.enabled:
+                    reflected_quadrants = np.zeros(4)
                 data = simulate_fine_sensor(direction_sensor, direct_brightness,
                     configuration.fine_temperature_k, configuration, noise_sigma, self.rng,
                     albedo_quadrants=reflected_quadrants)
-                fine_sensors.append(RawFineSunSensor(cell.name, 0x11 + index, data))
+                fine_sensors.append(RawFineSunSensor(cell.name, 0x11 + index, data, cell_config.enabled))
             self._raw_receipt = RawSunSample(measurement_time_s, sample_time_s, valid,
                 configuration.cells[0].adc_bits, tuple(RawSunCell(c.name, c.adc_counts,
                 c.saturated) for c in cell_samples), tuple(fine_sensors))
@@ -643,6 +650,8 @@ class SimulatedSunSensorArray:
                       earth_direction_body, albedo_outputs):
         """Apply lighting, shadows, albedo and electronics to one photocell."""
         configuration = self.cfg
+        if not configuration.cells[cell_index].enabled:
+            return SunCellSample(cell_name, 0., 0., 0, None, False, False, False, False, 0., 0.)
         in_fov = bool(incidence_cosine >= self._fov_cos[cell_index] and incidence_cosine > 0.0)
         # (a) cosine response, zero outside the FOV cone
         direct_signal = max(0.0, float(incidence_cosine)) if in_fov else 0.0

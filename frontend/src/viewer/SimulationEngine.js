@@ -76,6 +76,7 @@ export async function startSimulationEngine(configuration) {
     showSun: true,
     showGyro: true,
     showMag: true,
+    showMTR: true,
     sensorGlow: true,
     streamOn: false,
     streamQ: 0.4,
@@ -135,7 +136,7 @@ export async function startSimulationEngine(configuration) {
     });
     saveSettings();
   }
-  for (const key of ['showSun', 'showGyro', 'showMag', 'showStarTracker', 'sensorGlow', 'smoothAttitude']) {
+  for (const key of ['showSun', 'showGyro', 'showMag', 'showMTR', 'showStarTracker', 'sensorGlow', 'smoothAttitude']) {
     if (SETTINGS[key] === undefined) SETTINGS[key] = true;
     document.getElementById('set-' + key).checked = SETTINGS[key];
     listen(document.getElementById('set-' + key), 'change', e => {

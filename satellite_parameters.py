@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+from simulate_magnetorquers import MagnetorquerArrayParameters, load_parameters as load_magnetorquers
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class SpacecraftParameters:
     model_scale_to_m: float = 1.0
     model_recenter: bool = False
     star_tracker_model_node: str = ''
+    magnetorquers: MagnetorquerArrayParameters = field(default_factory=MagnetorquerArrayParameters)
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.model_scale_to_m) or self.model_scale_to_m <= 0:
@@ -481,6 +483,7 @@ class SunSensorCellParameters:
     white_noise_sigma: float = 0.003             # fresh noise per sample
     adc_bits: int = 12                           # digitizer depth (all cells share it)
     sensor_roll_rad: float = 0.0                 # fine sensor rotation around its normal
+    enabled: bool = True                        # preserve slot/address when off
 
 
 @dataclass(frozen=True)
@@ -587,8 +590,8 @@ class SunSensorArrayParameters:
             value = getattr(self, name)
             if not isinstance(value, int) or not 0 < value <= 65535:
                 raise ValueError(f'{name} must be a positive uint16 count')
-        if len(self.cells) < 3:
-            raise ValueError("sun array needs at least 3 cells")
+        if not self.cells:
+            raise ValueError("sun array needs at least one configured head; use enabled: false to power it off")
         if self.update_rate_hz <= 0.0:
             raise ValueError("sun update_rate_hz must be positive")
         if self.min_cells_for_solution < 3:
@@ -605,6 +608,8 @@ class SunSensorArrayParameters:
             raise ValueError("sun seed must be an int")
         bits = None
         for c in self.cells:
+            if not isinstance(c.enabled, bool):
+                raise ValueError(f'sun sensor {c.name}: enabled must be boolean')
             if not np.isfinite(c.sensor_roll_rad):
                 raise ValueError(f'sun sensor {c.name}: roll must be finite radians')
             if float(np.linalg.norm(c.normal_body)) < 1e-9:
@@ -715,6 +720,8 @@ class VectorSensorParameters:
     def __post_init__(self):
         if not self.name or not isinstance(self.name, str):
             raise ValueError('Each sensor needs a nonempty name')
+        if not isinstance(self.enabled, bool):
+            raise ValueError('Sensor unit enabled must be boolean')
         if not np.isfinite(self.fusion_weight) or self.fusion_weight <= 0:
             raise ValueError('fusion_weight must be positive')
         for value, shape in ((self.calibration_matrix, (3, 3)), (self.calibration_bias, (3,))):
@@ -938,6 +945,8 @@ class ImuSimParameters:
     mag_disturbance_wander_sigma_t: float = 20.0e-9   # slow variation of the spacecraft field
     mag_disturbance_wander_tau_s: float = 200.0       # its time constant [s]
     mag_range_t: float = 1.0e-3               # +/-1000 uT measurement range
+    mag_hardware_range_t: float = 4900e-6    # raw register acquisition range
+    mag_hardware_scale_t_per_count: float = 150e-9
     mag_dropout_probability: float = 0.0     # per-sample probability the magnetometer says nothing
     mag_latency_mean_s: float = 0.01         # measurement staleness (~10 ms)
     mag_latency_sigma_s: float = 0.002
@@ -978,6 +987,9 @@ class ImuSimParameters:
     def __post_init__(self) -> None:
         if self.gyro_hardware_range_deg_s not in (125, 450, 2000):
             raise ValueError('ADIS16545 gyro range must be 125, 450, or 2000 deg/s')
+        for name in ('mag_hardware_range_t', 'mag_hardware_scale_t_per_count'):
+            if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f'{name} must be finite and positive')
         for group in (self.gyros, self.magnetometers):
             if any(not isinstance(u, VectorSensorParameters) for u in group):
                 raise ValueError('Sensor groups must contain VectorSensorParameters')
@@ -1053,6 +1065,8 @@ class ImuSimParameters:
         overrides[kind + '_mount_quaternion'] = (unit.mount_quaternion if unit.mount_quaternion is not None
                                                 else getattr(self, kind + '_mount_quaternion'))
         return replace(self, **overrides, gyros=(), magnetometers=(), enable_sun_sensor=False,
+                       enabled=self.enabled and unit.enabled and
+                               (self.enable_gyro if kind == 'gyro' else self.enable_magnetometer),
                        gyro_seed=None, mag_seed=None,
                        seed=unit.seed if unit.seed is not None else self.seed + index*1009 + (0 if kind == 'gyro' else 100003),
                        enable_gyro=kind == 'gyro', enable_magnetometer=kind == 'mag')
@@ -1188,7 +1202,7 @@ def _apply_sensor_profile(cfg, profile):
         base, target = nominal.cells[0], preset.cells[0]
         # Mounting geometry (incl. the roll about the normal) is not an error channel.
         error_fields = {f.name for f in fields(base)
-                        if f.name not in ('name', 'normal_body', 'position_body_m', 'fov_half_angle_deg',
+                        if f.name not in ('name', 'enabled', 'normal_body', 'position_body_m', 'fov_half_angle_deg',
                                           'sensor_roll_rad')}
         changes['cells'] = tuple(replace(c, **{name: getattr(target, name) for name in error_fields})
                                  for c in cfg.cells)
@@ -1225,8 +1239,8 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
                 'disturbances', 'geometry', 'reaction_wheels', 'simulation',
                 'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker',
                 'attitude_navigation', 'viewer', 'use_advanced_satellite_model', 'pointing', 'sensor_profiles'}
-    if set(data) != expected:
-        raise ValueError(f"YAML sections differ from expected: {sorted(set(data) ^ expected)}")
+    if set(data) - {'magnetorquers'} != expected:
+        raise ValueError(f"YAML sections differ from expected: {sorted((set(data) - {'magnetorquers'}) ^ expected)}")
     profiles = data['sensor_profiles']
     if not isinstance(profiles, dict) or set(profiles) != {'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker'}:
         raise ValueError('sensor_profiles must specify gps, gyroscope, magnetometer, sun_sensor, star_tracker')
@@ -1276,6 +1290,8 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
         from urllib.parse import quote
         spacecraft_data['model_url'] = '/spacecraft-model/' + quote(model_file.name)
     spacecraft = _from_yaml(SpacecraftParameters, spacecraft_data)
+    spacecraft = replace(spacecraft, magnetorquers=load_magnetorquers(
+        data.get('magnetorquers', {}), selected.get('magnetorquers')))
     # Physical limits have one editable source; control/allocation inherit them.
     for key in ('mtr_max_dipole_Am2', 'mtr_dipole_step_Am2'):
         data['control'][key] = getattr(spacecraft, key)
@@ -1314,7 +1330,7 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
         ('gyroscope', 'gyro_', 'enable_gyro', 'gyros', 'enable_gyro_update', 'use_gyro_for_control'),
         ('magnetometer', 'mag_', 'enable_magnetometer', 'magnetometers', 'enable_magnetometer_update', 'use_mag_for_control'),
     ):
-        values = dict(data[name])
+        values = {**data[name], **selected.get(name, {})}
         imu_data[flag] = values.pop('enabled')
         imu_data[prefix + 'seed'] = values.pop('seed')
         imu_data[update] = values.pop('use_for_attitude')
@@ -1343,7 +1359,7 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     sun = _apply_sensor_profile(_from_yaml(SunSensorArrayParameters, sun_data), profiles['sun_sensor'])
     sun = replace(sun, enabled=data['sun_sensor']['enabled'] and sun.enabled)
     imu_data['sun_array'] = sun
-    imu_data['enable_sun_sensor'] = sun.enabled
+    imu_data['enable_sun_sensor'] = sun.enabled and any(c.enabled for c in sun.cells)
     tracker_values = dict(data['star_tracker'])
     tracker = _from_yaml(StarTrackerParameters, tracker_values)
     tracker_profile = profiles['star_tracker']
@@ -1387,6 +1403,11 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
                    and 'mount_quaternion' not in field.name}
         changes[flag] = getattr(imu, flag) and profiles[name] != 'off'
         imu = replace(imu, **changes)
+    imu = replace(imu, enabled=any((
+        imu.enable_gyro and any(u.enabled for u in imu.sensor_units('gyro')),
+        imu.enable_magnetometer and any(u.enabled for u in imu.sensor_units('mag')),
+        imu.enable_sun_sensor and any(c.enabled for c in imu.sun_array.cells),
+        imu.enable_star_tracker)))
     gps = _apply_sensor_profile(section('gps', GpsSimParameters), profiles['gps'])
     gps = replace(gps, enabled=data['gps']['enabled'] and gps.enabled)
     wheel_settings = {**data['reaction_wheels'], **selected.get('reaction_wheels', {})}

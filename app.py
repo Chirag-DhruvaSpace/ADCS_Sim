@@ -165,6 +165,8 @@ def mtr_telemetry():
         "mtr_torques": store.mtr_torques.tolist(),
         "mtr_dipole": store.mtr_dipole.tolist(),
         "mtr_currents": store.mtr_currents.tolist(),  
+        "mtr_units": store.mtr_units,
+        "mtr_power_W": store.mtr_power_W,
         #"angular_accelerations": np.degrees(store.angular_acceleration.tolist())
     })
 

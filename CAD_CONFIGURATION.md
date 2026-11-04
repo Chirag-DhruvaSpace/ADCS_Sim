@@ -79,10 +79,102 @@ Six FSS boards use their placed CAD locations and dominant planar-face normals;
 the ±Y boards are tilted approximately 15 degrees. The ADIS16547 gyro uses its CAD
 package location. Four RW060 wheel spindle directions are derived from planar
 CAD faces and feed the allocator. Three SPPE113 magnetorquer and two GPS antenna
-positions are retained in the hardware inventory. CAD labels do not
+positions are recorded in the hardware inventory and the magnetorquer YAML
+unit lists. CAD labels do not
 unambiguously identify the magnetometer chip, so its existing assumed mount stays
 explicit. Supplier actuator limits and sensor noise/calibration remain the
 existing configuration values; a CAD part name does not establish those values.
+
+## Configurable magnetic hardware
+
+`simulate_magnetorquers.py` owns the coil plant used by legacy controllers,
+detumbling, custom pointing and firmware SITL: rod-axis allocation, saturation,
+current/dipole conversion, quantization, power and torque in the true field.
+`MTR_allocator.py` and the dynamics module's imported `compute_MTR_power` retain
+their public interfaces. Unused `MTR_parameters_P30xl.py` design arithmetic and
+the obsolete fictitious-field detumble block were removed; live coil constants
+come from YAML. Removed source remains recoverable from Git history.
+
+The basic `magnetorquers` section defines the physical master switch, electrical
+defaults and legacy units. In advanced mode the selected configuration's
+`magnetorquers.units` replaces the basic unit list. Change the selected list to
+add/remove rods, change `axis_body` or `position_body_m`, or set a unit's `enabled`
+to false. Per-unit optional values are `max_dipole_Am2`, `dipole_step_Am2`,
+`max_current_A`, `dipole_per_amp_Am2_per_A` and `resistance_ohm`. Omitted dipole,
+step and current limits inherit `spacecraft`; electrical constants inherit the
+basic `magnetorquers` section. Rod names must be unique. Empty lists retain the
+historical three rods; use `enabled: false` to remove all actuation.
+
+The three SPPE113_003 rods share these CAD-body placements in both deployments:
+
+| Rod | Position [m] | Mechanical dipole axis |
+|---|---|---|
+| MTR-X | [0, 0.159, -0.3215] | [1, 0, 0] |
+| MTR-Y | [0.1325, 0.0265, -0.3215] | [0, 1, 0] |
+| MTR-Z | [-0.1325, 0.1885, -0.2605] | [0, 0, 1] |
+
+Axes follow the rod's long CAD extent; winding polarity is assumed positive
+along the listed axis and must be updated from wiring/calibration when known.
+`cad_node` records provenance without making runtime physics depend on a part
+name. Positions are in the same body coordinates as other hardware; the viewer
+subtracts the selected COM once. Positions affect marker placement; the uniform
+ambient field model applies torque `sum(m_i) x B`, independent of moment arms.
+Coil-generated field contamination at magnetometers is not modeled.
+
+Legacy commands stay continuous unless `quantize_commands: true`; firmware
+currents always use the configured dipole step. Both paths now respect each
+coil's current and dipole limits. With the existing 0.3 A X/Y limit and coil
+constant, continuous authority is about 1.845 A m^2 (firmware quantizes to 1.8),
+where legacy previously clipped only at 2 A m^2. Z remains limited to 2 A m^2.
+
+Firmware UDP framing is unchanged. Rod index is the zero-based units-list
+index; the supplied ACS drives indices 0..2, so retain X/Y/Z ordering. The plant
+accepts additional indices for additional configured rods, but commanding them
+requires matching firmware support. Missing/stale rod currents independently
+expire. Individual achieved coil currents are preserved through integration,
+even when several rods point along the same axis.
+
+Telemetry includes `mtr_units` (placement, axis, enabled/active state, signed
+current, achieved dipole, power, normalized activation) and `mtr_power_W`.
+Settings > Sensors > Magnetorquer markers controls display visibility only;
+physical disabling uses YAML. Markers brighten orange with achieved dipole and
+are grey when idle or disabled. Measurement glow also controls torquer glow.
+
+Multiple magnetometers already use `magnetometer.units` in the basic YAML;
+the selected advanced configuration may also supply a `magnetometer` section
+with its unit list and mounts. Each chip has independent errors/seed, position,
+mount quaternion, calibration and fusion weight. The basic YAML includes a
+two-chip example. No unambiguous magnetometer die was found in either CAD GLB
+or inventory, so the existing single assumed mount remains active. Legacy
+navigation calibrates and fuses valid synchronized units; the current firmware
+sensor packet supports one magnetometer and receives the first enabled unit.
+Changing position affects the measurement through `gradient_body_t_per_m`;
+with a zero gradient all mounts see the same ambient Earth field.
+
+Every sensor has an independent YAML `enabled` switch. Gyro/magnetometer units
+and individual Sun-sensor heads also have `enabled`; switching a Sun head off
+preserves its list slot and firmware slave address, produces no photocurrent,
+and sends no firmware reply for that head. All sensors may be switched off
+together. Navigation then has no sensor receipts; the simulator continues
+integrating the plant. With fewer than three active coarse Sun heads, coarse
+reconstruction reports insufficient measurements; a valid fine-head vector
+can still supply sunlight direction, including single-head configurations.
+
+Choose `sensor_profiles.<sensor>: custom` to use the YAML error literals;
+presets intentionally replace their documented error channels. All implemented
+sensor parameters are accepted in their sections, including magnetometer
+`hardware_range_t` and `hardware_scale_t_per_count`, which now control raw
+acquisition and Python decoding together. Hardware wire formats remain fixed.
+For literal gyro errors in firmware SITL choose
+`simulation.firmware_gyro_preset: configured`; to model a different magnetic
+calibration set `simulation.firmware_board_magnetometer_calibration: false`
+and configure the magnetometer response/bias directly. Changing mounting,
+register scales, or calibration for a different real sensor also requires the
+external firmware's matching decode/calibration. Its IMU loop remains 100 Hz.
+
+Replacement satellites continue to use their own CAD/GLB and the two YAML files.
+Runtime does not search for P-30XL part names. The P-30XL CAD configuration builder
+also exports rod placements, so rebuilding its configurations retains them.
 
 ## Disturbance physics
 
@@ -121,11 +213,11 @@ controller stability qualification.
 Run from the repository root with the CAD export dependencies installed:
 
 ```powershell
-python scripts/export_satellite_cad.py '../P-30XL Deployed 22-09-2026.STEP' deployed
-python scripts/export_satellite_cad.py '../P-30XL Stoved 22-09-2026.STEP' stowed
+python validation/tools/export_satellite_cad.py '../P-30XL Deployed 22-09-2026.STEP' deployed
+python validation/tools/export_satellite_cad.py '../P-30XL Stoved 22-09-2026.STEP' stowed
 npm.cmd install --prefix .tools/gltf @gltf-transform/cli
-node scripts/extract_cad_mounts.mjs
-python scripts/build_cad_configurations.py
+node validation/tools/extract_cad_mounts.mjs
+python validation/tools/build_cad_configurations.py
 ```
 
 Dependencies for conversion are `cadquery-ocp`, `numpy`, `trimesh`, and `pyyaml`.
@@ -139,9 +231,9 @@ Validation commands:
 
 ```powershell
 python -m pytest validation/test_spacecraft_configurations.py validation/test_sensor_navigation.py validation/test_dashboard_telemetry.py -q
-python scripts/verify_cad_physics.py deployed
-python scripts/verify_cad_physics.py stowed
-python scripts/verify_sensor_changes.py
+python validation/tools/verify_cad_physics.py deployed
+python validation/tools/verify_cad_physics.py stowed
+python -m pytest validation/test_magnetorquers.py validation/test_sensor_yaml_switches.py -q
 ```
 
 The live mode checks use a sunlit starting phase without editing the YAML, match

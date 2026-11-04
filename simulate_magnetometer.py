@@ -100,11 +100,11 @@ class RawMagnetometerSample:
         return (self.data['X_axis'], self.data['Y_axis'], self.data['Z_axis'])
 
 
-def encode_magnetometer_registers(sensor_field_t):
+def encode_magnetometer_registers(sensor_field_t, scale_t_per_count=150e-9):
     """AK09916 signed 16-bit outputs; one count is 0.15 microtesla (150 nT)."""
     registers = {}
     for axis_name, magnetic_field_t in zip(('X_axis', 'Y_axis', 'Z_axis'), sensor_field_t):
-        count = round(float(magnetic_field_t) / 150e-9)
+        count = round(float(magnetic_field_t) / scale_t_per_count)
         registers[axis_name] = max(-32768, min(32767, count))
     return registers
 
@@ -183,7 +183,7 @@ class SimulatedMagnetometer:
     def read_sample(self, raw_output=False):
         """Read the prepared tick on this sensor's configured sampling grid."""
         reading = (self._produce_mag(self._last_t, raw_output)
-                   if self.cfg.enable_magnetometer else None)
+                   if self.cfg.enabled and self.cfg.enable_magnetometer else None)
         if raw_output:
             self._raw_receipt = reading
             self._raw_tick = self._last_t
@@ -191,6 +191,8 @@ class SimulatedMagnetometer:
 
     def update(self, t_seconds, q_truth, B_eci_truth, raw_output=False):
         """Sample magnetic field [tesla] from supplied truth; never advance the physics."""
+        if not self.cfg.enabled or not self.cfg.enable_magnetometer:
+            return None
         self.prepare_sample(t_seconds, q_truth, B_eci_truth)
         return self.read_sample(raw_output)
 
@@ -286,7 +288,7 @@ class SimulatedMagnetometer:
         local_field = B_true_body + np.asarray(configuration.mag_gradient_body_t_per_m) @ np.asarray(configuration.mag_position_body_m)
         unclipped_measurement = (self._M_mag @ (self._mag_mount.T @ (local_field + disturbance))
                + self._mag_hard_iron + measurement_noise)
-        measurement_range_t = 4900e-6 if raw_output else configuration.mag_range_t
+        measurement_range_t = configuration.mag_hardware_range_t if raw_output else configuration.mag_range_t
         saturated = bool(np.any(np.abs(unclipped_measurement) > measurement_range_t))
         B_meas = np.clip(unclipped_measurement, -measurement_range_t, measurement_range_t)
         if configuration.mag_quantization_t > 0.0:
@@ -295,10 +297,12 @@ class SimulatedMagnetometer:
                      and self.rng.random() < configuration.mag_dropout_probability)
 
         if raw_output:
-            hardware_limit_t = 4900e-6
-            saturated = saturated or bool(np.any(np.abs(B_meas) > hardware_limit_t))
-            sensor_field_t = np.clip(B_meas, -hardware_limit_t, hardware_limit_t)
-            registers = encode_magnetometer_registers(sensor_field_t)
+            hardware_limit_t = configuration.mag_hardware_range_t
+            low = max(-hardware_limit_t, -32768 * configuration.mag_hardware_scale_t_per_count)
+            high = min(hardware_limit_t, 32767 * configuration.mag_hardware_scale_t_per_count)
+            saturated = saturated or bool(np.any((B_meas < low) | (B_meas > high)))
+            sensor_field_t = np.clip(B_meas, low, high)
+            registers = encode_magnetometer_registers(sensor_field_t, configuration.mag_hardware_scale_t_per_count)
             return RawMagnetometerSample('mag', measurement_time_s, sample_time_s, registers, valid, saturated)
 
         B_meas = self._mag_mount @ B_meas

@@ -160,8 +160,9 @@ state0 = np.concatenate((r0, v0))          # [x, y, z, vx, vy, vz]
 # doesn't print one line per second for hours. The huge negative start value
 # lets the first warning fire immediately.
 _sensor_layout = [dict(name=cell.name, kind='Sun', position=list(cell.position_body_m),
-                       normal=list(cell.normal_body), fov=cell.fov_half_angle_deg)
-                  for cell in config.IMU_SIM.sun_array.cells]
+                       normal=list(cell.normal_body), fov=cell.fov_half_angle_deg,
+                       enabled=cell.enabled, fss_id=f'FSS{index+1}')
+                  for index, cell in enumerate(config.IMU_SIM.sun_array.cells)]
 for _kind, _label in [('gyro', 'Gyro'), ('mag', 'Mag')]:
     for _unit in config.IMU_SIM.sensor_units(_kind):
         _position = _unit.position_body_m
@@ -424,7 +425,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 gps=_msg, sun=_sun_msg, sun_cells=config.IMU_SIM.sun_array.cells,
                 gyro=_gyro_msg, mag=_mag_msg,
                 star=_star_msg, epoch_unix_s=epoch_utc.timestamp(), control_period_s=1/FIRMWARE_IMU_RATE_HZ)
-            srd.set_firmware_tick(wheels, dipole)
+            srd.set_firmware_tick(wheels, dipole, firmware.link.get_magnetorquer_state())
         custom_tick_command = cs.get_pointing_command()
         srd.set_custom_tick_target(custom_tick_command['desired_quaternion'])
         def solve_segment(start, end, state):
@@ -455,7 +456,9 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 X_rot_next = integrate_firmware_step(t, dt, X_rot, solve_segment,
                     firmware, pacer,
                     lambda sample_t, q, w: _acquire_imu(sample_t, q, w, B_eci),
-                    srd.set_firmware_tick, defer_endpoint_publish=True)[:7]
+                    lambda wheels, dipole: srd.set_firmware_tick(
+                        wheels, dipole, firmware.link.get_magnetorquer_state()),
+                    defer_endpoint_publish=True)[:7]
         finally:
             srd.set_custom_tick_target(None)
 
@@ -871,12 +874,16 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             "kinematic_robustness_target_pitch_deg": float(kinematic_robustness_target_pitch_deg),
             "kinematic_robustness_target_roll_deg": float(kinematic_robustness_target_roll_deg),
             "mode": store.mode,
+            "mtr_units": store.mtr_units,
+            "mtr_power_W": store.mtr_power_W,
             "actuator_telemetry": {
                 "time": float(store.time), "mode": store.mode,
                 "rw_torques": np.asarray(store.rw_torques).tolist(),
                 "mtr_torques": np.asarray(store.mtr_torques).tolist(),
                 "mtr_dipole": np.asarray(store.mtr_dipole).tolist(),
                 "mtr_currents": np.asarray(store.mtr_currents).tolist(),
+                "mtr_units": store.mtr_units,
+                "mtr_power_W": store.mtr_power_W,
             },
             **(dict(zip(('custom_target_yaw_deg', 'custom_target_pitch_deg', 'custom_target_roll_deg'), np.degrees(q2e.euler_from_quaternion(*custom_target)).tolist())) if config.POINTING['strategy'] == 'custom' else {}),
             "custom_pointing_status": custom_state,

@@ -84,7 +84,7 @@ def decode_vector_sample(sample, sensor_kind, configuration):
         scale = gyro_register_scale_rad_s(configuration.gyro_hardware_range_deg_s)
         mount = configuration.gyro_mount_quaternion
     else:
-        scale = 150e-9
+        scale = configuration.mag_hardware_scale_t_per_count
         mount = configuration.mag_mount_quaternion
     sensor_vector = counts * scale
     body_vector = mount_to_body(mount) @ sensor_vector
@@ -109,12 +109,15 @@ def decode_vector_group(readings, sensor_kind, configuration):
 
 def fine_sensor_body_direction(sensor, cell_configuration, sun_configuration):
     """Return a trusted local FSS vector rotated into body axes, or None."""
+    if not cell_configuration.enabled or not getattr(sensor, 'enabled', True):
+        return None
     from simulate_sunsensor import sensor_to_body_matrix
     data = sensor.data
     signal_counts = data['Q1'] + data['Q2'] + data['Q3'] + data['Q4']
     if signal_counts < sun_configuration.fine_eclipse_threshold_counts:
         return None
-    if abs(data['Alpha']) > 3500 or abs(data['Beta']) > 3500:
+    limit_cdeg = np.degrees(sun_configuration.fine_fov_half_angle_rad) * 100.
+    if abs(data['Alpha']) > limit_cdeg or abs(data['Beta']) > limit_cdeg:
         return None
     direction_sensor = np.array([data['VecX'], data['VecY'], data['VecZ']], dtype=float)
     direction_length = np.linalg.norm(direction_sensor)
@@ -136,16 +139,16 @@ def decode_sun_sample(sample, configuration):
         raise ValueError('Sun photocell names do not match configuration')
     full_scale_count = 2**sample.adc_bits - 1
     decoded_cells = []
-    for cell in sample.cells:
+    for cell, cell_configuration in zip(sample.cells, configuration.cells):
         if not 0 <= cell.adc_counts <= full_scale_count:
             raise ValueError('Invalid photocell register')
-        fraction = cell.adc_counts / full_scale_count
+        fraction = cell.adc_counts / full_scale_count if cell_configuration.enabled else 0.
         angle_deg = None
         if fraction > 0:
             angle_deg = float(np.degrees(np.arccos(fraction)))
         decoded_cells.append(SunCellSample(
             name=cell.name, output_fraction=fraction, output_pct=fraction * 100,
-            adc_counts=cell.adc_counts, angle_deg=angle_deg, used=False,
+            adc_counts=cell.adc_counts if cell_configuration.enabled else 0, angle_deg=angle_deg, used=False,
             in_fov=None, shadowed=None, saturated=cell.saturated,
             eclipse_factor_applied=None, albedo_fraction=None))
     decoded = SunArrayMeasurement(sample.t_meas_s, sample.t_arrival_s,

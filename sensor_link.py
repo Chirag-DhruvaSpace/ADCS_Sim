@@ -156,6 +156,8 @@ def send_fss(sock, raw, cells=(), full_scale_counts=10000, white_noise_enabled=T
         return last_fss_heads
     heads = []
     for k, sensor in enumerate(raw.sensors):
+        if not getattr(sensor, 'enabled', True):
+            continue
         r = sensor.data
         sock.sendto(struct.pack(FSS_PACKET_FORMAT, SENSOR_ID_FSS, sensor.slave_id,
                                 *(r[name] for name in FSS_FIELDS)),

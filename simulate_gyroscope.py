@@ -187,7 +187,7 @@ class SimulatedGyroscope:
     def read_sample(self, raw_output=False):
         """Read the prepared tick on this sensor's configured sampling grid."""
         reading = (self._produce_gyro(self._last_t, raw_output)
-                   if self.cfg.enable_gyro else None)
+                   if self.cfg.enabled and self.cfg.enable_gyro else None)
         if raw_output:
             self._raw_receipt = reading
             self._raw_tick = self._last_t
@@ -195,6 +195,8 @@ class SimulatedGyroscope:
 
     def update(self, t_seconds, q_truth, omega_truth, raw_output=False):
         """Sample angular rate [rad/s] from supplied truth; never advance the physics."""
+        if not self.cfg.enabled or not self.cfg.enable_gyro:
+            return None
         self.prepare_sample(t_seconds, q_truth, omega_truth)
         return self.read_sample(raw_output)
 

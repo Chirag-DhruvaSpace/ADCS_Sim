@@ -200,7 +200,7 @@ export default memo(function SettingsPanel() {
     </div>
     <div className="settings-content" data-settings-page="2" hidden={true}>
       <h3 className="sec">
-        {"IMU hardware"}
+        {"Sensors and actuators"}
       </h3>
       <div className="set-row">
         <label htmlFor="set-showSun">
@@ -221,6 +221,10 @@ export default memo(function SettingsPanel() {
         <input id="set-showMag" type="checkbox" defaultChecked={true} />
       </div>
       <div className="set-row">
+        <label htmlFor="set-showMTR">Magnetorquer markers</label>
+        <input id="set-showMTR" type="checkbox" defaultChecked={true} />
+      </div>
+      <div className="set-row">
         <label htmlFor="set-showStarTracker">Star tracker marker</label>
         <input id="set-showStarTracker" type="checkbox" defaultChecked={true} />
       </div>
@@ -231,7 +235,7 @@ export default memo(function SettingsPanel() {
         <input id="set-sensorGlow" type="checkbox" defaultChecked={true} />
       </div>
       <p>
-        {"Sun glow follows measured photocurrent. Other sensor markers glow when their readings are valid."}
+        {"Sun glow follows measured photocurrent. Sensor markers glow when readings are valid. Magnetorquer glow follows achieved coil dipole; idle or disabled rods are grey. Marker switches only change visibility."}
       </p>
     </div>
     <div className="settings-content" data-settings-page="3" hidden={true}>
