@@ -250,7 +250,6 @@ simulation:
   firmware_command_timeout_s: 2.0
   firmware_gyro_preset: adis16545 # configured preserves YAML gyro error values
   firmware_board_magnetometer_calibration: true # Match firmware magApplyCal
-  allow_unverified_magnetic_gains: true # Historical schedule; fingerprint checked, design provenance unavailable
   default_duration_s: 100000.0            # ASSUMPTION: launcher demo duration
   telemetry_publish_period_s: 0.25         # Viewer/telemetry update period
   speed: 10.0                              # Simulated seconds per real second; no upper limit (e.g. 100). CPU limits actual speed.

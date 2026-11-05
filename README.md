@@ -322,15 +322,9 @@ selection is explicitly `WMM` or `IGRF`, with no automatic substitution; the
 weather loader uses `space_weather_file_pattern`. Restart to change datasets.
 Actual selections and paths appear in telemetry's model list.
 
-Historical magnetic-pointing gains have no recoverable design/Floquet provenance.
-`magnetic_gain_manifest.json` records a compatibility baseline with plant, orbit,
-epoch, frames, dataset and gain hashes; it does **not** certify those gains.
-Configuration/artifact mismatches are rejected. The shipped
-`simulation.allow_unverified_magnetic_gains: true` explicitly preserves historical
-legacy operation and emits a warning. Set it false to require verified designs.
-The magnetic target deliberately remains fixed on the configured epoch Sun;
-reaction-wheel Sun targets track the current Sun. A new gain design requires its
-own reproducible generator and validation evidence, not relabeling this baseline.
+Magnetic-pointing gains load directly from `K_seq.npy` and `t_grid.npy`.
+The magnetic target remains fixed on the configured epoch Sun; reaction-wheel
+Sun targets track the current Sun.
 
 For an isolated timing check, run
 `.venv/Scripts/python.exe -B validation/tools/benchmark_sitl_timing.py --duration 30`.

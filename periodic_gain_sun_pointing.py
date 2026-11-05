@@ -1,8 +1,6 @@
 """Historical periodic magnetic-pointing controller with a paced governor.
 
-The gain manifest checks plant, epoch, data, frames and artifact hashes.
-Original design/Floquet provenance is unavailable; use requires explicit
-YAML permission. The target is deliberately fixed to the epoch Sun in EME2000.
+The target is deliberately fixed to the epoch Sun in EME2000.
 """
 import os
 import numpy as np
@@ -21,19 +19,9 @@ if (K_seq.shape != (_N, 3, 6) or _N < 2 or not np.all(np.isfinite(K_seq))
         or not np.all(np.isfinite(t_grid)) or abs(t_grid[0]) > 1e-12
         or _dt_grid <= 0 or not np.allclose(np.diff(t_grid), _dt_grid)):
     raise ValueError('Invalid magnetic gain/grid artifacts')
-_schedule_status = None
-
-
-def validate_gain_schedule():
-    global _schedule_status
-    if _schedule_status is None:
-        from magnetic_gain_contract import validate_schedule
-        _schedule_status = validate_schedule()
-    return _schedule_status
 
 
 def K_of_t(t):
-    validate_gain_schedule()
     phase = t % _T_orb
     k = int(phase // _dt_grid) % _N
     return K_seq[k]

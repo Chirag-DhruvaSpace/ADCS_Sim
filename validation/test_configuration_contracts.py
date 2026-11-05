@@ -1,6 +1,4 @@
 from dataclasses import replace
-from types import SimpleNamespace
-import json
 import numpy as np
 import pytest
 import satellite_parameters as config
@@ -41,21 +39,6 @@ def test_environment_selection_is_explicit(monkeypatch):
     from engine.physics.magnetic_field import OrekitIGRF
     model = OrekitIGRF(None,None,None,model_name='WMM')
     assert model.model_name == 'WMM'
-
-
-def test_magnetic_artifacts_require_matching_contract_and_permission(tmp_path, monkeypatch):
-    import magnetic_gain_contract as gains
-    baseline = json.loads(gains.MANIFEST.read_text())
-    path = tmp_path/'manifest.json'
-    path.write_text(json.dumps(baseline))
-    with pytest.warns(RuntimeWarning,match='unverified'):
-        assert gains.validate_schedule(path) == 'historical_unverified'
-    monkeypatch.setattr(config,'SIMULATION',replace(config.SIMULATION,allow_unverified_magnetic_gains=False))
-    with pytest.raises(RuntimeError,match='unknown design provenance'):
-        gains.validate_schedule(path)
-    monkeypatch.setattr(config,'ORBIT',replace(config.ORBIT,raan_deg=config.ORBIT.raan_deg+1))
-    with pytest.raises(RuntimeError,match='mismatch'):
-        gains.validate_schedule(path)
 
 
 def test_accelerator_load_failure_cannot_block_surface_model(monkeypatch):

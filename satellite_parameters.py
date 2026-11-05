@@ -227,7 +227,6 @@ class SimulationParameters:
     firmware_command_timeout_s: float = 2.0
     firmware_gyro_preset: str = 'adis16545'
     firmware_board_magnetometer_calibration: bool = True
-    allow_unverified_magnetic_gains: bool = False
 
     def __post_init__(self):
         for name in ('orbit_output_window_s', 'speed', 'orbit_integrator_min_step_s', 'orbit_integrator_max_step_s',

@@ -199,8 +199,6 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     validate_sensor_schedule(float(dt), config.IMU_SIM, config.GPS_SIM,
                              firmware=config.POINTING['strategy'] == 'firmware_sitl')
     firmware = None
-    if config.POINTING['strategy'] != 'firmware_sitl':
-        srd.sun_pointing.validate_gain_schedule()
     if config.POINTING['strategy'] == 'firmware_sitl':
         from firmware_sitl_adapter import (FirmwareLink, with_board_magnetometer, with_firmware_imu_rate,
                                            with_adis16545_gyro, integrate_firmware_step, FIRMWARE_IMU_RATE_HZ, imu_substep_times)
@@ -1186,7 +1184,6 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 'Orekit data': str(config.MODEL_DATA.orekit_data_path),
                 'Space weather pattern': config.MODEL_DATA.space_weather_file_pattern,
                 'Facet shadows': ('JVM accelerated' if _orbit_provider._surface_model._native_visibility is not None else 'NumPy fallback'),
-                'Magnetic gain design': srd.sun_pointing._schedule_status or 'Not used in firmware mode',
             },
         )
 

@@ -178,9 +178,6 @@ def test_every_pointing_mode_uses_consistent_plant_and_telemetry(advanced, mode,
     monkeypatch.setattr(dynamics, '_firmware_wheels', np.zeros(4))
     monkeypatch.setattr(dynamics, '_firmware_wheel_axes', lambda: wheels.A)
     monkeypatch.setattr(dynamics.cd, 'DISTURBANCES_ENABLED', False)
-    # This checks hardware integration in both plants, not the independent
-    # historical gain contract (which intentionally rejects legacy inertia).
-    monkeypatch.setattr(dynamics.sun_pointing, 'validate_gain_schedule', lambda: None)
     field = np.array([2e-5, -1e-5, 3e-5])
     derivative = dynamics.rotational_equations_of_motion(0., [1, 0, 0, 0, 0, 0, 0], field,
                                                         [7e6, 0, 0], [0, 7500, 0])
