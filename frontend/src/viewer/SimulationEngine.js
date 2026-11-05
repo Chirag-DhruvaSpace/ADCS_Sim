@@ -1056,7 +1056,7 @@ export async function startSimulationEngine(configuration) {
         }
         if (data.nadir_ecef_x !== undefined) nadirDirEcef = new THREE.Vector3(data.nadir_ecef_x, data.nadir_ecef_y, data.nadir_ecef_z).normalize();
         if (data.sun_sweep_ecef_x !== undefined) sweepDirEcef = new THREE.Vector3(data.sun_sweep_ecef_x, data.sun_sweep_ecef_y, data.sun_sweep_ecef_z).normalize();
-        if (data.mode !== undefined) latestMode = data.mode === 'FIRMWARE_SITL' ? ({ NadirPoint: 'NADIR', Sunpoint: 'SUN_POINTING', MoonSweep: 'MOON', SunSweep: 'SUN_SWEEP', NominalInOrbit: 'NOMINAL_IN_ORBIT', KinematicRobustness: 'KINEMATIC_ROBUSTNESS' }[data.ads_mode] || 'FIRMWARE_SITL') : data.mode;
+        if (data.mode !== undefined) latestMode = data.mode === 'FIRMWARE_SITL' ? ({ NadirPoint: 'NADIR', Sunpoint: 'SUN_POINTING', MoonSweep: 'MOON', SunSweep: 'SUN_SWEEP', NominalInOrbit: 'NOMINAL_IN_ORBIT', KinematicRobustness: 'KINEMATIC_ROBUSTNESS', YawSteering: 'YAW_STEERING' }[data.ads_mode] || 'FIRMWARE_SITL') : data.mode;
         if (CONFIG.CLOCK_SOURCE === 'telemetry') {
           const td = parseUTCDate(data.timestamp);
           if (td) simulationTimeMs = td.getTime();
@@ -1213,6 +1213,10 @@ export async function startSimulationEngine(configuration) {
               prefix: "nominal_in_orbit_target",
               label: "nominal in-orbit"
             },
+            "YAW_STEERING": {
+              prefix: "yaw_steering_target",
+              label: "yaw steering"
+            },
             "KINEMATIC_ROBUSTNESS": {
               prefix: "kinematic_robustness_target",
               label: "kinematic robustness"
@@ -1336,7 +1340,7 @@ export async function startSimulationEngine(configuration) {
     const rwPanel = $("rw-panel"),
       mtrPanel = $("mtr-panel");
     const sliders = document.querySelector(".control-panel");
-    const usesReactionWheels = mode === "CUSTOM" || mode === "RW" || mode === "MOON" || mode === "NADIR" || mode === "SUN_SWEEP" || mode === "SUN_POINTING_RW" || mode === "NOMINAL_IN_ORBIT" || mode === "KINEMATIC_ROBUSTNESS";
+    const usesReactionWheels = mode === "CUSTOM" || mode === "RW" || mode === "MOON" || mode === "NADIR" || mode === "SUN_SWEEP" || mode === "SUN_POINTING_RW" || mode === "NOMINAL_IN_ORBIT" || mode === "KINEMATIC_ROBUSTNESS" || mode === "YAW_STEERING";
     if (rwPanel) rwPanel.style.display = usesReactionWheels ? "block" : "none";
     if (mtrPanel) mtrPanel.style.display = usesReactionWheels ? "none" : "block";
     if (sliders) sliders.style.display = mode === "RW" ? "flex" : "none";
@@ -1363,7 +1367,7 @@ export async function startSimulationEngine(configuration) {
     const moonOn = guidesVisible && m === "MOON";
     moonLine.line.visible = moonOn && !!moonDirEcef;
     moonPanelLine.line.visible = moonOn;
-    const nadirMode = guidesVisible && (m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS");
+    const nadirMode = guidesVisible && (m === "NADIR" || m === "NOMINAL_IN_ORBIT" || m === "KINEMATIC_ROBUSTNESS" || m === "YAW_STEERING");
     nadirLine.line.visible = nadirMode && !!nadirDirEcef;
     sweepLine.line.visible = guidesVisible && m === "SUN_SWEEP" && !!sweepDirEcef;
   }

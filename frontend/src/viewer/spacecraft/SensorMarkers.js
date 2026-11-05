@@ -13,7 +13,7 @@ export function createSensorMarkers({
   const inactiveColor = new THREE.Color(0x303947);
   const sunlightColor = new THREE.Color(0xffe600);
   const strongSunlightColor = new THREE.Color(0xff7800);
-  const torquerColor = new THREE.Color(0xff8a3d);
+  const torquerColor = new THREE.Color(0x00ffb3);
   function createSensorLabel(text) {
     const canvas = document.createElement('canvas');
     canvas.width = 256;
@@ -95,7 +95,7 @@ export function createSensorMarkers({
       mesh.userData.level = Number.isFinite(level) ? THREE.MathUtils.clamp(level, 0, 1) : 0;
       mesh.userData.active = item.kind === 'Sun' ? sunUsed : level > 0;
       mesh.userData.color = item.kind === 'Sun' ? 0xffe600
-        : item.kind === 'MTR' ? 0xff8a3d
+        : item.kind === 'MTR' ? 0x00ffb3
         : item.kind === 'StarTracker' ? (data.star_tracker_used === true ? 0x1565c0 : 0x9bdcff) : item.kind === 'Gyro' ? 0x25c76f : 0x9b59e8;
     }
     for (const [name, mesh] of sensorMarkers) if (!alive.has(name)) {

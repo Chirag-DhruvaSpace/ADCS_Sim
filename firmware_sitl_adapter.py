@@ -210,13 +210,14 @@ class FirmwareLink:
             self.link.set_wheel_momentum(wheel_momentum)
         if publish:
             self.link.send_rw_telemetry()
-    def metadata(self, t, errors, rates):
+    def metadata(self, t, errors, rates, target_rate=None):
         mode = self.link.get_latest_ads_mode_name()
         reference = self.link.get_latest_fuse_source_name()
         reference_age = self.link.get_latest_fuse_source_age_s()
         reference_fresh = reference_age is not None and reference_age < 2.
         error = errors.get(mode)
-        settled = error is not None and error < .5 and np.linalg.norm(np.degrees(rates)) < .05
+        rate_error = np.asarray(rates) - (np.asarray(target_rate) if target_rate is not None else 0.0)
+        settled = error is not None and error < .5 and np.linalg.norm(np.degrees(rate_error)) < .05
         self.stable_since = (t if self.stable_since is None else self.stable_since) if settled else None
         now = time.monotonic()
         freshness = self.link.command_freshness()

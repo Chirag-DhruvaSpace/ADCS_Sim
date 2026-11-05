@@ -94,7 +94,7 @@ _ADS_MODE_NAMES = {
     0: "Safe", 1: "Sunpoint", 2: "NadirPoint", 3: "TargetPoint",
     4: "Desaturation", 5: "Detumbling", 6: "SpinInduction",
     7: "RateControl", 8: "MoonSweep", 9: "SunSweep",
-    10: "NominalInOrbit", 11: "KinematicRobustness", 20: "Maneuver",
+    10: "NominalInOrbit", 11: "KinematicRobustness", 12: "YawSteering", 20: "Maneuver",
 }
 
 _tlm_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

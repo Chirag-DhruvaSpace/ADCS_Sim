@@ -9,6 +9,7 @@ const modeNames = {
   NADIR: 'Nadir pointing',
   SUN_SWEEP: 'Sun sweep',
   NOMINAL_IN_ORBIT: 'Nominal orbit',
+  YAW_STEERING: 'Yaw steering',
   KINEMATIC_ROBUSTNESS: 'Kinematic robustness',
   FIRMWARE_SITL: 'Firmware SITL',
   CUSTOM: 'Custom quaternion'

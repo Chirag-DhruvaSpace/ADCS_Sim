@@ -457,6 +457,8 @@ boundaries, and verify that envelope visibility results are unchanged.
 
 ## 11. Firmware SITL (Hardware-in-the-Loop)
 
+Yaw steering (firmware mode 12): setup, changed files, and checks are documented in [YAW_STEERING.md](YAW_STEERING.md).
+
 pointing.strategy: firmware_sitl -- real firmware owns arbitration over non-blocking UDP (polled per tick, held through RK stages):
 
 | Direction | Port | Format | Contents |

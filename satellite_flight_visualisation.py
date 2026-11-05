@@ -12,6 +12,7 @@ import torque_distribution as td
 import moon_pointing as mpt
 import nadir_pointing as nad
 import nominal_in_orbit_pointing as niop
+import yaw_steering
 import kinematic_robustness_pointing as krp
 import quat2eul as q2e 
 import control_states as cs   # requested UI mode (SUN_POINTING/RW/MOON/...); needed for the DETUMBLE-fallback target below
@@ -545,7 +546,9 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         kinematic_robustness_target_yaw_deg, kinematic_robustness_target_pitch_deg, kinematic_robustness_target_roll_deg = \
             np.degrees(q2e.euler_from_quaternion(*store.kinematic_robustness_target_quat))
         
-        #alignment = yaw_steering.check_yaw_alignment(r_vec, v_vec, yaw)
+        yaw_steering_angle_deg = yaw_steering.calculate_desired_yaw_angle(r_vec, v_vec)
+        yaw_steering_target = yaw_steering.yaw_steering_quaternion(r_vec, v_vec)
+        yaw_steering_target_angles = np.degrees(q2e.euler_from_quaternion(*yaw_steering_target))
         #---- ATTITUDE RATES ----
         w_x_deg, w_y_deg, w_z_deg = np.degrees(X_rot[4]), np.degrees(X_rot[5]), np.degrees(X_rot[6])    
         w_net = np.sqrt(w_x_deg**2 + w_y_deg**2 + w_z_deg**2)
@@ -781,8 +784,24 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             'SunSweep': float(sun_sweep_error_deg),
             'NominalInOrbit': float(nominal_in_orbit_error_deg),
             'KinematicRobustness': float(kinematic_robustness_error_deg),
+            'YawSteering': float(2 * np.degrees(np.arccos(np.clip(
+                abs(np.dot(yaw_steering_target, X_rot[:4])), 0.0, 1.0)))),
         }
-        firmware_metadata = firmware.metadata(t, firmware_errors, X_rot[4:7]) if firmware is not None else {}
+        firmware_metadata = {}
+        if firmware is not None:
+            target_rate = (yaw_steering.yaw_steering_target_rate(r_vec, v_vec)
+                           if firmware.link.get_latest_ads_mode_name() == 'YawSteering' else None)
+            firmware_metadata = firmware.metadata(t, firmware_errors, X_rot[4:7], target_rate)
+        if firmware_metadata.get('ads_mode') == 'YawSteering':
+            for axis, angle in zip(('yaw', 'pitch', 'roll'), yaw_steering_target_angles):
+                firmware_metadata[f'firmware_target_{axis}_deg'] = float(angle)
+            # This error includes twist around the nadir axis, not just boresight.
+            yaw_firmware_estimate = firmware.link.get_latest_fused_quaternion()
+            if yaw_firmware_estimate is not None:
+                yaw_firmware_estimate = np.asarray(yaw_firmware_estimate, dtype=float)
+                yaw_firmware_estimate /= np.linalg.norm(yaw_firmware_estimate)
+                imu_own_axis_error_deg = float(2 * np.degrees(np.arccos(np.clip(
+                    abs(np.dot(yaw_steering_target, yaw_firmware_estimate)), 0.0, 1.0))))
         custom_command = custom_tick_command
         custom_target = np.array(custom_command['desired_quaternion'])
         custom_error = float(2 * np.degrees(np.arccos(np.clip(abs(q2e.get_quaternion_error(custom_target, X_rot[:4])[0]), 0, 1))))
@@ -851,6 +870,12 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             "sun_sweep_error_deg": float(sun_sweep_error_deg),
             "sun_pointing_rw_error_deg": float(sun_pointing_rw_error_deg),
             "nominal_in_orbit_error_deg": float(nominal_in_orbit_error_deg),
+            "yaw_steering_angle_deg": float(yaw_steering_angle_deg),
+            "yaw_steering_error_deg": firmware_errors['YawSteering'],
+            "yaw_steering_nadir_error_deg": float(nadir_pointing_error_deg),
+            "yaw_steering_target_yaw_deg": float(yaw_steering_target_angles[0]),
+            "yaw_steering_target_pitch_deg": float(yaw_steering_target_angles[1]),
+            "yaw_steering_target_roll_deg": float(yaw_steering_target_angles[2]),
             "kinematic_robustness_error_deg": float(kinematic_robustness_error_deg),
             "target_yaw_deg": float(_target_yaw_deg),
             "target_pitch_deg": float(_target_pitch_deg),

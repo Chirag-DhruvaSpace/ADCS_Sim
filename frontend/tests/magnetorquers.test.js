@@ -23,7 +23,7 @@ test('Torquer markers use CAD positions, energized levels, disabled state and in
     assert.equal(coil.material.color.getHex(), 0x303947);
     data.mtr_units[0].level = 1;
     markers.updateSensorMarkers(data); markers.paintSensorMarkers();
-    assert.equal(coil.material.color.getHex(), 0xff8a3d);
+    assert.equal(coil.material.color.getHex(), 0x00ffb3);
     settings.showMTR = false; markers.paintSensorMarkers();
     assert.equal(coil.visible, false);
     assert.equal(markers.sensorMarkers.get('coil').visible, true);
