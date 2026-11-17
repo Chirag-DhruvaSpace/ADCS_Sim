@@ -21,6 +21,9 @@ CONFIGURE (satellite_parameters.yaml):
     Profiles: off / perfect / nominal / degraded / stress / custom.
     perfect removes modeled errors; nominal uses standard errors; degraded
     increases errors and outages; stress has 5x errors and a 30 s cold start.
+    With custom, fixed_position_offset_eci_m and fixed_velocity_offset_eci_m_s
+    add exact [X, Y, Z] receiver offsets before frame conversion. They default
+    to zero and are independent of enable_bias and all random error channels.
 
 SELF-TEST (from the project root):
     python simulate_gps.py            # 600 s demo, prints the first 20 messages
@@ -400,6 +403,10 @@ class SimulatedGPS:
         # ONE random generator for the whole receiver (seed from config).
         self.rng = np.random.default_rng(config.seed)
         configuration = config
+        self._fixed_position_offset_eci_m = np.asarray(configuration.fixed_position_offset_eci_m)
+        self._fixed_velocity_offset_eci_m_s = np.asarray(configuration.fixed_velocity_offset_eci_m_s)
+        self._has_fixed_eci_offset = bool(np.any(self._fixed_position_offset_eci_m) or
+                                          np.any(self._fixed_velocity_offset_eci_m_s))
 
         # Constant biases: drawn ONCE at power-on, fixed for the whole run.
         # Horizontal axes (E, N) and the vertical axis (U) have different
@@ -501,6 +508,19 @@ class SimulatedGPS:
         self._update_receiver_status()
         err_pos_enu, err_vel_enu = self._measurement_errors()
 
+        if self._has_fixed_eci_offset:
+            # Offset only the receiver's belief at the measurement epoch; never
+            # modify input truth, its interpolation history, or the propagator.
+            # The full PV transform includes -omega_Earth x delta_position in
+            # ECEF velocity. Without it, a position-only ECI test contaminates
+            # the recovered ECI velocity after the inverse transform.
+            offset_pos_ecef, offset_vel_ecef = eci_to_ecef_pv(
+                r_interp + self._fixed_position_offset_eci_m,
+                v_interp + self._fixed_velocity_offset_eci_m_s,
+                self.inertial_frame, self.itrf, date)
+            err_pos_enu += R_enu.T @ (offset_pos_ecef - true_pos_ecef)
+            err_vel_enu += R_enu.T @ (offset_vel_ecef - true_vel_ecef)
+
         # ENU error -> ECEF error through the local East/North/Up basis.
         meas_pos_ecef = true_pos_ecef + R_enu @ err_pos_enu
         meas_vel_ecef = true_vel_ecef + R_enu @ err_vel_enu
@@ -551,6 +571,8 @@ class SimulatedGPS:
             "truth_pos_eci": r_interp, "truth_vel_eci": v_interp,
             "meas_pos_ecef": np.asarray(meas_pos_ecef), "meas_vel_ecef": np.asarray(meas_vel_ecef),
             "err_pos_enu": err_pos_enu, "err_vel_enu": err_vel_enu,
+            "fixed_position_offset_eci_m": self._fixed_position_offset_eci_m.copy(),
+            "fixed_velocity_offset_eci_m_s": self._fixed_velocity_offset_eci_m_s.copy(),
             "h_acc_m": h_acc, "v_acc_m": v_acc,
         }
         self.records.append(diagnostic_record)

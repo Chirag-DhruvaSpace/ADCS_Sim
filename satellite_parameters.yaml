@@ -2,7 +2,7 @@
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
 pointing:
-  strategy: firmware_sitl          # legacy | custom | firmware_sitl (external UDP actuators)
+  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
   legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
   # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
   # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
@@ -25,7 +25,7 @@ sensor_profiles:
   gps: custom
   gyroscope: custom
   magnetometer: custom
-  sun_sensor: perfect
+  sun_sensor: nominal
   star_tracker: custom  # off / perfect / nominal / degraded / stress / custom
 
 # P-30XL simulation configuration. Units are included in field names.
@@ -275,16 +275,26 @@ gps:
   enabled: true                             # Master switch; false means no GPS receipts
   update_rate_hz: 1.0                       # Receiver output rate; real chips are 1-10 Hz
 
+  # Exact GPS measurement offsets in EME2000/ECI, ordered [X, Y, Z].
+  # Only sensor_profiles.gps: custom uses these; presets reset them to zero.
+  # Independent of enable_bias: false disables RANDOM bias, not these offsets.
+  # Defaults preserve normal behavior. Restart the simulator after changes.
+  # Example position X only: [10.0, 0.0, 0.0] means exactly +10 m before encoding.
+  # Example velocity Y only: [0.0, 0.1, 0.0] means exactly +0.1 m/s before encoding.
+  # ORION packets still round ECEF position/velocity to 0.01 m / 0.01 m/s.
+  fixed_position_offset_eci_m: [10.0, 0.0, 0.0]
+  fixed_velocity_offset_eci_m_s: [0.0, 0.0, 0.0]
+
   # Individual error channels
-  enable_bias: true                         # Constant startup offset
-  enable_wander: true                       # Slowly drifting Gauss-Markov error
-  enable_white_noise: true                  # Fresh jitter on every fix
-  enable_steps: true                        # Constellation-geometry change jumps
-  enable_latency: true                      # Fix describes a slightly past state
-  enable_dropout: true                      # Randomly missing fixes
-  enable_clock_error: true                  # Receiver error in reported time
-  enable_quantization: true                 # Round lat/lon/altitude/ENU velocity
-  enable_status: true                       # Satellite-count and DOP random walks
+  enable_bias: false                         # Constant startup offset
+  enable_wander: false                       # Slowly drifting Gauss-Markov error
+  enable_white_noise: false                  # Fresh jitter on every fix
+  enable_steps: false                        # Constellation-geometry change jumps
+  enable_latency: false                      # Fix describes a slightly past state
+  enable_dropout: false                      # Randomly missing fixes
+  enable_clock_error: false                  # Receiver error in reported time
+  enable_quantization: false                 # Round lat/lon/altitude/ENU velocity
+  enable_status: false                       # Satellite-count and DOP random walks
 
   # Position error [m]
   pos_bias_sigma_h_m: 0.5                   # Constant horizontal offset drawn once

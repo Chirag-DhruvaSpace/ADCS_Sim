@@ -370,7 +370,22 @@ class GpsSimParameters:
 
     seed: int = 42                           # RNG seed (all randomness flows from this)
 
+    # Deterministic receiver fault injection, in EME2000/ECI [X, Y, Z].
+    # Independent of enable_bias (which gates the random ENU startup bias).
+    # YAML presets clear these; select sensor_profiles.gps: custom to use them.
+    fixed_position_offset_eci_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    fixed_velocity_offset_eci_m_s: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
     def __post_init__(self) -> None:
+        for name in ('fixed_position_offset_eci_m', 'fixed_velocity_offset_eci_m_s'):
+            try:
+                vector = np.asarray(getattr(self, name), dtype=float)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f'gps {name} must contain three finite numbers [X, Y, Z]') from exc
+            if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+                raise ValueError(f'gps {name} must contain three finite numbers [X, Y, Z]')
+            # Keep frozen configurations immutable, including direct Python callers.
+            object.__setattr__(self, name, tuple(float(value) for value in vector))
         if self.update_rate_hz <= 0.0:
             raise ValueError("gps update_rate_hz must be positive")
         for name in (
@@ -1197,6 +1212,11 @@ def _apply_sensor_profile(cfg, profile):
                     if f.name not in ('sun_array', 'cells', 'blockers')
                     and any(getattr(other, f.name) != getattr(nominal, f.name) for other in candidates)}
     changes = {name: getattr(preset, name) for name in error_fields}
+    if isinstance(cfg, GpsSimParameters):
+        # Fault injection is explicitly custom-only. Otherwise a perfect or
+        # nominal preset could silently retain an offset from a previous test.
+        changes['fixed_position_offset_eci_m'] = preset.fixed_position_offset_eci_m
+        changes['fixed_velocity_offset_eci_m_s'] = preset.fixed_velocity_offset_eci_m_s
     if isinstance(cfg, SunSensorArrayParameters):
         base, target = nominal.cells[0], preset.cells[0]
         # Mounting geometry (incl. the roll about the normal) is not an error channel.
