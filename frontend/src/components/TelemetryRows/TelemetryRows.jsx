@@ -29,5 +29,5 @@ const small = value => finite(value) ? Math.abs(value) < .001 && value !== 0 ? v
 export function ActuatorRows({
   data
 }) {
-  return <>{[0, 1, 2].map(index => <div className="actuator-line" key={'mtr' + index}><span>MTR {'XYZ'[index]}</span><b>{small(data.mtr_torque_nm?.[index])} N·m</b><b>{small(data.mtr_dipole_am2?.[index])} A·m²</b><b>{small(data.mtr_current_a?.[index])} A</b></div>)}{!['POINTING', 'SUN_POINTING', 'DETUMBLE'].includes(data.mode) && [0, 1, 2, 3].map(index => <div className="actuator-line" key={'rw' + index}><span>Wheel {index + 1}</span><b>{small(data.rw_torques_mnm?.[index])} mN·m</b><b>{small(data.rw_momentum_mnms?.[index])} mN·m·s</b></div>)}</>;
+  return <>{[0, 1, 2].map(index => <div className="actuator-line" key={'mtr' + index}><span>MTR {'XYZ'[index]}</span><b>{small(data.mtr_torque_nm?.[index])} N·m</b><b>{small(data.mtr_dipole_am2?.[index])} A·m²</b><b>{small(data.mtr_current_a?.[index])} A</b></div>)}{!['POINTING', 'SUN_POINTING', 'DETUMBLE'].includes(data.mode) && (data.rw_torques_mnm ?? []).map((_, index) => <div className="actuator-line" key={'rw' + index}><span>Wheel {index + 1}</span><b>{small(data.rw_torques_mnm?.[index])} mN·m</b><b>{small(data.rw_momentum_mnms?.[index])} mN·m·s</b></div>)}</>;
 }

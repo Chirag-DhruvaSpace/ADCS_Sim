@@ -594,8 +594,9 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     global detumbling_complete
 
     state = np.asarray(y, dtype=float)
-    if state.shape not in ((7,), (11,)):
-        raise ValueError('Attitude state must have 7 or 11 components')
+    wheel_count = config.REACTION_WHEELS.count
+    if state.shape not in ((7,), (7 + wheel_count,)):
+        raise ValueError(f'Attitude state must have 7 or {7 + wheel_count} components')
     q0,q1,q2,q3,w_x,w_y,w_z = state[:7]
     q = np.array([q0,q1,q2,q3])
     omega = np.array([w_x, w_y, w_z])
@@ -620,7 +621,7 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
 
     # Defaults so telemetry fields always exist regardless of branch
     M = np.zeros(3)
-    rw_t = np.zeros(4)
+    rw_t = np.zeros(wheel_count)
 
     # ---- SENSOR-BELIEF CONTROL INPUTS (IMU tap) ----
     # The pointing controllers below steer from the satellite's OWN BELIEF
@@ -632,9 +633,10 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     # is swapped, exactly like real flight software steering on its estimate.
     q_ctrl, omega_ctrl, _ = _imu_adcs_state(q, omega, np.zeros(3))
 
-    firmware_mode = cs.get_mode() == 'FIRMWARE_SITL'
-    if len(state) == 11:
-        rotor_momentum = state[7:11]
+    mode = cs.get_mode()
+    firmware_mode = mode == 'FIRMWARE_SITL'
+    if len(state) > 7:
+        rotor_momentum = state[7:]
     elif firmware_mode:
         import sys
         link = sys.modules.get('firmware_sitl_link')
@@ -662,9 +664,10 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
         reset_moon_spin()
         reset_sun_sweep()
 
+    elif mode == 'DETUMBLE':
+        tau_actual = np.zeros(3)
+        store.mode = 'COAST'
     else:
-        mode = cs.get_mode()
-
         if mode in ("RW", "CUSTOM"):
             # Reaction-wheel PD control to the slider target (relative to initial
             # orientation, ECI-fixed). The net torque the body feels IS the commanded
@@ -889,7 +892,7 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
 
     store.angular_acceleration[:] = w_dot
     derivative = [q0_dot, q1_dot, q2_dot, q3_dot, w_dot[0], w_dot[1], w_dot[2]]
-    return np.r_[derivative, -rw_t] if len(state) == 11 else derivative
+    return np.r_[derivative, -rw_t] if len(state) > 7 else derivative
     
 #y0 = [1.0, 0.0, 0.0, 0.0, sp.w_x*np.pi/180, sp.w_y*np.pi/180, sp.w_z*np.pi/180, 0.0]
 

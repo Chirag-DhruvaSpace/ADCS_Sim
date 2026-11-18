@@ -14,7 +14,7 @@ import './DashboardLayout.glass.css';
 // header clock -- no extra fetch.
 function ClearDots({ configuration, clear }) {
   const { data } = useTelemetry();
-  if (!clear || configuration?.pointing_strategy === 'legacy') return null;
+  if (!clear || !['custom', 'firmware_sitl'].includes(configuration?.pointing_strategy)) return null;
   const status = data.custom_pointing_status || 'red';
   const isSitl = data.mode === 'FIRMWARE_SITL' || data.ads_mode !== undefined;
   const label = (isSitl ? 'Firmware link: ' : 'Quaternion command: ') + status;

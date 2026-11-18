@@ -34,14 +34,15 @@ controls = {
 #                      1deg/s, see kinematic_robustness_pointing.py). Tests
 #                      sustained pointing accuracy under nonzero body rates,
 #                      NOT a bounded sweep like MOON/SUN_SWEEP.
-# Detumbling is an automatic override handled in the dynamics when |omega| is high,
-# so it is NOT a selectable mode here.
+# Legacy modes automatically detumble above the rate threshold. The detumble
+# strategy locks the controller to detumbling and coasting.
 import numpy as np
 import satellite_parameters as config
 from quat2eul import quaternion_multiply, quaternion_inverse
-MODES = ('FIRMWARE_SITL', 'CUSTOM', 'SUN_POINTING', 'RW', 'MOON', 'NADIR', 'SUN_SWEEP',
+MODES = ('FIRMWARE_SITL', 'CUSTOM', 'DETUMBLE', 'SUN_POINTING', 'RW', 'MOON', 'NADIR', 'SUN_SWEEP',
          'SUN_POINTING_RW', 'NOMINAL_IN_ORBIT', 'KINEMATIC_ROBUSTNESS')
-mode = {"value": config.POINTING['legacy_mode'] if config.POINTING['strategy'] == 'legacy' else 'FIRMWARE_SITL' if config.POINTING['strategy'] == 'firmware_sitl' else 'CUSTOM'}
+mode = {"value": config.POINTING['legacy_mode'] if config.POINTING['strategy'] == 'legacy'
+        else config.POINTING['strategy'].upper()}
 if mode['value'] not in MODES:
     raise ValueError('Invalid pointing.legacy_mode')
 
@@ -92,7 +93,7 @@ def set_pointing_input(quaternion, *, input_kind='desired_quaternion', reference
     """Latch a CUSTOM ECI target; error = inverse(desired) * reference."""
     global _custom_target, _command_id, _command_received, _command_sequence
     if config.POINTING['strategy'] != 'custom':
-        raise ValueError('Set pointing.strategy: custom in satellite_parameters.yaml and restart before sending quaternion commands')
+        raise ValueError('Set pointing.strategy: custom in the active satellite YAML and restart before sending quaternion commands')
     target = _target(quaternion, input_kind, reference_quaternion)
     with _lock:
         _custom_target = target
@@ -119,6 +120,12 @@ def get_controls():
 
 
 def set_mode(value):
+    if config.POINTING['strategy'] == 'detumble' and value != 'DETUMBLE':
+        raise ValueError('This profile uses magnetorquer detumbling')
+    if value == 'DETUMBLE' and config.POINTING['strategy'] != 'detumble':
+        raise ValueError('Selectable detumbling requires pointing.strategy: detumble')
+    if config.REACTION_WHEELS.count == 0 and value in MODES and value not in ('DETUMBLE', 'SUN_POINTING'):
+        raise ValueError('The selected pointing mode requires reaction wheels')
     if value == 'FIRMWARE_SITL' and config.POINTING['strategy'] != 'firmware_sitl':
         raise ValueError('Firmware mode requires pointing.strategy: firmware_sitl')
     if config.POINTING['strategy'] == 'firmware_sitl' and value != 'FIRMWARE_SITL':

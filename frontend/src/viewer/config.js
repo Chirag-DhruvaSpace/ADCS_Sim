@@ -13,7 +13,7 @@ export function createViewerConfig(configuration) {
     // was axisLength in Cesium code
     DIRLINE_LEN: 3000.0,
     // was sunLineLength
-    CHASE_VIEW_FROM: [-4.8, 0.0, 1.8],
+    CHASE_VIEW_FROM: configuration.viewer_lighting?.chase_view_from_m ?? [-4.8, 0.0, 1.8],
     // close enough to read the spacecraft against Earth
     PAYLOAD_OFFSET: [0.35, 0.0, 0.0],
     // metres, beyond the +X bus face

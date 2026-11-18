@@ -24,7 +24,8 @@ export default memo(function PointingPage({
   return <section className="mission-page" id="mission-page-pointing" role="tabpanel" aria-labelledby="mission-tab-pointing" hidden={!visible} data-departing={departing} aria-hidden={departing || !visible}>
     <div className="mission-rail rail-left">
       <PositionCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
-      <ReactionWheelsCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
+      {configuration.reaction_wheel_count !== 0 &&
+        <ReactionWheelsCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />}
       <MagnetorquersCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
       <AngularAccelerationCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
     </div>

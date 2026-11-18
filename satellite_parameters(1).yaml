@@ -1,0 +1,464 @@
+# P-Dot simulation parameters. Select this file from satellite_parameters.yaml.
+# Restart after changing the profile or deployment state.
+active_satellite_parameters: null
+advanced_satellite_parameters: advanced_satellite_parameters(1).yaml
+model_url: /assets/models/P-Dot-stowed.glb
+
+# Detumble with the configured magnetorquers, then coast within the rate hysteresis.
+# The legacy_mode and custom fields are retained for schema compatibility.
+pointing:
+  strategy: detumble
+  legacy_mode: SUN_POINTING
+  custom:
+    input: desired_quaternion
+    quaternion: [1.0, 0.0, 0.0, 0.0]
+    reference_quaternion: [1.0, 0.0, 0.0, 0.0]
+
+sensor_profiles:
+  gps: 'off'
+  gyroscope: custom
+  magnetometer: custom
+  sun_sensor: 'off'
+  star_tracker: 'off'
+
+use_advanced_satellite_model: true
+
+# SI units and unrotated STEP assembly body axes. Stowed mass, COM and inertia
+# come from the cached SolidWorks assembly mass record. Dipole and current limits are assumptions.
+spacecraft:
+  mass_kg: 0.82373
+  body_radius_m: 0.0898421419994
+  inertia_kg_m2: [0.00136158497547, 0.00131345809478, 0.00196672261137]
+  drag_reference_area_m2: 0.0120135165155
+  srp_reference_area_m2: 0.0120135165155
+  model_scale_to_m: 1.0
+  model_recenter: false
+  name: P-Dot
+  drag_coefficient: 2.2
+  srp_reflectivity_coefficient: 1.0
+  panels_deployed: false
+  mtr_max_dipole_Am2: 0.1
+  mtr_dipole_step_Am2: 0.001
+  mtr_max_current_A: [0.1, 0.1, 0.1]
+  wheel_max_torque_Nm: 0.0
+  wheel_max_momentum_Nms: 0.0
+  inertia_tensor_kg_m2:
+    - [0.00136158497547, -2.20348196882e-05, -6.9825538822e-06]
+    - [-2.20348196882e-05, 0.00131345809478, -1.16143744389e-05]
+    - [-6.9825538822e-06, -1.16143744389e-05, 0.00196672261137]
+  star_tracker_model_node: ''
+
+# ASSUMPTION: shared 500 km simulation scenario. No mission ephemeris is specified.
+orbit:
+  epoch_utc: '2026-10-01T15:00:00Z'
+  altitude_m: 500003.0
+  inclination_deg: 97.0
+  eccentricity: 0.0
+  raan_deg: 0.0
+  argument_of_perigee_deg: 0.0
+  true_anomaly_deg: 180.0
+
+# ASSUMPTION: example tip-off rates to exercise detumbling.
+attitude:
+  initial_quaternion_scalar_first: [1.0, 0.0, 0.0, 0.0]
+  initial_body_rates_deg_s: [-5.5, 7.4, 0.0]
+  inertia_is_principal_axes: false
+
+model_data:
+  orekit_data_path: orekit-data
+  magnetic_model: WMM
+  space_weather_file_pattern: SpaceWeather.*\.txt
+  gravity_degree: 36
+  gravity_order: 36
+
+# ASSUMPTION: simulation control rates and thresholds. Pointing gains are inactive in this profile.
+control:
+  detumble_on_rate_deg_s: 2.0
+  detumble_off_rate_deg_s: 0.5
+  sun_pointing_rate_cap_deg_s: 2.0
+  control_loop_period_s: 0.1
+  pointing_natural_frequency_rad_s: 0.05
+  pointing_damping_ratio: 1.0
+  manual_rw_natural_frequency_rad_s: 0.018
+  manual_rw_damping_ratio: 1.0
+  magnetic_pd_natural_frequency_rad_s: 0.1
+  magnetic_pd_damping_ratio: 1.5
+  kinematic_spin_rate_deg_s: 1.0
+  target_rate_difference_step_s: 0.2
+  sun_pointing_base_rate_deg_s: 0.2
+  moon_spin_axis: z
+  moon_spin_rate_deg_s: 0.06
+  moon_spin_amplitude_deg: 12.0
+  moon_spin_achieve_threshold_deg: 2.0
+  sun_sweep_axis: z
+  sun_sweep_rate_deg_s: 0.06
+  sun_sweep_amplitude_deg: 64.0
+  sun_sweep_achieve_threshold_deg: 2.0
+
+disturbances:
+  enabled: true
+  residual_dipole_Am2: [0.0001, 0.0, 0.0]
+  drag_density_kg_m3: 2.0e-13
+  drag_area_m2: 0.0120135165155
+  center_of_pressure_arm_body_m: [-0.000584853515858, -5.56126254314e-05, 0.00887976850803]
+  gravity_gradient_enabled: true
+  residual_dipole_enabled: true
+  atmospheric_drag_enabled: true
+  srp_enabled: true
+  srp_torque_enabled: true
+  solar_pressure_at_1au_pa: 4.56e-06
+
+# Stowed STEP envelope with assumed optical coefficients for drag and solar pressure.
+geometry:
+  center_of_mass_body_m: [0.0477938516353, 0.0491806085705, 0.0128702317974]
+  surfaces:
+    - name: bus-envelope:X-1
+      area_m2: 0.0079711062306
+      normal_body: [-1.0, -0.0, -0.0]
+      center_of_pressure_body_m: [-0.00667100446299, 0.049124995945, 0.0217500003055]
+      absorptivity: 0.65
+      diffuse_reflectivity: 0.22
+      specular_reflectivity: 0.13
+      tangent_u_body: [0.0, 1.0, 0.0]
+      tangent_v_body: [0.0, 0.0, 1.0]
+      half_size_m: [0.0557420004625, 0.0357500007376]
+    - name: bus-envelope:X+1
+      area_m2: 0.0079711062306
+      normal_body: [1.0, 0.0, 0.0]
+      center_of_pressure_body_m: [0.101089000702, 0.049124995945, 0.0217500003055]
+      absorptivity: 0.65
+      diffuse_reflectivity: 0.22
+      specular_reflectivity: 0.13
+      tangent_u_body: [0.0, 1.0, 0.0]
+      tangent_v_body: [0.0, 0.0, 1.0]
+      half_size_m: [0.0557420004625, 0.0357500007376]
+    - name: bus-envelope:Y-1
+      area_m2: 0.00770484052826
+      normal_body: [-0.0, -1.0, -0.0]
+      center_of_pressure_body_m: [0.0472089981195, -0.00661700451747, 0.0217500003055]
+      absorptivity: 0.65
+      diffuse_reflectivity: 0.22
+      specular_reflectivity: 0.13
+      tangent_u_body: [1.0, 0.0, 0.0]
+      tangent_v_body: [0.0, 0.0, 1.0]
+      half_size_m: [0.0538800025824, 0.0357500007376]
+    - name: bus-envelope:Y+1
+      area_m2: 0.00770484052826
+      normal_body: [0.0, 1.0, 0.0]
+      center_of_pressure_body_m: [0.0472089981195, 0.104866996408, 0.0217500003055]
+      absorptivity: 0.65
+      diffuse_reflectivity: 0.22
+      specular_reflectivity: 0.13
+      tangent_u_body: [1.0, 0.0, 0.0]
+      tangent_v_body: [0.0, 0.0, 1.0]
+      half_size_m: [0.0538800025824, 0.0357500007376]
+    - name: bus-envelope:Z-1
+      area_m2: 0.0120135165155
+      normal_body: [-0.0, -0.0, -1.0]
+      center_of_pressure_body_m: [0.0472089981195, 0.049124995945, -0.0140000004321]
+      absorptivity: 0.65
+      diffuse_reflectivity: 0.22
+      specular_reflectivity: 0.13
+      tangent_u_body: [1.0, 0.0, 0.0]
+      tangent_v_body: [0.0, 1.0, 0.0]
+      half_size_m: [0.0538800025824, 0.0557420004625]
+    - name: bus-envelope:Z+1
+      area_m2: 0.0120135165155
+      normal_body: [0.0, 0.0, 1.0]
+      center_of_pressure_body_m: [0.0472089981195, 0.049124995945, 0.0575000010431]
+      absorptivity: 0.65
+      diffuse_reflectivity: 0.22
+      specular_reflectivity: 0.13
+      tangent_u_body: [1.0, 0.0, 0.0]
+      tangent_v_body: [0.0, 1.0, 0.0]
+      half_size_m: [0.0538800025824, 0.0557420004625]
+  blockers:
+    - name: bus-envelope
+      center_body_m: [0.0472089981195, 0.049124995945, 0.0217500003055]
+      half_extents_m: [0.0538800025824, 0.0557420004625, 0.0357500007376]
+
+# Zero installed wheels for this model. Firmware SITL is specific to the four-wheel P-30XL setup.
+reaction_wheels:
+  initial_momentum_Nms: []
+  rotor_inertia_kg_m2: 5.4e-05
+  firmware_axis_matrix_body: []
+  count: 0
+  axis_matrix_assembly:
+    - []
+    - []
+    - []
+  null_space_desaturation_gain: 0.0
+  saturation_reallocation_enabled: false
+  max_reallocation_passes: 4
+
+simulation:
+  firmware_command_timeout_s: 2.0
+  firmware_gyro_preset: configured
+  firmware_board_magnetometer_calibration: false
+  default_duration_s: 100000.0
+  telemetry_publish_period_s: 0.25
+  speed: 10.0
+  realtime: true
+  attitude_integrator_abs_tolerance: 1.0e-06
+  attitude_integrator_rel_tolerance: 0.0001
+  orbit_output_window_s: 0.5
+  orbit_integrator_min_step_s: 0.001
+  orbit_integrator_max_step_s: 600.0
+  orbit_integrator_abs_tolerance: 0.001
+  orbit_integrator_rel_tolerance: 1.0e-06
+  telemetry_url: http://127.0.0.1:5000/update_telemetry
+  telemetry_timeout_s: 0.25
+
+# Disabled pending a verified receiver. Retained inactive simulation settings follow the basic schema.
+gps:
+  enabled: false
+  update_rate_hz: 1.0
+  fixed_position_offset_eci_m: [0.0, 0.0, 0.0]
+  fixed_velocity_offset_eci_m_s: [0.0, 0.0, 0.0]
+  enable_bias: false
+  enable_wander: false
+  enable_white_noise: false
+  enable_steps: false
+  enable_latency: false
+  enable_dropout: false
+  enable_clock_error: false
+  enable_quantization: false
+  enable_status: false
+  pos_bias_sigma_h_m: 0.5
+  pos_bias_sigma_v_m: 1.0
+  gm_tau_pos_s: 60.0
+  gm_sigma_pos_h_m: 1.4
+  gm_sigma_pos_v_m: 2.7
+  white_sigma_pos_h_m: 0.5
+  white_sigma_pos_v_m: 0.8
+  step_mean_interval_s: 600.0
+  vel_bias_sigma_m_s: 0.01
+  gm_tau_vel_s: 10.0
+  gm_sigma_vel_m_s: 0.03
+  white_sigma_vel_m_s: 0.01
+  latency_mean_s: 0.08
+  latency_sigma_s: 0.02
+  latency_min_s: 0.04
+  latency_max_s: 0.2
+  clock_bias_sigma_s: 5.0e-08
+  clock_wander_tau_s: 100.0
+  clock_wander_sigma_s: 2.0e-08
+  clock_white_sigma_s: 1.0e-08
+  p_dropout: 0.005
+  cold_start_s: 0.0
+  outages_s: []
+  num_sv_start: 8
+  num_sv_min: 5
+  num_sv_max: 12
+  pdop_start: 2.0
+  pdop_step_sigma: 0.1
+  pdop_min: 1.2
+  pdop_max: 4.0
+  seed: 42
+
+# ASSUMPTION: generic gyro on the avionics stack, modeled at the OBC CAD envelope center.
+# The CAD identifies the board, but does not identify a gyro or its calibration.
+gyroscope:
+  enabled: true
+  seed: 42
+  use_for_attitude: false
+  use_for_control: true
+  position_body_m: [0.047209, 0.047263, 0.0128210264194]
+  mount_quaternion: [1.0, 0.0, 0.0, 0.0]
+  update_rate_hz: 10.0
+  white_noise_sigma_rad_s: 0.00052
+  bias_sigma_rad_s: 0.00035
+  wander_sigma_rad_s: 0.0002
+  wander_tau_s: 100.0
+  scale_error: 0.001
+  misalignment_rad: 0.001
+  range_rad_s: 4.36
+  dropout_probability: 0.0
+  latency_mean_s: 0.005
+  latency_sigma_s: 0.001
+  latency_min_s: 0.001
+  latency_max_s: 0.02
+  quantization_rad_s: 0.0
+  hardware_range_deg_s: 125
+  response_matrix:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  fixed_bias_rad_s: [0.0, 0.0, 0.0]
+  units: []
+  mount_overrides: {}
+
+# ASSUMPTION: three orthogonal coils at the avionics stack, with generic electrical
+# settings. CAD does not identify the coil package, wiring, ratings or polarity.
+magnetorquers:
+  enabled: true
+  quantize_commands: false
+  dipole_per_amp_Am2_per_A: 1.0
+  resistance_ohm: 20.0
+  units:
+    - name: MTR-X
+      axis_body: [1.0, 0.0, 0.0]
+      position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      enabled: true
+    - name: MTR-Y
+      axis_body: [0.0, 1.0, 0.0]
+      position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      enabled: true
+    - name: MTR-Z
+      axis_body: [0.0, 0.0, 1.0]
+      position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      enabled: true
+
+# ASSUMPTION: generic magnetometer at the OBC CAD envelope center, with assumed mount
+# and calibration. The detumble model uses measured body rate and magnetic field.
+magnetometer:
+  enabled: true
+  seed: 42
+  use_for_attitude: false
+  use_for_control: true
+  attitude_sigma_deg: 0.86
+  position_body_m: [0.047209, 0.047263, 0.0128210264194]
+  mount_quaternion: [1.0, 0.0, 0.0, 0.0]
+  gradient_body_t_per_m:
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
+    - [0.0, 0.0, 0.0]
+  update_rate_hz: 10.0
+  white_noise_sigma_t: 8.0e-08
+  hard_iron_bias_sigma_t: 1.5e-07
+  scale_error: 0.005
+  misalignment_rad: 0.002
+  disturbance_t: [1.0e-07, -5.0e-08, 2.5e-08]
+  disturbance_wander_sigma_t: 2.0e-08
+  disturbance_wander_tau_s: 200.0
+  range_t: 0.001
+  hardware_range_t: 0.0049
+  hardware_scale_t_per_count: 1.5e-07
+  dropout_probability: 0.0
+  latency_mean_s: 0.01
+  latency_sigma_s: 0.002
+  latency_min_s: 0.002
+  latency_max_s: 0.05
+  quantization_t: 0.0
+  response_matrix:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  fixed_bias_t: [0.0, 0.0, 0.0]
+  units: []
+  mount_overrides: {}
+
+# An independent sun sensor was not identified. Body-mounted solar panels are present.
+sun_sensor:
+  enabled: false
+  seed: 42
+  update_rate_hz: 10.0
+  use_for_attitude: false
+  attitude_sigma_deg: 1.43
+  mount_overrides: {}
+  fine_fov_half_angle_rad: 0.6108652381980153
+  fine_aperture_distance_m: 0.001
+  fine_coordinate_counts_per_m: 1000000.0
+  fine_vector_scale_counts: 10000
+  fine_total_signal_counts: 10000
+  fine_quadrant_max_counts: 10000
+  fine_eclipse_threshold_counts: 250
+  enable_fine_albedo: true
+  fine_temperature_k: 298.15
+  fine_temperature_zero_k: 273.15
+  fine_temperature_counts_per_k: 100.0
+  cells: []
+  blockers: []
+  enable_alignment_error: true
+  enable_bias_drift: true
+  enable_scale_nonlinearity: true
+  enable_white_noise: true
+  enable_saturation: true
+  enable_quantization: true
+  enable_albedo: true
+  enable_penumbra: true
+  enable_self_shadowing: true
+  albedo_scale: 0.15
+  activation_threshold: 0.015
+  min_cells_for_solution: 3
+  dropout_probability: 0.0
+  latency_mean_s: 0.01
+  latency_sigma_s: 0.002
+  latency_min_s: 0.002
+  latency_max_s: 0.05
+
+# Disabled. No star-tracker head was identified in this assembly.
+star_tracker:
+  enabled: false
+  seed: 73
+  update_rate_hz: 10
+  mount_quaternion: [1.0, 0.0, 0.0, 0.0]
+  detector_temperature_c: 20.0
+  thermal_reference_temperature_c: 20.0
+  earth_limb_radius_km: 6478.137
+  enable_nea: true
+  enable_lfse: true
+  enable_bias: true
+  enable_thermal: true
+  enable_star_count: true
+  enable_temperature_rate_inflation: true
+  enable_straylight: true
+  enable_sky_position: false
+  enable_blinding: true
+  enable_kinematic_limits: true
+  enable_latency: true
+  enable_dropouts: true
+  enable_outliers: true
+  nea_sigma_arcsec: [4.3, 4.3, 26.0]
+  lfse_sigma_arcsec: [3.0, 3.0, 17.0]
+  lfse_tau_s: 300.0
+  lfse_slew_scale_deg_s: 0.3
+  bias_sigma_arcsec: [20.0, 20.0, 17.0]
+  thermal_slope_arcsec_per_deg_c: [0.5, 0.5, 0.0]
+  star_count_walk_sigma_per_sqrt_s: 0.08
+  sky_position_period_s: 2400.0
+  latency_mean_s: 0.15
+  latency_sigma_s: 0.015
+  latency_min_s: 0.08
+  latency_max_s: 0.25
+  timestamp_sigma_s: 3.33333333333e-05
+  dropout_probability: 0.001
+  burst_start_probability: 0.0
+  burst_duration_s: 1.0
+  outlier_probability: 0.001
+  outlier_multiplier_min: 20.0
+  outlier_multiplier_max: 50.0
+  tracking_rate_limit_deg_s: 3.0
+  tracking_acceleration_limit_deg_s2: 2.5
+  reacquisition_rate_limit_deg_s: 0.3
+  reacquisition_s: 4.0
+  reacquisition_jitter_s: 0.0
+  cold_start_s: 4.0
+  low_trust_packets: 5
+  sun_hard_off_deg: 33.0
+  sun_exclusion_deg: 35.0
+  sun_clean_deg: 45.0
+  earth_exclusion_deg: 22.0
+  earth_clean_deg: 30.0
+  outages_s: []
+
+# Detumbling uses rate and field data. The dashboard renders truth attitude.
+attitude_navigation:
+  enabled: false
+  initial_estimate_quaternion: [1.0, 0.0, 0.0, 0.0]
+  innovation_gate_chi2: 16.27
+  max_bias_rad_s: 0.005
+  initial_attitude_sigma_deg: 20.0
+  initial_bias_sigma_rad_s: 0.002
+  fusion_max_age_s: 0.5
+  fusion_max_time_skew_s: 0.02
+  use_for_control: false
+  render_estimated_attitude: false
+
+# Display settings. The chase distance is sized for the P-Dot model.
+viewer:
+  max_fps: 240
+  earth_day_ambient: 0.12
+  earth_day_diffuse: 0.78
+  earth_night_floor: 0.015
+  chase_view_from_m: [-0.85, 0.0, 0.35]

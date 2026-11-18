@@ -1,3 +1,9 @@
+# Leave null for P-30XL or set "satellite_parameters(1).yaml" for P-Dot.
+# Restart the simulator after changing the active file.
+active_satellite_parameters: "satellite_parameters(1).yaml"
+advanced_satellite_parameters: advanced_satellite_parameters.yaml
+model_url: /assets/models/P-30XL.glb  # Basic viewer model
+
 # POINTING SELECTION: legacy keeps the existing selectable pointing modes.
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
@@ -65,7 +71,6 @@ spacecraft:
   srp_reference_area_m2: 0.09     # Legacy reference cross-section [m²]
   model_scale_to_m: 0.001           # Legacy model is millimetres
   model_recenter: true              # Legacy export origin is offset
-  model_url: /assets/models/P-30XL.glb  # Original simplified viewer model
   name: "P-30XL"
   drag_coefficient: 2.2  # ASSUMPTION: no measured aerodynamic coefficient
   srp_reflectivity_coefficient: 1.0  # Only the eclipse-helper model uses Cr; forces use facet optics

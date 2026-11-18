@@ -1,4 +1,25 @@
-# P-30XL deployed and stowed simulation
+# Spacecraft selection
+
+Set the first key in `satellite_parameters.yaml` and restart the simulator:
+
+```yaml
+active_satellite_parameters: "satellite_parameters(1).yaml"  # P-Dot
+```
+
+Use `null` to select P-30XL. Each basic file defines its own `model_url`
+and `advanced_satellite_parameters` path. In advanced mode, each deployment
+entry supplies its GLB through `spacecraft.model_file`, relative to its YAML.
+
+For P-Dot, `panels_deployed` in `advanced_satellite_parameters(1).yaml` selects
+the antenna geometry. Both states have body-mounted solar panels. P-Dot uses
+magnetorquers to detumble and coasts below the configured rate threshold. Its
+YAML records the CAD provenance and lists the assumed actuator and sensor values.
+P-DoT is a configurable platform family. The profile describes the supplied
+assembly and uses its saved mass record and antenna placements.
+[Dhruva Space platform specifications](https://www.dhruvaspace.com/satellite-platforms)
+[SolidWorks mass-property conventions](https://help.solidworks.com/2024/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.imodeldocextension~getmassproperties2.html)
+
+## P-30XL deployed and stowed simulation
 
 The basic file `satellite_parameters.yaml` contains shared simulation settings
 and the previous legacy assumptions. Set its top-level switch:

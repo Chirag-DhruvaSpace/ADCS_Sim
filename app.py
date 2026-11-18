@@ -100,6 +100,7 @@ def viewer_configuration():
                    spacecraft_model_recenter=config.SPACECRAFT.model_recenter,
                    spacecraft_tracker_node=config.SPACECRAFT.star_tracker_model_node,
                    pointing_strategy=config.POINTING['strategy'], legacy_mode=config.POINTING['legacy_mode'],
+                   reaction_wheel_count=config.REACTION_WHEELS.count,
                    spacecraft_com=latest_telemetry.get('center_of_mass_body_m', config.GEOMETRY.center_of_mass_body_m))
 
 

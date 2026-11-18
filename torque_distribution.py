@@ -21,8 +21,7 @@ def body_to_assembly(vector_body):
 # -- the per-wheel torque the dynamics ACTUALLY applied (written
 # unconditionally on every pass of rotational_equations_of_motion, in every
 # mode branch: the post-saturation command in RW modes, exact zeros in
-# DETUMBLE/POINTING). store.py imports nothing but numpy, so this adds no
-# import cycle.
+# DETUMBLE/POINTING).
 import store
 import satellite_parameters as config
 
@@ -60,7 +59,10 @@ _FREE_WHEEL_INVERSES = {indices: np.linalg.pinv(A[:, indices])
 # Derive the zero-body-torque redistribution direction from the active axes.
 # The legacy diagonal pyramid and the CAD wheel placements have different
 # null directions; using a fixed legacy vector would disturb attitude in CAD mode.
-NULL_VEC = np.linalg.svd(A, full_matrices=True)[2][-1]
+_, singular_values, right_vectors = np.linalg.svd(A, full_matrices=True)
+tolerance = max(A.shape) * np.finfo(float).eps * singular_values.max(initial=0.0)
+has_null_space = np.count_nonzero(singular_values > tolerance) < A.shape[1]
+NULL_VEC = right_vectors[-1] if has_null_space else np.zeros(A.shape[1])
 
 # Comat RW-40 real hardware specs (confirmed via SatCatalog and Satsearch,
 # both citing Comat directly: 4 mN*m mean torque, 40 mN*m*s momentum
@@ -99,12 +101,12 @@ MAX_REALLOCATION_PASSES = config.REACTION_WHEELS.max_reallocation_passes
 
 # --- Persistent wheel momentum state (module-level box, matching this
 # project's established "mutable list as a box" convention elsewhere) ----
-_wheel_momentum = [np.zeros(4)]   # per-wheel angular momentum (N*m*s)
+_wheel_momentum = [np.zeros(A.shape[1])]   # per-wheel angular momentum (N*m*s)
 # Per-wheel flags from the allocator's most recent call: True where that
 # wheel's command was cut by the torque limit and/or the momentum limit.
 # Written on every RHS eval (harmless last-wins record -- only the momentum
 # INTEGRATION needs to happen once per outer step, see below).
-_last_command_limited = [np.zeros(4, dtype=bool)]
+_last_command_limited = [np.zeros(A.shape[1], dtype=bool)]
 
 
 def _apply_wheel_limits(u, h, hold_period_s=None):
@@ -200,7 +202,7 @@ def reaction_wheel_torque_distribution(T_x, T_y, T_z, *, wheel_momentum=None, ho
     # back toward zero, added on top of the baseline RW_Torques above (which
     # is unaffected, by construction of the null space).
     h = _wheel_momentum[0] if wheel_momentum is None else np.asarray(wheel_momentum)
-    h_null_component = np.dot(NULL_VEC, h) / np.dot(NULL_VEC, NULL_VEC)
+    h_null_component = np.dot(NULL_VEC, h)
     tau_null = K_NULL_DESAT * h_null_component * NULL_VEC
 
     RW_Torques_final = RW_Torques + tau_null
@@ -237,7 +239,7 @@ def integrate_wheel_momentum(dt):
 
 def set_wheel_momentum(momentum):
     """Commit the accepted coupled-state result, never an RHS stage."""
-    h = np.asarray(momentum, dtype=float).reshape(4)
+    h = np.asarray(momentum, dtype=float).reshape(A.shape[1])
     if not np.all(np.isfinite(h)) or np.any(np.abs(h) > MAX_WHEEL_MOMENTUM+1e-8):
         raise ValueError('Invalid integrated wheel momentum')
     _wheel_momentum[0] = np.clip(h, -MAX_WHEEL_MOMENTUM, MAX_WHEEL_MOMENTUM).copy()
@@ -254,7 +256,8 @@ def get_wheel_saturation_fraction():
     """Returns each wheel's |momentum| / MAX_WHEEL_MOMENTUM (0 = empty,
     1 = at the saturation limit) -- a quick way to check how close any wheel
     is to saturating, e.g. for a console warning."""
-    return np.abs(_wheel_momentum[0]) / MAX_WHEEL_MOMENTUM
+    momentum = np.abs(_wheel_momentum[0])
+    return momentum / MAX_WHEEL_MOMENTUM if MAX_WHEEL_MOMENTUM > 0 else np.zeros_like(momentum)
 
 
 def get_last_command_limited():
@@ -271,8 +274,8 @@ def reset_wheel_momentum():
     when resetting/restarting a simulation run, same idea as this project's
     other reset_*() functions (reset_mekf(), reset_magnetometer_history(),
     etc.)."""
-    _wheel_momentum[0] = np.zeros(4)
-    _last_command_limited[0] = np.zeros(4, dtype=bool)
+    _wheel_momentum[0] = np.zeros(A.shape[1])
+    _last_command_limited[0] = np.zeros(A.shape[1], dtype=bool)
 
 
 #reaction_wheel_torque_distribution(0,0,0.01)

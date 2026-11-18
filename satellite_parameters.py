@@ -56,11 +56,11 @@ class SpacecraftParameters:
             self.srp_reflectivity_coefficient,
             self.mtr_max_dipole_Am2,
             self.mtr_dipole_step_Am2,
-            self.wheel_max_torque_Nm,
-            self.wheel_max_momentum_Nms,
         ):
             if value <= 0.0:
                 raise ValueError("spacecraft physical limits and areas must be positive")
+        if self.wheel_max_torque_Nm < 0 or self.wheel_max_momentum_Nms < 0:
+            raise ValueError('Reaction wheel limits cannot be negative')
 
     @property
     def inertia_matrix(self) -> np.ndarray:
@@ -258,6 +258,8 @@ class ReactionWheelParameters:
     max_reallocation_passes: int = 4
 
     def __post_init__(self):
+        if self.count and (self.max_torque_Nm <= 0 or self.max_momentum_Nms <= 0):
+            raise ValueError('Installed reaction wheels require positive torque and momentum limits')
         if not np.isfinite(self.rotor_inertia_kg_m2) or self.rotor_inertia_kg_m2 <= 0:
             raise ValueError('rotor_inertia_kg_m2 must be finite and positive')
         h = np.asarray(self.initial_momentum_Nms, dtype=float)
@@ -289,6 +291,7 @@ class ViewerParameters:
     earth_day_ambient: float = 0.12
     earth_day_diffuse: float = 0.78
     earth_night_floor: float = 0.015
+    chase_view_from_m: tuple = (-4.8, 0.0, 1.8)
 
     def __post_init__(self):
         if not np.isfinite(self.max_fps) or not 1 <= self.max_fps <= 240:
@@ -296,6 +299,9 @@ class ViewerParameters:
         if any(not np.isfinite(v) or not 0 <= v <= 2 for v in
                (self.earth_day_ambient, self.earth_day_diffuse, self.earth_night_floor)):
             raise ValueError('Earth lighting values must be finite and between 0 and 2')
+        offset = np.asarray(self.chase_view_from_m, dtype=float)
+        if offset.shape != (3,) or not np.all(np.isfinite(offset)) or np.linalg.norm(offset) < .05:
+            raise ValueError('Viewer chase offset must be a finite 3-vector at least 0.05 m long')
 
 
 # ---------------------------------------------------------------------------
@@ -604,8 +610,8 @@ class SunSensorArrayParameters:
             value = getattr(self, name)
             if not isinstance(value, int) or not 0 < value <= 65535:
                 raise ValueError(f'{name} must be a positive uint16 count')
-        if not self.cells:
-            raise ValueError("sun array needs at least one configured head; use enabled: false to power it off")
+        if self.enabled and not self.cells:
+            raise ValueError("an enabled sun array needs at least one configured head")
         if self.update_rate_hz <= 0.0:
             raise ValueError("sun update_rate_hz must be positive")
         if self.min_cells_for_solution < 3:
@@ -1182,8 +1188,7 @@ def apply_imu_mount_defaults(cfg, defaults):
             raise ValueError(f'Saved mounting refers to unknown sensor: {name}')
     return cfg
 
-# satellite_parameters.yaml is the sole persisted configuration. The classes above
-# provide validation and the API used by existing simulation code.
+# The active YAML supplies the values validated by the runtime types above.
 def _tuple_values(value):
     if isinstance(value, list):
         return tuple(_tuple_values(item) for item in value)
@@ -1231,8 +1236,8 @@ def _apply_sensor_profile(cfg, profile):
 def validate_pointing_configuration(values):
     if not isinstance(values, dict) or set(values) != {'strategy', 'legacy_mode', 'custom'}:
         raise ValueError('pointing requires strategy, legacy_mode and custom')
-    if values['strategy'] not in ('legacy', 'custom', 'firmware_sitl'):
-        raise ValueError('pointing.strategy must be legacy, custom or firmware_sitl')
+    if values['strategy'] not in ('legacy', 'custom', 'firmware_sitl', 'detumble'):
+        raise ValueError('pointing.strategy must be legacy, custom, firmware_sitl or detumble')
     if values['legacy_mode'] not in ('SUN_POINTING', 'RW', 'MOON', 'NADIR', 'SUN_SWEEP',
                                      'SUN_POINTING_RW', 'NOMINAL_IN_ORBIT', 'KINEMATIC_ROBUSTNESS'):
         raise ValueError('Invalid pointing.legacy_mode')
@@ -1247,19 +1252,36 @@ def validate_pointing_configuration(values):
                 raise ValueError(f'custom.{key} must be a finite nonzero quaternion')
 
 
-def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satellite_model=None):
+def _read_parameter_yaml(source):
     import yaml
-    source = Path(source) if source is not None else Path(__file__).resolve().with_suffix('.yaml')
     with source.open(encoding='utf-8') as handle:
         data = yaml.safe_load(handle)
     if not isinstance(data, dict):
         raise ValueError(f"Expected a YAML mapping in {source}")
+    return data
+
+
+def _active_parameter_path():
+    default = Path(__file__).resolve().with_suffix('.yaml')
+    profile = _read_parameter_yaml(default).get('active_satellite_parameters')
+    if profile is None:
+        return default
+    if not isinstance(profile, str) or not profile.strip():
+        raise ValueError('active_satellite_parameters must be a YAML path or null')
+    return (default.parent / profile).resolve()
+
+
+def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satellite_model=None):
+    source = Path(source) if source is not None else ACTIVE_PARAMETER_PATH
+    data = _read_parameter_yaml(source)
     expected = {'spacecraft', 'orbit', 'attitude', 'model_data', 'control',
                 'disturbances', 'geometry', 'reaction_wheels', 'simulation',
                 'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker',
                 'attitude_navigation', 'viewer', 'use_advanced_satellite_model', 'pointing', 'sensor_profiles'}
-    if set(data) - {'magnetorquers'} != expected:
-        raise ValueError(f"YAML sections differ from expected: {sorted((set(data) - {'magnetorquers'}) ^ expected)}")
+    optional = {'magnetorquers', 'active_satellite_parameters', 'advanced_satellite_parameters', 'model_url'}
+    actual = set(data) - optional
+    if actual != expected:
+        raise ValueError(f"YAML sections differ from expected: {sorted(actual ^ expected)}")
     profiles = data['sensor_profiles']
     if not isinstance(profiles, dict) or set(profiles) != {'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker'}:
         raise ValueError('sensor_profiles must specify gps, gyroscope, magnetometer, sun_sensor, star_tracker')
@@ -1281,20 +1303,24 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
             raise ValueError(f"{name} must be a YAML mapping")
         return _from_yaml(cls, values)
     spacecraft_data = dict(data['spacecraft'])
+    if 'model_url' in data:
+        spacecraft_data['model_url'] = data['model_url']
     advanced = data['use_advanced_satellite_model'] if use_advanced_satellite_model is None else use_advanced_satellite_model
     if not isinstance(advanced, bool):
         raise ValueError('use_advanced_satellite_model must be true or false')
     selected = {}
+    model_base = source.parent
     if advanced:
-        advanced_path = source.parent / 'advanced_satellite_parameters.yaml'
-        with advanced_path.open(encoding='utf-8') as handle:
-            advanced_data = yaml.safe_load(handle)
+        advanced_path = source.parent / data.get('advanced_satellite_parameters', 'advanced_satellite_parameters.yaml')
+        advanced_data = _read_parameter_yaml(advanced_path)
         deployed = advanced_data['panels_deployed'] if panels_deployed is None else panels_deployed
         if not isinstance(deployed, bool):
             raise ValueError('advanced panels_deployed must be true or false')
         spacecraft_data['panels_deployed'] = deployed
         mode = 'deployed' if deployed else 'stowed'
         selected = advanced_data['configurations'][mode]
+        if 'model_file' in selected.get('spacecraft', {}):
+            model_base = advanced_path.parent
         data['attitude'] = {**data['attitude'], 'inertia_is_principal_axes': False}
     if panels_deployed is not None:
         spacecraft_data['panels_deployed'] = bool(panels_deployed)
@@ -1302,7 +1328,7 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     spacecraft_data.update(selected.get('spacecraft', {}))
     spacecraft_data['configuration'] = mode if advanced else 'legacy'
     if spacecraft_data.get('model_file'):
-        model_file = (source.parent / spacecraft_data['model_file']).resolve()
+        model_file = (model_base / spacecraft_data['model_file']).resolve()
         if not model_file.is_file() or model_file.suffix.lower() != '.glb':
             raise ValueError(f'spacecraft.model_file must identify an existing GLB: {model_file}')
         spacecraft_data['model_file'] = str(model_file)
@@ -1433,6 +1459,12 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     if 'axis_matrix_body' in selected.get('reaction_wheels', {}):
         wheel_settings.pop('axis_matrix_assembly', None)
     wheels = _from_yaml(ReactionWheelParameters, wheel_settings)
+    strategy = data['pointing']['strategy']
+    if wheels.count == 0 and (strategy == 'custom' or
+                              (strategy == 'legacy' and data['pointing']['legacy_mode'] != 'SUN_POINTING')):
+        raise ValueError('The selected pointing mode requires reaction wheels')
+    if strategy == 'firmware_sitl' and wheels.count != 4:
+        raise ValueError('The firmware SITL interface requires four reaction wheels')
     return (spacecraft, orbit, section('attitude', AttitudeParameters),
             _from_yaml(ModelDataParameters, model_data), section('control', ControlParameters),
             section('disturbances', DisturbanceParameters), geometry,
@@ -1441,13 +1473,12 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
             apply_imu_mount_defaults(imu, mounts), mounts)
 
 
+ACTIVE_PARAMETER_PATH = _active_parameter_path()
 (SPACECRAFT, ORBIT, ATTITUDE, MODEL_DATA, CONTROL, DISTURBANCES, GEOMETRY,
  REACTION_WHEELS, SIMULATION, GPS_SIM, IMU_SIM, IMU_MOUNT_DEFAULTS) = _load_configuration()
 
 def _load_viewer_parameters():
-    import yaml
-    with Path(__file__).with_suffix('.yaml').open(encoding='utf-8') as handle:
-        return _from_yaml(ViewerParameters, yaml.safe_load(handle)['viewer'])
+    return _from_yaml(ViewerParameters, _read_parameter_yaml(ACTIVE_PARAMETER_PATH)['viewer'])
 
 VIEWER = _load_viewer_parameters()
 
@@ -1493,7 +1524,5 @@ validate()
 
 
 def _load_pointing():
-    import yaml
-    with Path(__file__).with_suffix('.yaml').open(encoding='utf-8') as handle:
-        return yaml.safe_load(handle)['pointing']
+    return _read_parameter_yaml(ACTIVE_PARAMETER_PATH)['pointing']
 POINTING = _load_pointing()

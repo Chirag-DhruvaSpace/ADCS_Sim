@@ -1,6 +1,5 @@
 import numpy as np
 from collections import deque
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from scipy.integrate import solve_ivp
 import time
@@ -263,7 +262,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     # Firmware uses a real-time clock, so keep its plant at 1x. Accelerating
     # only the plant reduces firmware control updates per simulated second.
     pacer = SimulationPacer(1.0 if firmware is not None else config.SIMULATION.speed)
-    speed_path = Path(config.__file__).with_suffix('.yaml')
+    speed_path = config.ACTIVE_PARAMETER_PATH
     custom_stable_since = None
     last_custom_command_id = None
 
@@ -450,7 +449,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                     raise RuntimeError(f'Attitude integration failed: {sol_rot.message}')
                 X_rot_next = sol_rot.y[:7, -1].copy()
                 X_rot_next[:4] /= np.linalg.norm(X_rot_next[:4])
-                td.set_wheel_momentum(sol_rot.y[7:11, -1])
+                td.set_wheel_momentum(sol_rot.y[7:, -1])
             else:
                 X_rot_next = integrate_firmware_step(t, dt, X_rot, solve_segment,
                     firmware, pacer,
@@ -929,7 +928,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
             "rw_momentum_mnms": rw_momentum_mnms.tolist(),
             "rw_momentum_saturation_fraction": rw_sat_fraction.tolist(),
             "rw_torque_limited": [bool(x) for x in rw_torque_limited],
-            "rw_max_momentum_saturation_fraction": float(np.max(rw_sat_fraction)),
+            "rw_max_momentum_saturation_fraction": float(np.max(rw_sat_fraction, initial=0.0)),
             # ---- Live environmental disturbance telemetry (calculate_
             # disturbances.py). Net vector in N*m (same SI convention as the
             # srp_torque_body_* fields); per-source magnitudes in µN*m.

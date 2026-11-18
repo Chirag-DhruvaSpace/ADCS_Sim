@@ -1,0 +1,476 @@
+# P-Dot CAD overrides. Set panels_deployed true to open the four antennas.
+# The body-mounted solar panels are fixed in both configurations.
+# Stowed: supplied PDOT Assembly (3).STEP and PDOT Assembly.SLDASM cached mass properties.
+# Deployed: native antenna parts and saved placements from Base Plate Sub-Assembly.SLDASM.
+# The deployed COM and tensor are estimated by shifting the original antenna masses
+# using the CAD part inertia and the parallel-axis theorem. The base electronics
+# are held fixed across the antenna deployment. The deployed span is 462.33 mm.
+# Both modes use SI units and the original assembly axes. Tensor off-diagonals
+# use Euler-dynamics signs. Facets approximate the bus envelope and antenna
+# strips. Surface optics, sensor locations and coil placements are assumptions.
+panels_deployed: true
+configurations:
+  stowed:
+    spacecraft:
+      mass_kg: 0.82373
+      body_radius_m: 0.0898421419994
+      inertia_kg_m2: [0.00136158497547, 0.00131345809478, 0.00196672261137]
+      inertia_tensor_kg_m2:
+        - [0.00136158497547, -2.20348196882e-05, -6.9825538822e-06]
+        - [-2.20348196882e-05, 0.00131345809478, -1.16143744389e-05]
+        - [-6.9825538822e-06, -1.16143744389e-05, 0.00196672261137]
+      drag_reference_area_m2: 0.0120135165155
+      srp_reference_area_m2: 0.0120135165155
+      model_file: frontend/assets/models/P-Dot-stowed.glb
+      model_scale_to_m: 1.0
+      model_recenter: false
+      star_tracker_model_node: ''
+    geometry:
+      center_of_mass_body_m: [0.0477938516353, 0.0491806085705, 0.0128702317974]
+      surfaces:
+        - name: bus-envelope:X-1
+          area_m2: 0.0079711062306
+          normal_body: [-1.0, -0.0, -0.0]
+          center_of_pressure_body_m: [-0.00667100446299, 0.049124995945, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0557420004625, 0.0357500007376]
+        - name: bus-envelope:X+1
+          area_m2: 0.0079711062306
+          normal_body: [1.0, 0.0, 0.0]
+          center_of_pressure_body_m: [0.101089000702, 0.049124995945, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0557420004625, 0.0357500007376]
+        - name: bus-envelope:Y-1
+          area_m2: 0.00770484052826
+          normal_body: [-0.0, -1.0, -0.0]
+          center_of_pressure_body_m: [0.0472089981195, -0.00661700451747, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0538800025824, 0.0357500007376]
+        - name: bus-envelope:Y+1
+          area_m2: 0.00770484052826
+          normal_body: [0.0, 1.0, 0.0]
+          center_of_pressure_body_m: [0.0472089981195, 0.104866996408, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0538800025824, 0.0357500007376]
+        - name: bus-envelope:Z-1
+          area_m2: 0.0120135165155
+          normal_body: [-0.0, -0.0, -1.0]
+          center_of_pressure_body_m: [0.0472089981195, 0.049124995945, -0.0140000004321]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0538800025824, 0.0557420004625]
+        - name: bus-envelope:Z+1
+          area_m2: 0.0120135165155
+          normal_body: [0.0, 0.0, 1.0]
+          center_of_pressure_body_m: [0.0472089981195, 0.049124995945, 0.0575000010431]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0538800025824, 0.0557420004625]
+      blockers:
+        - name: bus-envelope
+          center_body_m: [0.0472089981195, 0.049124995945, 0.0217500003055]
+          half_extents_m: [0.0538800025824, 0.0557420004625, 0.0357500007376]
+    sun_array:
+      cells: []
+    magnetorquers:
+      units:
+        - name: MTR-X
+          axis_body: [1.0, 0.0, 0.0]
+          position_body_m: [0.047209, 0.047263, 0.0128210264194]
+          enabled: true
+        - name: MTR-Y
+          axis_body: [0.0, 1.0, 0.0]
+          position_body_m: [0.047209, 0.047263, 0.0128210264194]
+          enabled: true
+        - name: MTR-Z
+          axis_body: [0.0, 0.0, 1.0]
+          position_body_m: [0.047209, 0.047263, 0.0128210264194]
+          enabled: true
+    sensor_mounts:
+      gyro_position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      mag_position_body_m: [0.047209, 0.047263, 0.0128210264194]
+    reaction_wheels:
+      axis_matrix_body:
+        - []
+        - []
+        - []
+  deployed:
+    spacecraft:
+      mass_kg: 0.82373
+      body_radius_m: 0.235041833612
+      inertia_kg_m2: [0.00142116945777, 0.00137313386311, 0.00208574078961]
+      inertia_tensor_kg_m2:
+        - [0.00142116945777, -6.89472582308e-06, -6.94392622456e-06]
+        - [-6.89472582308e-06, 0.00137313386311, -1.16155212342e-05]
+        - [-6.94392622456e-06, -1.16155212342e-05, 0.00208574078961]
+      drag_reference_area_m2: 0.0121535162943
+      srp_reference_area_m2: 0.0121535162943
+      model_file: frontend/assets/models/P-Dot-deployed.glb
+      model_scale_to_m: 1.0
+      model_recenter: false
+      star_tracker_model_node: ''
+    geometry:
+      center_of_mass_body_m: [0.0477961073781, 0.0491808429456, 0.0128668468095]
+      surfaces:
+        - name: bus-envelope:X-1
+          area_m2: 0.0079711062306
+          normal_body: [-1.0, -0.0, -0.0]
+          center_of_pressure_body_m: [-0.00667100446299, 0.049124995945, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0557420004625, 0.0357500007376]
+        - name: bus-envelope:X+1
+          area_m2: 0.0079711062306
+          normal_body: [1.0, 0.0, 0.0]
+          center_of_pressure_body_m: [0.101089000702, 0.049124995945, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0557420004625, 0.0357500007376]
+        - name: bus-envelope:Y-1
+          area_m2: 0.00770484052826
+          normal_body: [-0.0, -1.0, -0.0]
+          center_of_pressure_body_m: [0.0472089981195, -0.00661700451747, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0538800025824, 0.0357500007376]
+        - name: bus-envelope:Y+1
+          area_m2: 0.00770484052826
+          normal_body: [0.0, 1.0, 0.0]
+          center_of_pressure_body_m: [0.0472089981195, 0.104866996408, 0.0217500003055]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0538800025824, 0.0357500007376]
+        - name: bus-envelope:Z-1
+          area_m2: 0.0120135165155
+          normal_body: [-0.0, -0.0, -1.0]
+          center_of_pressure_body_m: [0.0472089981195, 0.049124995945, -0.0140000004321]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0538800025824, 0.0557420004625]
+        - name: bus-envelope:Z+1
+          area_m2: 0.0120135165155
+          normal_body: [0.0, 0.0, 1.0]
+          center_of_pressure_body_m: [0.0472089981195, 0.049124995945, 0.0575000010431]
+          absorptivity: 0.65
+          diffuse_reflectivity: 0.22
+          specular_reflectivity: 0.13
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0538800025824, 0.0557420004625]
+        - name: SPPD102_005_Deployed-1:X-1
+          area_m2: 0.000525000067044
+          normal_body: [-1.0, -0.0, -0.0]
+          center_of_pressure_body_m: [0.0667590001769, -0.096400150157, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-1:X+1
+          area_m2: 0.000525000067044
+          normal_body: [1.0, 0.0, 0.0]
+          center_of_pressure_body_m: [0.0669589998371, -0.096400150157, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-1:Y-1
+          area_m2: 5.9999898598e-07
+          normal_body: [-0.0, -1.0, -0.0]
+          center_of_pressure_body_m: [0.066859000007, -0.18390016057, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301274e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-1:Y+1
+          area_m2: 5.9999898598e-07
+          normal_body: [0.0, 1.0, 0.0]
+          center_of_pressure_body_m: [0.066859000007, -0.00890013974363, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301274e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-1:Z-1
+          area_m2: 3.49999447099e-05
+          normal_body: [-0.0, -0.0, -1.0]
+          center_of_pressure_body_m: [0.066859000007, -0.096400150157, -0.0106000000261]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [9.99998301274e-05, 0.0875000104134]
+        - name: SPPD102_005_Deployed-1:Z+1
+          area_m2: 3.49999447099e-05
+          normal_body: [0.0, 0.0, 1.0]
+          center_of_pressure_body_m: [0.066859000007, -0.096400150157, -0.0076]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [9.99998301274e-05, 0.0875000104134]
+        - name: SPPD102_005_Deployed-2:X-1
+          area_m2: 0.000525000067044
+          normal_body: [-1.0, -0.0, -0.0]
+          center_of_pressure_body_m: [0.0274590001769, 0.190926150157, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-2:X+1
+          area_m2: 0.000525000067044
+          normal_body: [1.0, 0.0, 0.0]
+          center_of_pressure_body_m: [0.0276589998371, 0.190926150157, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-2:Y-1
+          area_m2: 5.9999898598e-07
+          normal_body: [-0.0, -1.0, -0.0]
+          center_of_pressure_body_m: [0.027559000007, 0.103426139744, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301274e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-2:Y+1
+          area_m2: 5.9999898598e-07
+          normal_body: [0.0, 1.0, 0.0]
+          center_of_pressure_body_m: [0.027559000007, 0.27842616057, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301274e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-2:Z-1
+          area_m2: 3.49999447099e-05
+          normal_body: [-0.0, -0.0, -1.0]
+          center_of_pressure_body_m: [0.027559000007, 0.190926150157, -0.0106]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [9.99998301274e-05, 0.0875000104134]
+        - name: SPPD102_005_Deployed-2:Z+1
+          area_m2: 3.49999447099e-05
+          normal_body: [0.0, 0.0, 1.0]
+          center_of_pressure_body_m: [0.027559000007, 0.190926150157, -0.00759999997392]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [9.99998301274e-05, 0.0875000104134]
+        - name: SPPD102_005_Deployed-3:X-1
+          area_m2: 5.9999898598e-07
+          normal_body: [-1.0, -0.0, -0.0]
+          center_of_pressure_body_m: [-0.18395416057, 0.066912999993, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301273e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-3:X+1
+          area_m2: 5.9999898598e-07
+          normal_body: [1.0, 0.0, 0.0]
+          center_of_pressure_body_m: [-0.00895413974363, 0.066912999993, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301273e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-3:Y-1
+          area_m2: 0.000525000067044
+          normal_body: [-0.0, -1.0, -0.0]
+          center_of_pressure_body_m: [-0.096454150157, 0.0668130001629, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-3:Y+1
+          area_m2: 0.000525000067044
+          normal_body: [0.0, 1.0, 0.0]
+          center_of_pressure_body_m: [-0.096454150157, 0.0670129998231, -0.00910000001304]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-3:Z-1
+          area_m2: 3.49999447099e-05
+          normal_body: [-0.0, -0.0, -1.0]
+          center_of_pressure_body_m: [-0.096454150157, 0.066912999993, -0.0106000000261]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0875000104134, 9.99998301273e-05]
+        - name: SPPD102_005_Deployed-3:Z+1
+          area_m2: 3.49999447099e-05
+          normal_body: [0.0, 0.0, 1.0]
+          center_of_pressure_body_m: [-0.096454150157, 0.066912999993, -0.0076]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0875000104134, 9.99998301273e-05]
+        - name: SPPD102_005_Deployed-4:X-1
+          area_m2: 5.9999898598e-07
+          normal_body: [-1.0, -0.0, -0.0]
+          center_of_pressure_body_m: [0.103372139744, 0.027612999993, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301274e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-4:X+1
+          area_m2: 5.9999898598e-07
+          normal_body: [1.0, 0.0, 0.0]
+          center_of_pressure_body_m: [0.27837216057, 0.027612999993, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [0.0, 1.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [9.99998301274e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-4:Y-1
+          area_m2: 0.000525000067044
+          normal_body: [-0.0, -1.0, -0.0]
+          center_of_pressure_body_m: [0.190872150157, 0.0275130001629, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-4:Y+1
+          area_m2: 0.000525000067044
+          normal_body: [0.0, 1.0, 0.0]
+          center_of_pressure_body_m: [0.190872150157, 0.0277129998231, -0.00909999998696]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 0.0, 1.0]
+          half_size_m: [0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-4:Z-1
+          area_m2: 3.49999447099e-05
+          normal_body: [-0.0, -0.0, -1.0]
+          center_of_pressure_body_m: [0.190872150157, 0.027612999993, -0.0106]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0875000104134, 9.99998301274e-05]
+        - name: SPPD102_005_Deployed-4:Z+1
+          area_m2: 3.49999447099e-05
+          normal_body: [0.0, 0.0, 1.0]
+          center_of_pressure_body_m: [0.190872150157, 0.027612999993, -0.00759999997392]
+          absorptivity: 0.35
+          diffuse_reflectivity: 0.25
+          specular_reflectivity: 0.4
+          tangent_u_body: [1.0, 0.0, 0.0]
+          tangent_v_body: [0.0, 1.0, 0.0]
+          half_size_m: [0.0875000104134, 9.99998301274e-05]
+      blockers:
+        - name: bus-envelope
+          center_body_m: [0.0472089981195, 0.049124995945, 0.0217500003055]
+          half_extents_m: [0.0538800025824, 0.0557420004625, 0.0357500007376]
+        - name: SPPD102_005_Deployed-1
+          center_body_m: [0.066859000007, -0.096400150157, -0.00910000001304]
+          half_extents_m: [9.99998301274e-05, 0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-2
+          center_body_m: [0.027559000007, 0.190926150157, -0.00909999998696]
+          half_extents_m: [9.99998301274e-05, 0.0875000104134, 0.00150000001304]
+        - name: SPPD102_005_Deployed-3
+          center_body_m: [-0.096454150157, 0.066912999993, -0.00910000001304]
+          half_extents_m: [0.0875000104134, 9.99998301273e-05, 0.00150000001304]
+        - name: SPPD102_005_Deployed-4
+          center_body_m: [0.190872150157, 0.027612999993, -0.00909999998696]
+          half_extents_m: [0.0875000104134, 9.99998301274e-05, 0.00150000001304]
+    sun_array:
+      cells: []
+    magnetorquers:
+      units:
+        - name: MTR-X
+          axis_body: [1.0, 0.0, 0.0]
+          position_body_m: [0.047209, 0.047263, 0.0128210264194]
+          enabled: true
+        - name: MTR-Y
+          axis_body: [0.0, 1.0, 0.0]
+          position_body_m: [0.047209, 0.047263, 0.0128210264194]
+          enabled: true
+        - name: MTR-Z
+          axis_body: [0.0, 0.0, 1.0]
+          position_body_m: [0.047209, 0.047263, 0.0128210264194]
+          enabled: true
+    sensor_mounts:
+      gyro_position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      mag_position_body_m: [0.047209, 0.047263, 0.0128210264194]
+    reaction_wheels:
+      axis_matrix_body:
+        - []
+        - []
+        - []

@@ -1,9 +1,10 @@
 import numpy as np
+from satellite_parameters import REACTION_WHEELS
 
 mtr_units = []
 mtr_power_W = 0.0
 
-rw_torques = np.zeros(4)      # 4 reaction-wheel torques (Nm)
+rw_torques = np.zeros(REACTION_WHEELS.count)  # Reaction-wheel torques (Nm)
 mtr_torques = np.zeros(3)
 mtr_dipole = np.zeros(3)
 tau_body = np.zeros(3)

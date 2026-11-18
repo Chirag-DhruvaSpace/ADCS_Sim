@@ -1,5 +1,6 @@
 """Physical invariants for CAD configuration selection and force/moment coupling."""
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,7 +11,6 @@ from spacecraft_surface_physics import SurfaceForceModel, AU_M, PRESSURE_AT_AU_P
 
 def test_unquoted_off_sensor_profiles_load(tmp_path):
     import yaml
-    from pathlib import Path
     basic = yaml.safe_load(Path(config.__file__).with_suffix('.yaml').read_text())
     basic['use_advanced_satellite_model'] = False
     basic['sensor_profiles'] = dict.fromkeys(basic['sensor_profiles'], False)
@@ -19,6 +19,22 @@ def test_unquoted_off_sensor_profiles_load(tmp_path):
     loaded = config._load_configuration(source)
     assert not loaded[9].enabled
     assert not loaded[10].enabled
+
+
+@pytest.mark.parametrize('deployed', [False, True])
+def test_pdot_profile_uses_its_own_geometry_and_zero_reaction_wheels(deployed):
+    profile = Path(config.__file__).with_name('satellite_parameters(1).yaml')
+    craft, _, _, _, _, _, geometry, wheels, _, gps, imu, _ = config._load_configuration(
+        profile, panels_deployed=deployed)
+    mode = 'deployed' if deployed else 'stowed'
+    assert craft.name == 'P-Dot'
+    assert craft.configuration == mode
+    assert craft.mass_kg == pytest.approx(0.82373)
+    assert Path(craft.model_file).name == f'P-Dot-{mode}.glb'
+    assert any('SPPD102_005' in face.name for face in geometry.surfaces) == deployed
+    assert wheels.wheel_axes_body.shape == (3, 0)
+    assert imu.enable_gyro and imu.enable_magnetometer
+    assert not any((gps.enabled, imu.enable_sun_sensor, imu.enable_star_tracker))
 
 
 def plate(absorption=1., diffuse=0., specular=0., com=(0,0,0)):
