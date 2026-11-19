@@ -26,8 +26,31 @@ export function SunCellRows({
     }<td>{sunCellLabel(cell,index)}</td><td>{finite(cell.output_pct) && cell.output_pct > 0 && cell.output_pct < .1 ? cell.output_pct.toPrecision(2) : fmt(cell.output_pct, 1)}</td><td>{fmt(cell.adc_counts, 0)}</td><td>{fmt(cell.angle_deg, 1)}</td><td data-used={String(cell.used)}>{cell.shadowed ? 'Shadowed' : cell.saturated ? 'Saturated' : cell.used ? 'Used' : cell.in_fov ? 'In FOV' : 'Out of FOV'}</td></tr>);
 }
 const small = value => finite(value) ? Math.abs(value) < .001 && value !== 0 ? value.toExponential(2) : fmt(value, 3) : '—';
-export function ActuatorRows({
-  data
-}) {
-  return <>{[0, 1, 2].map(index => <div className="actuator-line" key={'mtr' + index}><span>MTR {'XYZ'[index]}</span><b>{small(data.mtr_torque_nm?.[index])} N·m</b><b>{small(data.mtr_dipole_am2?.[index])} A·m²</b><b>{small(data.mtr_current_a?.[index])} A</b></div>)}{!['POINTING', 'SUN_POINTING', 'DETUMBLE'].includes(data.mode) && (data.rw_torques_mnm ?? []).map((_, index) => <div className="actuator-line" key={'rw' + index}><span>Wheel {index + 1}</span><b>{small(data.rw_torques_mnm?.[index])} mN·m</b><b>{small(data.rw_momentum_mnms?.[index])} mN·m·s</b></div>)}</>;
+
+export function ActuatorRows({ data, spacecraftName }) {
+  if (spacecraftName !== 'P-Dot') {
+    return <>{[0, 1, 2].map(index => <div className="actuator-line" key={'mtr' + index}><span>MTR {'XYZ'[index]}</span><b>{small(data.mtr_torque_nm?.[index])} N·m</b><b>{small(data.mtr_dipole_am2?.[index])} A·m²</b><b>{small(data.mtr_current_a?.[index])} A</b></div>)}{!['POINTING', 'SUN_POINTING', 'DETUMBLE'].includes(data.mode) && (data.rw_torques_mnm ?? []).map((_, index) => <div className="actuator-line" key={'rw' + index}><span>Wheel {index + 1}</span><b>{small(data.rw_torques_mnm?.[index])} mN·m</b><b>{small(data.rw_momentum_mnms?.[index])} mN·m·s</b></div>)}</>;
+  }
+  const coils = data.mtr_units ?? [];
+  const wheels = data.rw_torques_mnm ?? [];
+  return <>
+    {data.mtr_torque_nm?.length === 3 && <div className="actuator-line">
+      <span>Total magnetic torque · body X, Y, Z</span>
+      <b>{data.mtr_torque_nm.map(small).join(' / ')} N·m</b>
+    </div>}
+    {coils.map(coil => <div className="actuator-line" key={coil.name}
+      title={coil.position?.length === 3 ? `Body mount [${coil.position.map(value => fmt(value, 4)).join(', ')}] m` : undefined}>
+      <span>{coil.name} · {coil.enabled === false ? 'Disabled' : coil.active ? 'Energized' : 'Idle'}</span>
+      <b>Current {small(coil.current_A)} A · Dipole {small(coil.dipole_Am2)} A·m²</b>
+      <b>Power {small(coil.power_W)} W</b>
+    </div>)}
+    {coils.length === 0 && data.mtr_dipole_am2?.length === 3 && <div className="actuator-line">
+      <span>Magnetic dipole · body X, Y, Z</span>
+      <b>{data.mtr_dipole_am2.map(small).join(' / ')} A·m²</b>
+    </div>}
+    {wheels.map((torque, index) => <div className="actuator-line" key={index}>
+      <span>Wheel {index + 1}</span>
+      <b>{small(torque)} mN·m · {small(data.rw_momentum_mnms?.[index])} mN·m·s</b>
+    </div>)}
+  </>;
 }

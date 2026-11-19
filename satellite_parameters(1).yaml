@@ -1,5 +1,9 @@
 # P-Dot simulation parameters. Select this file from satellite_parameters.yaml.
 # Restart after changing the profile or deployment state.
+# Sensor reference: DS_PD.TCD_v1.0, pp. 15–16, 32, 35–37, 40–42.
+# The OBC 9-DOF mounting point, orientation, and gyro/mag error values are provisional.
+# Accelerometer, EPS thermistors and electrical monitoring have no runtime sensor model.
+# The GPS antenna lever arm is not a receiver-model parameter.
 active_satellite_parameters: null
 advanced_satellite_parameters: advanced_satellite_parameters(1).yaml
 model_url: /assets/models/P-Dot-stowed.glb
@@ -7,7 +11,7 @@ model_url: /assets/models/P-Dot-stowed.glb
 # Detumble with the configured magnetorquers, then coast within the rate hysteresis.
 # The legacy_mode and custom fields are retained for schema compatibility.
 pointing:
-  strategy: detumble
+  strategy: firmware_sitl #detumble
   legacy_mode: SUN_POINTING
   custom:
     input: desired_quaternion
@@ -15,10 +19,10 @@ pointing:
     reference_quaternion: [1.0, 0.0, 0.0, 0.0]
 
 sensor_profiles:
-  gps: 'off'
+  gps: custom
   gyroscope: custom
   magnetometer: custom
-  sun_sensor: 'off'
+  sun_sensor: custom
   star_tracker: 'off'
 
 use_advanced_satellite_model: true
@@ -39,7 +43,7 @@ spacecraft:
   panels_deployed: false
   mtr_max_dipole_Am2: 0.1
   mtr_dipole_step_Am2: 0.001
-  mtr_max_current_A: [0.1, 0.1, 0.1]
+  mtr_max_current_A: [0.5, 0.5, 0.5]
   wheel_max_torque_Nm: 0.0
   wheel_max_momentum_Nms: 0.0
   inertia_tensor_kg_m2:
@@ -66,7 +70,7 @@ attitude:
 
 model_data:
   orekit_data_path: orekit-data
-  magnetic_model: WMM
+  magnetic_model: WMM  # TCD describes IGRF. This workspace supplies WMM coefficients.
   space_weather_file_pattern: SpaceWeather.*\.txt
   gravity_degree: 36
   gravity_order: 36
@@ -192,6 +196,8 @@ reaction_wheels:
   max_reallocation_passes: 4
 
 simulation:
+  pdot_firmware_source: 'C:/Projects/P-Dot Firmware/pdot-obc-ttc-beacon'
+  pdot_firmware_port: 5110
   firmware_command_timeout_s: 2.0
   firmware_gyro_preset: configured
   firmware_board_magnetometer_calibration: false
@@ -209,21 +215,21 @@ simulation:
   telemetry_url: http://127.0.0.1:5000/update_telemetry
   telemetry_timeout_s: 0.25
 
-# Disabled pending a verified receiver. Retained inactive simulation settings follow the basic schema.
+# TCD pp. 16, 40–42: OBC GPS receiver and +Z antenna. Rate and errors are provisional.
 gps:
-  enabled: false
+  enabled: true
   update_rate_hz: 1.0
   fixed_position_offset_eci_m: [0.0, 0.0, 0.0]
   fixed_velocity_offset_eci_m_s: [0.0, 0.0, 0.0]
-  enable_bias: false
-  enable_wander: false
-  enable_white_noise: false
-  enable_steps: false
-  enable_latency: false
-  enable_dropout: false
-  enable_clock_error: false
-  enable_quantization: false
-  enable_status: false
+  enable_bias: true
+  enable_wander: true
+  enable_white_noise: true
+  enable_steps: true
+  enable_latency: true
+  enable_dropout: true
+  enable_clock_error: true
+  enable_quantization: true
+  enable_status: true
   pos_bias_sigma_h_m: 0.5
   pos_bias_sigma_v_m: 1.0
   gm_tau_pos_s: 60.0
@@ -279,7 +285,7 @@ gyroscope:
   latency_min_s: 0.001
   latency_max_s: 0.02
   quantization_rad_s: 0.0
-  hardware_range_deg_s: 125
+  hardware_range_deg_s: 250  # OBC ICM-20948 Gyro_250dps setting.
   response_matrix:
     - [1.0, 0.0, 0.0]
     - [0.0, 1.0, 0.0]
@@ -288,25 +294,33 @@ gyroscope:
   units: []
   mount_overrides: {}
 
-# ASSUMPTION: three orthogonal coils at the avionics stack, with generic electrical
-# settings. CAD does not identify the coil package, wiring, ratings or polarity.
+# P-Dot OBC acs.c channel order. Positions approximate the CAD panel centers.
+# globalmisc.h gives the combined X gain, split equally across the two X coils.
+# Signed electrical current is positive along each configured panel normal.
 magnetorquers:
   enabled: true
   quantize_commands: false
-  dipole_per_amp_Am2_per_A: 1.0
   resistance_ohm: 20.0
   units:
-    - name: MTR-X
+    - name: MTR-X-
+      axis_body: [-1.0, 0.0, 0.0]
+      position_body_m: [-0.006671, 0.049125, 0.02175]
+      dipole_per_amp_Am2_per_A: 0.0357618
+      enabled: true
+    - name: MTR-X+
       axis_body: [1.0, 0.0, 0.0]
-      position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      position_body_m: [0.101089, 0.049125, 0.02175]
+      dipole_per_amp_Am2_per_A: 0.0357618
       enabled: true
-    - name: MTR-Y
-      axis_body: [0.0, 1.0, 0.0]
-      position_body_m: [0.047209, 0.047263, 0.0128210264194]
+    - name: MTR-Y-
+      axis_body: [0.0, -1.0, 0.0]
+      position_body_m: [0.047209, -0.006617, 0.02175]
+      dipole_per_amp_Am2_per_A: 0.0357618
       enabled: true
-    - name: MTR-Z
+    - name: MTR-Z+
       axis_body: [0.0, 0.0, 1.0]
-      position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      position_body_m: [0.047209, 0.049125, 0.0575]
+      dipole_per_amp_Am2_per_A: 0.1773786664
       enabled: true
 
 # ASSUMPTION: generic magnetometer at the OBC CAD envelope center, with assumed mount
@@ -318,7 +332,7 @@ magnetometer:
   use_for_control: true
   attitude_sigma_deg: 0.86
   position_body_m: [0.047209, 0.047263, 0.0128210264194]
-  mount_quaternion: [1.0, 0.0, 0.0, 0.0]
+  mount_quaternion: [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]  # OBC maps raw XY to -Y, X.
   gradient_body_t_per_m:
     - [0.0, 0.0, 0.0]
     - [0.0, 0.0, 0.0]
@@ -332,8 +346,8 @@ magnetometer:
   disturbance_wander_sigma_t: 2.0e-08
   disturbance_wander_tau_s: 200.0
   range_t: 0.001
-  hardware_range_t: 0.0049
-  hardware_scale_t_per_count: 1.5e-07
+  hardware_range_t: 0.004912
+  hardware_scale_t_per_count: 1.4997557401074744e-07
   dropout_probability: 0.0
   latency_mean_s: 0.01
   latency_sigma_s: 0.002
@@ -348,9 +362,11 @@ magnetometer:
   units: []
   mount_overrides: {}
 
-# An independent sun sensor was not identified. Body-mounted solar panels are present.
+# TCD p. 16 names four panels. The six-face requirement on p. 37 needs confirmation.
+# Mounts approximate CAD face centers with a 1 mm outward offset for shadow rays.
+# FOV, ADC, noise and latency are provisional.
 sun_sensor:
-  enabled: false
+  enabled: true
   seed: 42
   update_rate_hz: 10.0
   use_for_attitude: false
@@ -363,11 +379,24 @@ sun_sensor:
   fine_total_signal_counts: 10000
   fine_quadrant_max_counts: 10000
   fine_eclipse_threshold_counts: 250
-  enable_fine_albedo: true
+  enable_fine_albedo: false
+  enable_fine_sensor_output: false
   fine_temperature_k: 298.15
   fine_temperature_zero_k: 273.15
   fine_temperature_counts_per_k: 100.0
-  cells: []
+  cells:
+    - name: EP01 +X
+      normal_body: [1, 0, 0]
+      position_body_m: [0.102089, 0.049125, 0.02175]
+    - name: EP02 +Y
+      normal_body: [0, 1, 0]
+      position_body_m: [0.047209, 0.105867, 0.02175]
+    - name: EP04 -Y
+      normal_body: [0, -1, 0]
+      position_body_m: [0.047209, -0.007617, 0.02175]
+    - name: TD01 +Z
+      normal_body: [0, 0, 1]
+      position_body_m: [0.047209, 0.049125, 0.0585]
   blockers: []
   enable_alignment_error: true
   enable_bias_drift: true

@@ -227,6 +227,8 @@ class SimulationParameters:
     firmware_command_timeout_s: float = 2.0
     firmware_gyro_preset: str = 'adis16545'
     firmware_board_magnetometer_calibration: bool = True
+    pdot_firmware_source: str = ''
+    pdot_firmware_port: int = 5110
 
     def __post_init__(self):
         for name in ('orbit_output_window_s', 'speed', 'orbit_integrator_min_step_s', 'orbit_integrator_max_step_s',
@@ -241,6 +243,8 @@ class SimulationParameters:
             raise ValueError('firmware_gyro_preset must be configured or adis16545')
         if not isinstance(self.firmware_board_magnetometer_calibration, bool):
             raise ValueError('firmware_board_magnetometer_calibration must be boolean')
+        if type(self.pdot_firmware_port) is not int or not 1 <= self.pdot_firmware_port <= 65535:
+            raise ValueError('pdot_firmware_port must be an integer between 1 and 65535')
 
 
 @dataclass(frozen=True)
@@ -573,6 +577,7 @@ class SunSensorArrayParameters:
     fine_temperature_k: float = 298.15
     fine_temperature_zero_k: float = 273.15
     fine_temperature_counts_per_k: float = 100.0
+    enable_fine_sensor_output: bool = True
     blockers: tuple = field(default_factory=_default_sun_blockers)  # bus/panel boxes block the sun
 
     # --- error-channel switches (True = realistic; False = channel off) ---
@@ -1005,7 +1010,7 @@ class ImuSimParameters:
                                              # true attitude (A/B test the estimator)
 
     def __post_init__(self) -> None:
-        if self.gyro_hardware_range_deg_s not in (125, 450, 2000):
+        if self.gyro_hardware_range_deg_s not in (125, 250, 450, 2000):
             raise ValueError('ADIS16545 gyro range must be 125, 450, or 2000 deg/s')
         for name in ('mag_hardware_range_t', 'mag_hardware_scale_t_per_count'):
             if not np.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
@@ -1463,8 +1468,10 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     if wheels.count == 0 and (strategy == 'custom' or
                               (strategy == 'legacy' and data['pointing']['legacy_mode'] != 'SUN_POINTING')):
         raise ValueError('The selected pointing mode requires reaction wheels')
-    if strategy == 'firmware_sitl' and wheels.count != 4:
-        raise ValueError('The firmware SITL interface requires four reaction wheels')
+    if strategy == 'firmware_sitl':
+        expected_wheels = 0 if spacecraft.name == 'P-Dot' else 4
+        if wheels.count != expected_wheels:
+            raise ValueError(f'{spacecraft.name} firmware SITL requires {expected_wheels} reaction wheels')
     return (spacecraft, orbit, section('attitude', AttitudeParameters),
             _from_yaml(ModelDataParameters, model_data), section('control', ControlParameters),
             section('disturbances', DisturbanceParameters), geometry,

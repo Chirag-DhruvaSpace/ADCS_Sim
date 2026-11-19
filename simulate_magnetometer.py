@@ -100,6 +100,15 @@ class RawMagnetometerSample:
         return (self.data['X_axis'], self.data['Y_axis'], self.data['Z_axis'])
 
 
+def encode_pdot_magnetometer_register_block(sample, offsets_microtesla):
+    """P-Dot AK09916 HXL burst: three little-endian axes, reserved byte and ST2."""
+    import struct
+    microtesla_per_count = 4912.0 / 32752
+    counts = np.rint(np.asarray(sample.counts) + np.asarray(offsets_microtesla) / microtesla_per_count)
+    overflow = sample.saturated or np.any(np.abs(counts) > 32752)
+    return struct.pack('<hhhxB', *np.clip(counts, -32752, 32752).astype(int), 8 if overflow else 0)
+
+
 def encode_magnetometer_registers(sensor_field_t, scale_t_per_count=150e-9):
     """AK09916 signed 16-bit outputs; one count is 0.15 microtesla (150 nT)."""
     registers = {}

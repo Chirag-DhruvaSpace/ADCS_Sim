@@ -1,10 +1,64 @@
 """Tick-boundary adapter for the unchanged supplied UDP modules."""
 import math
+from pathlib import Path
+import re
 import socket
 import struct
 import time
 from dataclasses import replace
 import numpy as np
+
+
+class PDotFirmwareLink:
+    """P-Dot ICM register bursts out, signed coil-current requests back."""
+
+    sensor_packet = struct.Struct('<I10s8s')
+    current_packet = struct.Struct('<I4d')
+
+    def __init__(self, source_root, port):
+        from simulate_magnetorquers import configured_model
+
+        header = Path(source_root) / 'PDOT-OBC/Core/Inc/icm20948i2c.h'
+        calibration = dict(re.findall(
+            r'^#define\s+(ICM_GYRO_CALIBRATION_(?:SLOPE|OFFSET)_[XYZ]|MAG_OFFSET_[XYZ])'
+            r'\s+\(double\)\s*([-\d.]+)', header.read_text(encoding='utf-8-sig'), re.MULTILINE))
+        self.gyroscope_offsets = [float(calibration[f'ICM_GYRO_CALIBRATION_OFFSET_{axis}']) for axis in 'XYZ']
+        self.gyroscope_slopes = [float(calibration[f'ICM_GYRO_CALIBRATION_SLOPE_{axis}']) for axis in 'XYZ']
+        self.magnetometer_offsets = [float(calibration[f'MAG_OFFSET_{axis}']) for axis in 'XYZ']
+        self.plant = configured_model()
+        required_channels = ('MTR-X-', 'MTR-X+', 'MTR-Y-', 'MTR-Z+')
+        if tuple(unit.name for unit in self.plant.cfg.units) != required_channels:
+            raise ValueError(f'P-Dot firmware requires coil order {required_channels}')
+        self.connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.connection.connect(('127.0.0.1', port))
+        self.received = False
+
+    def step(self, simulation_seconds, gyroscope, magnetometer):
+        from simulate_gyroscope import encode_pdot_gyroscope_register_block
+        from simulate_magnetometer import encode_pdot_magnetometer_register_block
+
+        self.received = False
+        if (gyroscope is not None and gyroscope.valid
+                and magnetometer is not None and magnetometer.valid):
+            timestamp = round(simulation_seconds * 1000)
+            gyro_bytes = encode_pdot_gyroscope_register_block(
+                gyroscope, self.gyroscope_offsets, self.gyroscope_slopes)
+            magnetometer_bytes = encode_pdot_magnetometer_register_block(
+                magnetometer, self.magnetometer_offsets)
+            try:
+                deadline = time.monotonic() + 0.05
+                self.connection.send(self.sensor_packet.pack(timestamp, gyro_bytes, magnetometer_bytes))
+                while (remaining := deadline - time.monotonic()) > 0:
+                    self.connection.settimeout(remaining)
+                    reply = self.connection.recv(1024)
+                    if len(reply) == self.current_packet.size:
+                        reply_timestamp, *currents = self.current_packet.unpack(reply)
+                        if reply_timestamp == timestamp and all(math.isfinite(value) for value in currents):
+                            self.received = True
+                            return self.plant.apply_currents(currents, quantize=False)
+            except OSError:
+                pass
+        return self.plant.apply_currents(np.zeros(4), quantize=False)
 
 # The real board's magnetometer error, as the firmware's magApplyCal()
 # (ADIS16545.c) removes it: h_cal = A @ (h_raw - b), in sensor axes. Keep in

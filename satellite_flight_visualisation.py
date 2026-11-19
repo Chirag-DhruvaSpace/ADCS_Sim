@@ -159,9 +159,10 @@ state0 = np.concatenate((r0, v0))          # [x, y, z, vx, vy, vz]
 # one every 300 simulated seconds) so a wheel sitting near its momentum limit
 # doesn't print one line per second for hours. The huge negative start value
 # lets the first warning fire immediately.
+_coarse_sun_only = not config.IMU_SIM.sun_array.enable_fine_sensor_output
 _sensor_layout = [dict(name=cell.name, kind='Sun', position=list(cell.position_body_m),
                        normal=list(cell.normal_body), fov=cell.fov_half_angle_deg,
-                       enabled=cell.enabled, fss_id=f'FSS{index+1}')
+                       enabled=cell.enabled, coarse_only=_coarse_sun_only, fss_id=f'FSS{index+1}')
                   for index, cell in enumerate(config.IMU_SIM.sun_array.cells)]
 for _kind, _label in [('gyro', 'Gyro'), ('mag', 'Mag')]:
     for _unit in config.IMU_SIM.sensor_units(_kind):
@@ -195,10 +196,20 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
     global _telemetry_sequence, _gyroscope, _magnetometer, _gyro_units, _mag_units, _sun_sensor
 
     from engine.simulation.sensor_schedule import validate_sensor_schedule
+    firmware_mode = config.POINTING['strategy'] == 'firmware_sitl'
+    pdot_firmware_mode = firmware_mode and config.SPACECRAFT.name == 'P-Dot'
     validate_sensor_schedule(float(dt), config.IMU_SIM, config.GPS_SIM,
-                             firmware=config.POINTING['strategy'] == 'firmware_sitl')
+                             firmware=firmware_mode and not pdot_firmware_mode)
     firmware = None
-    if config.POINTING['strategy'] == 'firmware_sitl':
+    pdot_firmware = None
+    if pdot_firmware_mode:
+        from pathlib import Path
+        from firmware_sitl_adapter import PDotFirmwareLink
+        if not config.SIMULATION.pdot_firmware_source:
+            raise ValueError('Set simulation.pdot_firmware_source to the P-Dot firmware checkout')
+        firmware_source = config.ACTIVE_PARAMETER_PATH.parent / Path(config.SIMULATION.pdot_firmware_source)
+        pdot_firmware = PDotFirmwareLink(firmware_source, config.SIMULATION.pdot_firmware_port)
+    elif firmware_mode:
         from firmware_sitl_adapter import (FirmwareLink, with_board_magnetometer, with_firmware_imu_rate,
                                            with_adis16545_gyro, integrate_firmware_step, FIRMWARE_IMU_RATE_HZ, imu_substep_times)
         firmware = FirmwareLink()
@@ -407,6 +418,9 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         srp_torque_for_step = lambda stage_t, stage_q: facets_at(stage_t, stage_q).srp_torque_body_nm
         drag_torque_for_step = lambda stage_t, stage_q: facets_at(stage_t, stage_q).drag_torque_body_nm
 
+        if pdot_firmware is not None:
+            magnetic_state = pdot_firmware.step(t, _gyro_msg, _mag_msg)
+            srd.set_firmware_tick(np.empty(0), magnetic_state.body_dipole_Am2, magnetic_state)
         if firmware is not None:
             # Environment/acquisition preparation may have missed the deadline;
             # anchor this capture before transmission, not after the first solve.
@@ -785,6 +799,10 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 abs(np.dot(yaw_steering_target, X_rot[:4])), 0.0, 1.0)))),
         }
         firmware_metadata = {}
+        if pdot_firmware is not None:
+            firmware_metadata['ads_mode'] = ('P-Dot B-dot' if pdot_firmware.received
+                                             else 'P-Dot awaiting firmware or valid IMU')
+            firmware_metadata['custom_pointing_status'] = 'green' if pdot_firmware.received else 'red'
         if firmware is not None:
             target_rate = (yaw_steering.yaw_steering_target_rate(r_vec, v_vec)
                            if firmware.link.get_latest_ads_mode_name() == 'YawSteering' else None)
@@ -1042,7 +1060,7 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                     1 for cell in _sun_rec.cells if cell.used and sun_solution_current)
                 data_to_send["sun_arr_cells_total"] = int(len(_sun_rec.cells))
                 data_to_send["sun_arr_cells"] = [
-                    {"name": c.name, "fss_id": f'FSS{index+1}',
+                    {"name": c.name, "coarse_only": _coarse_sun_only, "fss_id": f'FSS{index+1}',
                      "output_pct": float(c.output_pct),
                      "adc_counts": int(c.adc_counts),
                      "angle_deg": (None if c.angle_deg is None else float(c.angle_deg)),
@@ -1096,10 +1114,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
                 data_to_send["att_est_source"] = firmware.link.get_latest_fuse_source_name()
             for _axis, _value in zip(('w', 'x', 'y', 'z'), X_rot[:4]):
                 data_to_send['truth_att_quat_' + _axis] = float(_value)
-            data_to_send["att_est_quat_x"] = float(_q_est[1])
-            data_to_send["att_est_quat_y"] = float(_q_est[2])
-            data_to_send["att_est_quat_z"] = float(_q_est[3])
-            data_to_send["att_est_quat_w"] = float(_q_est[0])
+            for _axis, _value in zip(('w', 'x', 'y', 'z'), _q_est):
+                data_to_send['att_est_quat_' + _axis] = float(_value)
             data_to_send['att_est_euler_deg'] = np.degrees(q2e.euler_from_quaternion(*_q_est)).tolist()
             data_to_send['estimated_body_to_ecef_matrix'] = (
                 C_eci2ecef @ srd._dcm_bi_from_q(_q_est)).tolist()

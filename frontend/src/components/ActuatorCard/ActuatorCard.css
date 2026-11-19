@@ -1,6 +1,25 @@
 /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
 @import "../MissionCard/MissionCard.css";
 /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
-/* The card inherits the shared card rules without changing its appearance. */
+#mission-page-pointing .actuator-card .mode-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#mission-page-pointing .actuator-card #mission-actuators .actuator-line > :is(span, b) {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+}
+
+#mission-page-pointing .actuator-card #mission-actuators[data-coil-rows="true"] .actuator-line {
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 2px;
+}
+
+#mission-page-pointing .actuator-card #mission-actuators[data-coil-rows="true"] .actuator-line > span {
+  grid-column: 1 / -1;
+}
 
 

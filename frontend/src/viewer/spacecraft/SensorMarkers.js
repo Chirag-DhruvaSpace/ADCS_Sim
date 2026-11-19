@@ -64,7 +64,7 @@ export function createSensorMarkers({
           toneMapped: false
         }));
         mesh.renderOrder = 500;
-        const label = item.kind === 'Sun' ? (item.fss_id || `FSS${sunSensorNumber}`)
+        const label = item.kind === 'Sun' ? (item.coarse_only ? item.name : (item.fss_id || `FSS${sunSensorNumber}`))
           : item.kind === 'StarTracker' ? 'ST'
           : item.kind === 'Gyro' ? 'Gyro' : item.name;
         mesh.add(createSensorLabel(label));

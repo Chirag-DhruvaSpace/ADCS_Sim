@@ -101,6 +101,8 @@ def viewer_configuration():
                    spacecraft_tracker_node=config.SPACECRAFT.star_tracker_model_node,
                    pointing_strategy=config.POINTING['strategy'], legacy_mode=config.POINTING['legacy_mode'],
                    reaction_wheel_count=config.REACTION_WHEELS.count,
+                   spacecraft_name=config.SPACECRAFT.name,
+                   star_tracker_enabled=config.IMU_SIM.enabled and config.IMU_SIM.enable_star_tracker,
                    spacecraft_com=latest_telemetry.get('center_of_mass_body_m', config.GEOMETRY.center_of_mass_body_m))
 
 

@@ -596,12 +596,14 @@ class SimulatedSunSensorArray:
             # Operator diagnostics stay separate from the hardware interface.
             self._last_cell_diagnostics = {c.name: c for c in cell_samples}
             fine_sensors = []
-            if configuration.enable_albedo and configuration.enable_fine_albedo and r_meas is not None:
+            if (configuration.enable_fine_sensor_output and configuration.enable_albedo
+                    and configuration.enable_fine_albedo and r_meas is not None):
                 reflected_rays, reflected_weights = earth_albedo_rays(r_meas, sun_eci, configuration.albedo_scale)
                 reflected_rays_body = reflected_rays @ body_to_eci
             else:
                 reflected_rays_body, reflected_weights = np.empty((0,3)), np.empty(0)
-            for index, cell in enumerate(cell_samples):
+            fine_cells = cell_samples if configuration.enable_fine_sensor_output else ()
+            for index, cell in enumerate(fine_cells):
                 cell_config = configuration.cells[index]
                 sensor_to_body = sensor_to_body_matrix(self._n_effective[index], cell_config.sensor_roll_rad)
                 direction_sensor = sensor_to_body.T @ sun_direction_body

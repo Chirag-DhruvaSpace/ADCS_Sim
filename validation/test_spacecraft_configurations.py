@@ -34,7 +34,16 @@ def test_pdot_profile_uses_its_own_geometry_and_zero_reaction_wheels(deployed):
     assert any('SPPD102_005' in face.name for face in geometry.surfaces) == deployed
     assert wheels.wheel_axes_body.shape == (3, 0)
     assert imu.enable_gyro and imu.enable_magnetometer
-    assert not any((gps.enabled, imu.enable_sun_sensor, imu.enable_star_tracker))
+    assert gps.enabled and imu.enable_sun_sensor
+    assert not imu.enable_star_tracker
+    assert not imu.sun_array.enable_fine_sensor_output
+    assert [cell.name for cell in imu.sun_array.cells] == [
+        'EP01 +X', 'EP02 +Y', 'EP04 -Y', 'TD01 +Z']
+    from simulate_sunsensor import SimulatedSunSensorArray
+    sample = SimulatedSunSensorArray(imu.sun_array).get_raw_data(
+        0.0, [1, 0, 0, 0], [1, 0, 0], 1.0)
+    assert len(sample.cells) == 4
+    assert not sample.sensors
 
 
 def plate(absorption=1., diffuse=0., specular=0., com=(0,0,0)):

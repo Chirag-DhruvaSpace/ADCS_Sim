@@ -3,7 +3,9 @@ import MissionCard from '../MissionCard/MissionCard.jsx';
 import { formatTelemetry } from '../../services/formatTelemetry.js';
 import './AttitudeErrorCard.css';
 
-export default memo(function AttitudeErrorCard({ data, derived }) {
+export default memo(function AttitudeErrorCard({ data, derived, configuration }) {
+  const pdotFirmware = configuration?.spacecraft_name === 'P-Dot'
+    && configuration.pointing_strategy === 'firmware_sitl';
   const error = data.att_est_error_deg;
   const severity = !Number.isFinite(error) ? 'unknown' : error < 2 ? 'good' : error < 10 ? 'warn' : 'bad';
   return <MissionCard className="mission-card glass attitude-error-card">
@@ -12,7 +14,8 @@ export default memo(function AttitudeErrorCard({ data, derived }) {
         <circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" />
         <path d="M12 1v6m0 10v6M1 12h6m10 0h6" />
       </svg>Attitude error</h2>
-        {typeof data.att_est_source === 'string'
+        {pdotFirmware ? <p className="quiet">Simulator estimate vs. truth</p>
+          : typeof data.att_est_source === 'string'
           ? <p className="quiet">Firmware reference: <span>{data.att_est_source}</span></p>
           : <p className="quiet">Sun correction: <span data-bool="att_est_sun_used">
             {formatTelemetry(data, derived, { 'data-bool': 'att_est_sun_used' }, '')}

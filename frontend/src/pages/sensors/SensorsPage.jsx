@@ -17,6 +17,7 @@ export default memo(function SensorsPage({
   samples,
   configuration
 }) {
+  const starTrackerEnabled = data.sensor_activation?.['Star tracker'] ?? configuration?.star_tracker_enabled;
   /* made by chirag malik | malikchirag.2005@gmail.com | linkedin: malikchirag */
   return <section className="mission-page" id="mission-page-sensors" role="tabpanel" aria-labelledby="mission-tab-sensors" hidden={!visible} data-departing={departing} aria-hidden={departing || !visible}>
     <div className="mission-rail rail-left">
@@ -27,7 +28,8 @@ export default memo(function SensorsPage({
     </div>
     <div className="mission-rail rail-right">
       <AttitudeErrorCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
-      <StarTrackerCard data={data} derived={derived} samples={samples} active={active} />
+      {starTrackerEnabled !== false &&
+        <StarTrackerCard data={data} derived={derived} samples={samples} active={active} />}
       <SunSensorsCard data={data} derived={derived} samples={samples} active={active} configuration={configuration} />
     </div>
   </section>;

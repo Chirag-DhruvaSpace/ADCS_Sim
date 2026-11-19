@@ -101,9 +101,17 @@ class RawGyroscopeSample:
 
 
 def gyro_register_scale_rad_s(hardware_range_deg_s):
-    """SI rate represented by one ADIS16545 high-word count."""
-    degrees_per_count = {125: 0.00625, 450: 0.025, 2000: 0.1}
+    """SI rate represented by one P-30XL ADIS16545 or P-Dot ICM-20948 count."""
+    degrees_per_count = {125: 0.00625, 450: 0.025, 2000: 0.1, 250: 250.0 / 32768}
     return math.radians(degrees_per_count[hardware_range_deg_s])
+
+def encode_pdot_gyroscope_register_block(sample, offsets_deg_s, slopes):
+    """P-Dot ICM-20948 GYRO_XOUT_H burst: big-endian axes, temperature and padding."""
+    import struct
+    degrees_per_count = 250.0 / 32768
+    counts = np.rint((np.asarray(sample.counts) * degrees_per_count - offsets_deg_s)
+                     / np.asarray(slopes) / degrees_per_count)
+    return struct.pack('>hhh4x', *np.clip(counts, -32768, 32767).astype(int))
 
 def encode_gyro_registers(sensor_rate_rad_s, hardware_range_deg_s):
     """Match ADIS_READ_GYRO: return the signed high word of each 32-bit output."""

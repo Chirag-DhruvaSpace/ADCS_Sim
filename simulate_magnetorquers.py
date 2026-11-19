@@ -177,10 +177,10 @@ class SimulatedMagnetorquers:
         commands = -self.limits * np.sign(self.axes.T @ b_dot)
         return self._state(self._limit(commands, self.cfg.quantize_commands), field_body_t)
 
-    def apply_currents(self, currents_A, field_body_t=(0., 0., 0.)):
+    def apply_currents(self, currents_A, field_body_t=(0., 0., 0.), *, quantize=True):
         """Firmware channels are units-list indices; retain hardware quantization."""
         currents = self._vector(currents_A, len(self.cfg.units))
-        return self._state(self._limit(currents * self.constants, True), field_body_t)
+        return self._state(self._limit(currents * self.constants, quantize), field_body_t)
 
     def with_field(self, state, field_body_t):
         """Evaluate held coil commands at the evolving true attitude/field."""

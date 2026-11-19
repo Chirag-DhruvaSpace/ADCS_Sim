@@ -573,7 +573,7 @@ def _imu_adcs_state(q_true, omega_true, B_body_true):
 
 
 
-_firmware_wheels = np.zeros(4)
+_firmware_wheels = np.zeros(config.REACTION_WHEELS.count)
 _firmware_dipole = np.zeros(3)
 _firmware_magnetorquer_state = None
 
@@ -584,6 +584,8 @@ def set_firmware_tick(wheels, dipole, magnetorquer_state=None):
     _firmware_magnetorquer_state = magnetorquer_state
 
 def _firmware_wheel_axes():
+    if config.REACTION_WHEELS.count == 0:
+        return td.A
     # Imported lazily: firmware_sitl_link binds its UDP ports on import, which
     # only firmware SITL runs should do.
     from firmware_sitl_link import FLIGHT_WHEEL_AXES_BODY
@@ -640,7 +642,7 @@ def rotational_equations_of_motion(t, y, B_eci, r_eci=None, v_eci=None, external
     elif firmware_mode:
         import sys
         link = sys.modules.get('firmware_sitl_link')
-        rotor_momentum = link.get_wheel_momentum() if link is not None else np.zeros(4)
+        rotor_momentum = link.get_wheel_momentum() if link is not None else np.zeros(wheel_count)
     else:
         rotor_momentum = td.get_wheel_momentum()
     if firmware_mode:

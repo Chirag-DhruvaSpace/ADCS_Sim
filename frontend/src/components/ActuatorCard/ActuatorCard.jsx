@@ -8,7 +8,8 @@ export default memo(function ActuatorCard({
   data,
   derived,
   samples,
-  active
+  active,
+  configuration
 }) {
   return <MissionCard className="mission-card glass actuator-card">
       <header className="card-heading">
@@ -45,8 +46,8 @@ export default memo(function ActuatorCard({
         }, "mission-mode-error")}
         </span>
       </p>
-      <div id="mission-actuators">
-        <ActuatorRows data={data} />
+      <div id="mission-actuators" data-coil-rows={configuration?.spacecraft_name === 'P-Dot'}>
+        <ActuatorRows data={data} spacecraftName={configuration?.spacecraft_name} />
       </div>
     </MissionCard>;
 });
