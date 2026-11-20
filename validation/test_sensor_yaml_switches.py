@@ -98,6 +98,40 @@ def test_magnetometer_hardware_scale_and_range_round_trip_through_yaml(tmp_path)
     assert clipped.counts[0] == 4000
 
 
+def test_pdot_sensor_fault_settings_reach_hardware_samples(tmp_path):
+    data = yaml.safe_load((ROOT/'satellite_parameters(1).yaml').read_text(encoding='utf-8'))
+    data['use_advanced_satellite_model'] = False
+    data['sensor_profiles'].update(gyroscope='perfect', magnetometer='perfect', sun_sensor='perfect')
+    data['gyroscope'].update(freeze_windows_s=[[0.1, 0.3]], outages_s=[[0.2, 0.3]])
+    data['magnetometer']['freeze_windows_s'] = [[0.1, 0.3]]
+    cell = next(cell for cell in data['sun_sensor']['cells'] if cell['name'] == 'EP01 +X')
+    cell['fixed_adc_counts'] = 4095
+    source = tmp_path/'pdot.yaml'
+    source.write_text(yaml.safe_dump(data), encoding='utf-8')
+    imu = config._load_configuration(source)[10]
+    quaternion = [1, 0, 0, 0]
+    times = [0.0, 0.1, 0.2, 0.3]
+    gyro = SimulatedGyroscope(imu)
+    mag = SimulatedMagnetometer(imu)
+    gyro_readings = [gyro.get_raw_data(t, quaternion, [t, 0, 0]) for t in times]
+    mag_readings = [mag.get_raw_data(t, quaternion, [t * 1e-4, 0, 0]) for t in times]
+    for readings in (gyro_readings, mag_readings):
+        assert readings[0].counts != readings[1].counts
+        assert readings[1].counts == readings[2].counts
+        assert readings[2].counts != readings[3].counts
+    assert [reading.valid for reading in gyro_readings] == [True, True, False, True]
+    assert all(reading.valid for reading in mag_readings)
+
+    from simulate_sunsensor import pdot_sun_adc_channels
+    sun = SimulatedSunSensorArray(imu.sun_array).get_raw_data(0, quaternion, [0, 0, 1], 0)
+    assert pdot_sun_adc_channels(sun, imu.sun_array.cells)[0] == 4095
+
+    cell['fixed_adc_counts'] = 4096
+    source.write_text(yaml.safe_dump(data), encoding='utf-8')
+    with pytest.raises(ValueError, match='fixed_adc_counts'):
+        config._load_configuration(source)
+
+
 def test_individual_vector_units_respect_their_own_and_parent_power_switches():
     unit = config.VectorSensorParameters('off', enabled=False)
     for kind, model in [('gyro', SimulatedGyroscope), ('mag', SimulatedMagnetometer)]:

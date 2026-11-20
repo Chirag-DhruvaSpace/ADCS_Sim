@@ -12,8 +12,10 @@ import numpy as np
 class PDotFirmwareLink:
     """P-Dot ICM register bursts out, signed coil-current requests back."""
 
-    sensor_packet = struct.Struct('<I10s8s')
-    current_packet = struct.Struct('<I4d')
+    sensor_packet = struct.Struct('<I10s8s7H')
+    current_packet = struct.Struct('<I4dB')
+    modes = {1: 'Detumbling', 2: 'Nominal standby', 3: 'Sun pointing · wait',
+             4: 'Sun pointing · spin-up', 5: 'Sun acquisition', 6: 'Sun pointing · detumbling'}
 
     def __init__(self, source_root, port):
         from simulate_magnetorquers import configured_model
@@ -32,12 +34,18 @@ class PDotFirmwareLink:
         self.connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.connection.connect(('127.0.0.1', port))
         self.received = False
+        self.mode = None
+        self.mode_code = None
+        self.mode_changed_at = None
+        self.stable_since = None
 
-    def step(self, simulation_seconds, gyroscope, magnetometer):
+    def step(self, simulation_seconds, gyroscope, magnetometer, sunlight=None, sun_cells=()):
         from simulate_gyroscope import encode_pdot_gyroscope_register_block
         from simulate_magnetometer import encode_pdot_magnetometer_register_block
+        from simulate_sunsensor import pdot_sun_adc_channels
 
         self.received = False
+        self.mode = None
         if (gyroscope is not None and gyroscope.valid
                 and magnetometer is not None and magnetometer.valid):
             timestamp = round(simulation_seconds * 1000)
@@ -47,18 +55,46 @@ class PDotFirmwareLink:
                 magnetometer, self.magnetometer_offsets)
             try:
                 deadline = time.monotonic() + 0.05
-                self.connection.send(self.sensor_packet.pack(timestamp, gyro_bytes, magnetometer_bytes))
+                sun_counts = pdot_sun_adc_channels(sunlight, sun_cells)
+                self.connection.send(self.sensor_packet.pack(timestamp, gyro_bytes, magnetometer_bytes, *sun_counts))
                 while (remaining := deadline - time.monotonic()) > 0:
                     self.connection.settimeout(remaining)
                     reply = self.connection.recv(1024)
                     if len(reply) == self.current_packet.size:
-                        reply_timestamp, *currents = self.current_packet.unpack(reply)
-                        if reply_timestamp == timestamp and all(math.isfinite(value) for value in currents):
+                        reply_timestamp, *currents, mode = self.current_packet.unpack(reply)
+                        if (reply_timestamp == timestamp and mode in self.modes
+                                and all(math.isfinite(value) for value in currents)):
                             self.received = True
+                            self.mode = self.modes[mode]
+                            if mode != self.mode_code:
+                                self.mode_code = mode
+                                self.mode_changed_at = time.monotonic()
+                                self.stable_since = None
                             return self.plant.apply_currents(currents, quantize=False)
             except OSError:
                 pass
+        self.stable_since = None
         return self.plant.apply_currents(np.zeros(4), quantize=False)
+
+    def pointing_status(self, simulation_seconds, rates_rad_s, sun_error_deg):
+        if not self.received or self.mode_code in (2, 3):
+            self.stable_since = None
+            return 'red'
+
+        rates_deg_s = np.degrees(rates_rad_s)
+        if self.mode_code in (1, 6):
+            settled = np.linalg.norm(rates_deg_s) < 5.0
+        else:
+            # Sun acquisition intentionally spins about body +Z.
+            settled = (self.mode_code == 5 and sun_error_deg < 0.5
+                       and np.linalg.norm(rates_deg_s[:2]) < 0.05)
+        self.stable_since = (simulation_seconds if self.stable_since is None
+                             else self.stable_since) if settled else None
+        if self.mode_changed_at is not None and time.monotonic() - self.mode_changed_at < 2.0:
+            return 'green'
+        if self.stable_since is not None and simulation_seconds - self.stable_since >= 1.0:
+            return 'blue'
+        return 'yellow'
 
 # The real board's magnetometer error, as the firmware's magApplyCal()
 # (ADIS16545.c) removes it: h_cal = A @ (h_raw - b), in sensor axes. Keep in
@@ -212,10 +248,7 @@ class FirmwareLink:
         link._mode_sock = PacketSocket(link._mode_sock, link.MODE_STATUS_FORMAT, self.received)
 
     def received(self):
-        now = time.monotonic()
-        if self.received_at is None or now-self.received_at > 2:
-            self.event_at = now
-        self.received_at = now
+        self.received_at = time.monotonic()
     def tick(self, position, velocity, quaternion, rates, unix_time, field_body,
              gps=None, sun=None, sun_cells=(), gyro=None, mag=None,
              star=None, epoch_unix_s=0.0, control_period_s=None):
@@ -248,9 +281,9 @@ class FirmwareLink:
         wheels, dipole = self.link.apply_actuator_limits(control_period_s)
         with self.link._lock:
             mode = self.link._latest_ads_mode[0]
-        if mode != self.last_mode:
-            if self.received_at is not None:
-                self.event_at = time.monotonic()
+        mode_age = self.link.get_latest_fuse_source_age_s()
+        if mode_age is not None and mode_age < 2 and mode != self.last_mode:
+            self.event_at = time.monotonic()
             self.last_mode = mode
             self.stable_since = None
         return wheels, dipole

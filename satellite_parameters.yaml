@@ -1,6 +1,6 @@
 # Leave null for P-30XL or set "satellite_parameters(1).yaml" for P-Dot.
 # Restart the simulator after changing the active file.
-active_satellite_parameters: "satellite_parameters(1).yaml" #null
+active_satellite_parameters: "satellite_parameters(1).yaml"
 advanced_satellite_parameters: advanced_satellite_parameters.yaml
 model_url: /assets/models/P-30XL.glb  # Basic viewer model
 
@@ -8,7 +8,7 @@ model_url: /assets/models/P-30XL.glb  # Basic viewer model
 # custom hides the legacy selector and accepts quaternion commands.
 # Quaternions are scalar-first [w,x,y,z], body -> EME2000/ECI.
 pointing:
-  strategy: legacy          # legacy | custom | firmware_sitl (external UDP actuators)
+  strategy: firmware_sitl          # legacy | custom | firmware_sitl (external UDP actuators)
   legacy_mode: SUN_POINTING         # Startup mode when strategy is legacy
   # Legacy choices: SUN_POINTING, RW, MOON, NADIR, SUN_SWEEP,
   # SUN_POINTING_RW, NOMINAL_IN_ORBIT, KINEMATIC_ROBUSTNESS.
@@ -31,7 +31,7 @@ sensor_profiles:
   gps: custom
   gyroscope: custom
   magnetometer: custom
-  sun_sensor: perfect
+  sun_sensor: custom
   star_tracker: custom  # off / perfect / nominal / degraded / stress / custom
 
 # P-30XL simulation configuration. Units are included in field names.
@@ -280,26 +280,26 @@ gps:
   enabled: true                             # Master switch; false means no GPS receipts
   update_rate_hz: 1.0                       # Receiver output rate; real chips are 1-10 Hz
 
-  # Exact GPS measurement offsets in EME2000/ECI, ordered [X, Y, Z].
-  # Only sensor_profiles.gps: custom uses these; presets reset them to zero.
-  # Independent of enable_bias: false disables RANDOM bias, not these offsets.
-  # Defaults preserve normal behavior. Restart the simulator after changes.
-  # Example position X only: [10.0, 0.0, 0.0] means exactly +10 m before encoding.
-  # Example velocity Y only: [0.0, 0.1, 0.0] means exactly +0.1 m/s before encoding.
-  # ORION packets still round ECEF position/velocity to 0.01 m / 0.01 m/s.
-  fixed_position_offset_eci_m: [10.0, 0.0, 0.0]
+  # Deterministic GPS measurement offsets in the EME2000 inertial frame.
+  # Both vectors use signed [X, Y, Z] components. A zero vector adds no offset.
+  # With sensor_profiles.gps set to custom, these offsets add to any enabled
+  # random errors. Other profiles reset them to zero. The simulated orbit is
+  # unaffected. ORION encoding rounds ECEF components to 0.01 m and 0.01 m/s.
+  # Position offset in metres. Example: [10.0, 0.0, 0.0] adds +10 m along ECI X.
+  fixed_position_offset_eci_m: [0.0, 0.0, 0.0]
+  # Velocity offset in metres per second. Example: [0.0, 0.1, 0.0] adds +0.1 m/s along ECI Y.
   fixed_velocity_offset_eci_m_s: [0.0, 0.0, 0.0]
 
   # Individual error channels
-  enable_bias: false                         # Constant startup offset
-  enable_wander: false                       # Slowly drifting Gauss-Markov error
-  enable_white_noise: false                  # Fresh jitter on every fix
-  enable_steps: false                        # Constellation-geometry change jumps
-  enable_latency: false                      # Fix describes a slightly past state
-  enable_dropout: false                      # Randomly missing fixes
-  enable_clock_error: false                  # Receiver error in reported time
-  enable_quantization: false                 # Round lat/lon/altitude/ENU velocity
-  enable_status: false                       # Satellite-count and DOP random walks
+  enable_bias: true                         # Constant startup offset
+  enable_wander: true                       # Slowly drifting Gauss-Markov error
+  enable_white_noise: true                  # Fresh jitter on every fix
+  enable_steps: true                        # Constellation-geometry change jumps
+  enable_latency: true                      # Fix describes a slightly past state
+  enable_dropout: true                      # Randomly missing fixes
+  enable_clock_error: true                  # Receiver error in reported time
+  enable_quantization: true                 # Round lat/lon/altitude/ENU velocity
+  enable_status: true                       # Satellite-count and DOP random walks
 
   # Position error [m]
   pos_bias_sigma_h_m: 0.5                   # Constant horizontal offset drawn once
@@ -332,7 +332,10 @@ gps:
   # Availability and startup
   p_dropout: 0.005                          # Probability that a scheduled fix is lost
   cold_start_s: 0.0                         # Time to first fix after power-on
-  outages_s: []                             # Example: [[100.0, 120.0], [500.0, 510.0]]
+  # Scheduled GPS blackouts in elapsed simulation seconds. Both endpoints
+  # are included. [[100.0, 120.0]] suppresses fixes from t=100 through t=120.
+  # [] disables the schedule. It applies independently of random dropouts.
+  outages_s: []
 
   # Receiver status and reported accuracy
   num_sv_start: 8                           # Satellites used at startup
@@ -372,6 +375,15 @@ gyroscope:
   scale_error: 0.001                        # Per-axis relative gain error (0.1%)
   misalignment_rad: 0.001                   # Cross-axis coupling (0.057 deg)
   range_rad_s: 4.36                         # Legacy update() range; raw uses ADIS variant
+  # Gyro receipt blackout windows in elapsed simulation seconds.
+  # [[10.0, 16.0]] suppresses samples at 10 <= t < 16. Receipts resume on the
+  # ordinary sample grid after the blackout. [] disables scheduled blackouts.
+  outages_s: []
+  # Optional constant angular rate [X, Y, Z] in spacecraft body axes, in deg/s.
+  # null uses the simulated body rate. [1.5, 0.0, 0.0] supplies +1.5 deg/s
+  # about body X to the gyro model. Mounting, configured errors and register
+  # quantization still apply. This input does not rotate the spacecraft.
+  input_rate_body_deg_s: null
   dropout_probability: 0.0                  # Chance a scheduled receipt is absent
   latency_mean_s: 0.005                     # Typical measurement staleness (5 ms)
   latency_sigma_s: 0.001
@@ -385,6 +397,8 @@ gyroscope:
     - [1.0, 0.0, 0.0]
     - [0.0, 1.0, 0.0]
     - [0.0, 0.0, 1.0]
+  # Constant additive bias [X, Y, Z] in gyro chip axes, in rad/s.
+  # Added to the random startup bias. A zero vector disables the fixed term.
   fixed_bias_rad_s:
     [0.0, 0.0, 0.0]
 
@@ -462,6 +476,15 @@ magnetometer:
   hardware_range_t: 0.0049                  # Raw physical measurement range
   hardware_scale_t_per_count: 1.5e-7       # Default AK09916: 150 nT/count
   # Firmware must use the same register scale if replacing the sensor hardware.
+  # Magnetometer receipt blackout windows in elapsed simulation seconds.
+  # [[10.0, 16.0]] suppresses samples at 10 <= t < 16. The gyro can continue
+  # reporting through this interval. [] disables scheduled blackouts.
+  outages_s: []
+  # Optional constant magnetic field [X, Y, Z] in spacecraft body axes, in tesla.
+  # null uses the field from the orbit model, rotated into body axes.
+  # [3.0e-5, 0.0, 0.0] supplies 30 microtesla along body X. The sensor's local
+  # gradient, mounting, errors and hardware conversion still apply.
+  input_field_body_t: null
   dropout_probability: 0.0                  # Chance a scheduled receipt is absent
   latency_mean_s: 0.01                      # Typical staleness (10 ms)
   latency_sigma_s: 0.002
@@ -474,6 +497,8 @@ magnetometer:
     - [1.0, 0.0, 0.0]
     - [0.0, 1.0, 0.0]
     - [0.0, 0.0, 1.0]
+  # Constant additive field bias [X, Y, Z] in magnetometer chip axes, in tesla.
+  # Added to the modeled hard-iron offset. A zero vector disables the fixed term.
   fixed_bias_t:
     [0.0, 0.0, 0.0]
 
@@ -649,6 +674,15 @@ sun_sensor:
   albedo_scale: 0.15                        # Uniform Lambertian Earth reflectivity [0,1]
   activation_threshold: 0.015               # 1.5% full scale; 5x nominal noise sigma
   min_cells_for_solution: 3                 # Use three strongest independent heads; larger values include more
+  # Whole-array receipt blackouts in elapsed simulation seconds.
+  # [[10.0, 16.0]] suppresses all head receipts at 10 <= t < 16.
+  # [] disables the schedule. Per-head enable switches still apply.
+  outages_s: []
+  # Optional direction toward the Sun as seen by the sensors, in body [X, Y, Z].
+  # The vector is unitless and normalized at load time. For example, [-1, 0, 0]
+  # puts the direct Sun along body -X. null uses the simulated Sun direction.
+  # Eclipse, the head fields of view, and the configured sensor optics still apply.
+  incident_direction_body: null
   dropout_probability: 0.0                  # Chance the complete array receipt is lost
   latency_mean_s: 0.01                      # Measurement staleness, about 10 ms
   latency_sigma_s: 0.002
@@ -688,6 +722,15 @@ star_tracker:
   lfse_tau_s: 300.0
   lfse_slew_scale_deg_s: 0.3
   bias_sigma_arcsec: [20.0, 20.0, 17.0]
+  # Constant signed rotation vector [X, Y, Z] in tracker axes, in arcseconds.
+  # [3600.0, 0.0, 0.0] adds a 1 deg rotation about tracker X before mapping the
+  # error into body axes. A zero vector disables the fixed term. The value
+  # also applies with the perfect profile and adds to any enabled random bias.
+  fixed_bias_arcsec: [0.0, 0.0, 0.0]
+  # true alternates q and -q on successive valid solutions. Both represent the
+  # same physical orientation. Invalid solutions do not advance the alternation.
+  # false leaves the quaternion sign as produced by the model.
+  alternate_quaternion_sign: false
   thermal_slope_arcsec_per_deg_c: [0.5, 0.5, 0.0]
   star_count_walk_sigma_per_sqrt_s: 0.08
   sky_position_period_s: 2400.0
@@ -714,7 +757,12 @@ star_tracker:
   sun_clean_deg: 45.0
   earth_exclusion_deg: 22.0
   earth_clean_deg: 30.0
-  outages_s: []                              # Explicit [start_s, end_s] outages
+  # Scheduled tracker outages in elapsed simulation seconds.
+  # [[10.0, 16.0]] marks captures at 10 <= t < 16 as unavailable, including
+  # with the perfect profile. The tracker reports an invalid solution during
+  # the outage. With a modeled tracker, configured latency and reacquisition
+  # can delay when a valid solution is received again. [] disables the schedule.
+  outages_s: []
 
 # =============================================================================
 # ATTITUDE NAVIGATION - processing after independent sensor acquisition

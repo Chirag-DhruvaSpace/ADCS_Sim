@@ -6,6 +6,28 @@ import unittest
 from unittest.mock import patch
 import numpy as np
 
+def test_pdot_pointing_lights_follow_mode_and_settling():
+    from firmware_sitl_adapter import PDotFirmwareLink
+
+    link = object.__new__(PDotFirmwareLink)
+    link.received = True
+    link.mode_code = 5
+    link.mode_changed_at = 10.0
+    link.stable_since = None
+    spin = np.radians([0, 0, 25])
+    with patch('firmware_sitl_adapter.time.monotonic', return_value=10.5):
+        assert link.pointing_status(0, spin, 2.0) == 'green'
+    with patch('firmware_sitl_adapter.time.monotonic', return_value=12.5):
+        assert link.pointing_status(1, spin, 2.0) == 'yellow'
+        assert link.pointing_status(2, spin, 0.1) == 'yellow'
+        assert link.pointing_status(3, spin, 0.1) == 'blue'
+        link.mode_code = 2
+        assert link.pointing_status(4, spin, 0.1) == 'red'
+        link.mode_code = 5
+        link.received = False
+        assert link.pointing_status(5, spin, 0.1) == 'red'
+
+
 class FirmwareTests(unittest.TestCase):
     def test_real_udp_packets_drive_torque_and_status(self):
         original_socket = socket.socket

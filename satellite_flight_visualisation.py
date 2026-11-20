@@ -419,7 +419,8 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         drag_torque_for_step = lambda stage_t, stage_q: facets_at(stage_t, stage_q).drag_torque_body_nm
 
         if pdot_firmware is not None:
-            magnetic_state = pdot_firmware.step(t, _gyro_msg, _mag_msg)
+            magnetic_state = pdot_firmware.step(
+                t, _gyro_msg, _mag_msg, _sun_msg, config.IMU_SIM.sun_array.cells)
             srd.set_firmware_tick(np.empty(0), magnetic_state.body_dipole_Am2, magnetic_state)
         if firmware is not None:
             # Environment/acquisition preparation may have missed the deadline;
@@ -800,9 +801,11 @@ def run_simulation(tf=config.SIMULATION.default_duration_s, dt=config.CONTROL.co
         }
         firmware_metadata = {}
         if pdot_firmware is not None:
-            firmware_metadata['ads_mode'] = ('P-Dot B-dot' if pdot_firmware.received
-                                             else 'P-Dot awaiting firmware or valid IMU')
-            firmware_metadata['custom_pointing_status'] = 'green' if pdot_firmware.received else 'red'
+            firmware_metadata['ads_mode'] = pdot_firmware.mode or 'P-Dot awaiting firmware or valid IMU'
+            pdot_sun_error_deg = np.degrees(np.arccos(np.clip(
+                np.dot(srd._dcm_bi_from_q(X_rot[:4])[:, 2], sun_eci), -1.0, 1.0)))
+            firmware_metadata['custom_pointing_status'] = pdot_firmware.pointing_status(
+                t, X_rot[4:7], pdot_sun_error_deg)
         if firmware is not None:
             target_rate = (yaw_steering.yaw_steering_target_rate(r_vec, v_vec)
                            if firmware.link.get_latest_ads_mode_name() == 'YawSteering' else None)

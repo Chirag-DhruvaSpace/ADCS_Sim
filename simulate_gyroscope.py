@@ -169,6 +169,7 @@ class SimulatedGyroscope:
         self._raw_tick = None
         self._raw_receipt = None
         self._gyro_last_k = -1
+        self._frozen_gyro = {}
         self._history = collections.deque(maxlen=50)
         self.gyro_samples = 0
         self._last_gyro_rec = None
@@ -289,7 +290,10 @@ class SimulatedGyroscope:
         measurement_bias = self._gyro_bias_const + drifting_bias
         measurement_noise = np.array([white_noise(self.rng, configuration.gyro_white_noise_sigma_rad_s)
                           for _ in range(3)])
-        unclipped_measurement = self._M_gyro @ (self._gyro_mount.T @ omega_true) + measurement_bias + measurement_noise
+        rate_input = omega_true
+        if configuration.gyro_input_rate_body_deg_s is not None:
+            rate_input = np.deg2rad(configuration.gyro_input_rate_body_deg_s)
+        unclipped_measurement = self._M_gyro @ (self._gyro_mount.T @ rate_input) + measurement_bias + measurement_noise
         measurement_range_rad_s = configuration.gyro_range_rad_s
         if raw_output:
             measurement_range_rad_s = math.radians(configuration.gyro_hardware_range_deg_s)
@@ -299,6 +303,18 @@ class SimulatedGyroscope:
             omega_meas = np.round(omega_meas / configuration.gyro_quantization_rad_s) * configuration.gyro_quantization_rad_s
         valid = not (configuration.gyro_dropout_probability > 0.0
                      and self.rng.random() < configuration.gyro_dropout_probability)
+        valid = valid and not any(start <= sample_time_s < end
+                                  for start, end in configuration.gyro_outages_s)
+        window = next((window for window in configuration.gyro_freeze_windows_s
+                       if window[0] <= sample_time_s < window[1]), None)
+        if window is None:
+            self._frozen_gyro.clear()
+        else:
+            frozen = self._frozen_gyro.get(raw_output)
+            if frozen is not None and frozen[0] == window:
+                _, omega_meas, saturated = frozen
+            elif valid:
+                self._frozen_gyro[raw_output] = (window, omega_meas, saturated)
 
         if raw_output:
             hardware_limit_rad_s = math.radians(configuration.gyro_hardware_range_deg_s)

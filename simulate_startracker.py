@@ -153,16 +153,24 @@ class SimulatedStarTracker:
         self._star_count = 8.0
         self._burst_until_s = -np.inf
         self._sky_phase_rad = 0.0
-        self._bias_arcsec = np.zeros(3)
+        self._bias_arcsec = np.array(self.cfg.fixed_bias_arcsec, dtype=float)
+        self._reported_sign = 1
         self._wander_arcsec = np.zeros(3)
         if self.cfg.profile != 'perfect':
             if self.cfg.enable_bias:
-                self._bias_arcsec = self.rng.normal(size=3) * self.cfg.bias_sigma_arcsec
+                self._bias_arcsec += self.rng.normal(size=3) * self.cfg.bias_sigma_arcsec
             if self.cfg.enable_lfse:
                 self._wander_arcsec = self.rng.normal(size=3) * self.cfg.lfse_sigma_arcsec
             if self.cfg.enable_sky_position:
                 self._sky_phase_rad = self.rng.uniform(0, 2 * np.pi)
         self.update_rate_hz = None if self.cfg.profile == 'perfect' else self.cfg.update_rate_hz
+
+    def _apply_reported_sign(self, quaternion):
+        if not self.cfg.alternate_quaternion_sign:
+            return quaternion
+        reported = self._reported_sign * quaternion
+        self._reported_sign *= -1
+        return reported
 
     def _geometry(self, quaternion, position_eci_m, sun_direction_eci):
         boresight_body = self.mount_rotation[:, 2]
@@ -281,6 +289,8 @@ class SimulatedStarTracker:
             elif self.rng.random() < self.cfg.dropout_probability and reason == 'OK':
                 reason = 'RANDOM_DROPOUT'
         valid = reason == 'OK'
+        if valid:
+            measured_quaternion = self._apply_reported_sign(measured_quaternion)
         trusted = valid and self._untrusted_remaining == 0
         if valid and self._untrusted_remaining > 0:
             self._untrusted_remaining -= 1
@@ -322,7 +332,19 @@ class SimulatedStarTracker:
             if self._last_tick_s is not None:
                 self.update_rate_hz = 1 / (time_s - self._last_tick_s)
             self._last_tick_s = time_s
-            self._reading = StarTrackerMeasurement(time_s, time_s, quaternion.copy())
+            if any(start <= time_s < end for start, end in self.cfg.outages_s):
+                self._reading = StarTrackerMeasurement(
+                    time_s, time_s, quaternion.copy(), valid=False, mode='LOST',
+                    num_stars=0, quality=0.0, reason='SCHEDULED_OUTAGE', trusted=False)
+            else:
+                measured = quaternion.copy()
+                if np.any(self._bias_arcsec):
+                    error_body_rad = self.mount_rotation @ (self._bias_arcsec * ARCSEC_TO_RAD)
+                    measured = _quat_multiply(measured, _rotation_quaternion(error_body_rad))
+                    measured /= np.linalg.norm(measured)
+                self._reading = StarTrackerMeasurement(
+                    time_s, time_s, self._apply_reported_sign(measured),
+                    noise_arcsec=self._bias_arcsec.copy())
             return self._reading
         quaternion = quaternion / np.linalg.norm(quaternion)
         rate = np.asarray(omega_body_rad_s, dtype=float).reshape(3)

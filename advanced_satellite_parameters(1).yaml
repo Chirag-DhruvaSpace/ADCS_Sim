@@ -93,8 +93,8 @@ configurations:
           center_body_m: [0.0472089981195, 0.049124995945, 0.0217500003055]
           half_extents_m: [0.0538800025824, 0.0557420004625, 0.0357500007376]
     sensor_mounts:
-      gyro_position_body_m: [0.047209, 0.047263, 0.0128210264194]
-      mag_position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      gyro_position_body_m: [0.047209, 0.047263, 0.0128210264194] #[0.0, 0.058, 0.189]
+      mag_position_body_m: [0.047209, 0.047263, 0.0128210264194]  #[0.0, 0.058, 0.189]
     reaction_wheels:
       axis_matrix_body:
         - []
@@ -435,8 +435,8 @@ configurations:
           center_body_m: [0.190872150157, 0.027612999993, -0.00909999998696]
           half_extents_m: [0.0875000104134, 9.99998301274e-05, 0.00150000001304]
     sensor_mounts:
-      gyro_position_body_m: [0.047209, 0.047263, 0.0128210264194]
-      mag_position_body_m: [0.047209, 0.047263, 0.0128210264194]
+      gyro_position_body_m: [0.047209, 0.047263, 0.0128210264194] #[0.0, 0.058, 0.189]
+      mag_position_body_m: [0.047209, 0.047263, 0.0128210264194]  #[0.0, 0.058, 0.189]
     reaction_wheels:
       axis_matrix_body:
         - []

@@ -15,6 +15,33 @@ import numpy as np
 from simulate_magnetorquers import MagnetorquerArrayParameters, load_parameters as load_magnetorquers
 
 
+def _validate_outages(windows, name):
+    try:
+        intervals = np.asarray(windows, dtype=float)
+        if intervals.shape == (0,):
+            return ()
+        if (intervals.ndim == 2 and intervals.shape[1] == 2
+                and np.isfinite(intervals).all() and (intervals[:, 0] >= 0).all()
+                and (intervals[:, 0] < intervals[:, 1]).all()):
+            return tuple(map(tuple, intervals.tolist()))
+    except (TypeError, ValueError):
+        pass
+    raise ValueError(f'{name} must contain finite [start_s, end_s] pairs with 0 <= start_s < end_s')
+
+
+def _validate_sensor_vector(values, name, *, direction=False):
+    vector = np.asarray(values, dtype=float)
+    if vector.shape != (3,) or not np.isfinite(vector).all():
+        raise ValueError(f'{name} must contain three finite values')
+    if direction:
+        scale = np.max(np.abs(vector))
+        if scale == 0:
+            raise ValueError(f'{name} must be nonzero')
+        vector = vector / scale
+        vector /= np.linalg.norm(vector)
+    return tuple(vector.tolist())
+
+
 @dataclass(frozen=True)
 class SpacecraftParameters:
     name: str
@@ -508,6 +535,7 @@ class SunSensorCellParameters:
     adc_bits: int = 12                           # digitizer depth (all cells share it)
     sensor_roll_rad: float = 0.0                 # fine sensor rotation around its normal
     enabled: bool = True                        # preserve slot/address when off
+    fixed_adc_counts: int | None = None          # replace the final reading
 
 
 @dataclass(frozen=True)
@@ -596,6 +624,8 @@ class SunSensorArrayParameters:
     albedo_scale: float = 0.15               # uniform Lambertian Earth reflectivity [0,1]
     activation_threshold: float = 0.015      # 1.5% full scale; 5x nominal white-noise sigma
     min_cells_for_solution: int = 3          # flight computer refuses below this
+    outages_s: tuple = ()
+    incident_direction_body: tuple | None = None
     dropout_probability: float = 0.0         # per-sample chance the whole receipt is lost
     latency_mean_s: float = 0.01             # measurement staleness (~10 ms)
     latency_sigma_s: float = 0.002
@@ -621,6 +651,10 @@ class SunSensorArrayParameters:
             raise ValueError("sun update_rate_hz must be positive")
         if self.min_cells_for_solution < 3:
             raise ValueError("min_cells_for_solution must be >= 3 (rank needs 3 normals)")
+        object.__setattr__(self, 'outages_s', _validate_outages(self.outages_s, 'sun_sensor.outages_s'))
+        if self.incident_direction_body is not None:
+            object.__setattr__(self, 'incident_direction_body', _validate_sensor_vector(
+                self.incident_direction_body, 'sun_sensor.incident_direction_body', direction=True))
         if not 0.0 <= self.dropout_probability <= 1.0:
             raise ValueError("sun dropout_probability must be in [0, 1]")
         if self.latency_min_s > self.latency_max_s:
@@ -643,6 +677,10 @@ class SunSensorArrayParameters:
                 raise ValueError(f"sun cell {c.name}: fov_half_angle_deg must be in (0, 90]")
             if not isinstance(c.adc_bits, int) or not 2 <= c.adc_bits <= 16:
                 raise ValueError(f"sun cell {c.name}: adc_bits must be an int in [2, 16]")
+            if c.fixed_adc_counts is not None and (
+                type(c.fixed_adc_counts) is not int or not 0 <= c.fixed_adc_counts < 2 ** c.adc_bits
+            ):
+                raise ValueError(f"sun cell {c.name}: fixed_adc_counts must fit the configured ADC")
             if bits is None:
                 bits = c.adc_bits
             elif c.adc_bits != bits:
@@ -819,9 +857,15 @@ class StarTrackerParameters:
     earth_exclusion_deg: float = 22.0
     earth_clean_deg: float = 30.0
     outages_s: tuple = ()
+    fixed_bias_arcsec: tuple = (0., 0., 0.)
+    alternate_quaternion_sign: bool = False
 
     def __post_init__(self):
         from dataclasses import fields
+        object.__setattr__(self, 'fixed_bias_arcsec',
+                           _validate_sensor_vector(self.fixed_bias_arcsec, 'star_tracker.fixed_bias_arcsec'))
+        if not isinstance(self.alternate_quaternion_sign, bool):
+            raise ValueError('star_tracker.alternate_quaternion_sign must be boolean')
         if self.profile not in ('off', 'perfect', 'nominal', 'degraded', 'stress', 'custom'):
             raise ValueError('Unknown star tracker profile')
         if self.update_rate_hz not in (5, 8, 10):
@@ -948,6 +992,9 @@ class ImuSimParameters:
     gyro_scale_error: float = 0.001          # per-axis scale error (relative; 0.1%)
     gyro_misalignment_rad: float = 0.001     # cross-axis coupling (0.057 deg)
     gyro_range_rad_s: float = 4.36           # +/-250 deg/s measurement range
+    gyro_outages_s: tuple = ()
+    gyro_freeze_windows_s: tuple = ()
+    gyro_input_rate_body_deg_s: tuple | None = None
     gyro_dropout_probability: float = 0.0    # per-sample probability the gyro says nothing
     gyro_latency_mean_s: float = 0.005       # measurement staleness (~5 ms, chips are fast)
     gyro_latency_sigma_s: float = 0.001
@@ -972,6 +1019,9 @@ class ImuSimParameters:
     mag_range_t: float = 1.0e-3               # +/-1000 uT measurement range
     mag_hardware_range_t: float = 4900e-6    # raw register acquisition range
     mag_hardware_scale_t_per_count: float = 150e-9
+    mag_outages_s: tuple = ()
+    mag_freeze_windows_s: tuple = ()
+    mag_input_field_body_t: tuple | None = None
     mag_dropout_probability: float = 0.0     # per-sample probability the magnetometer says nothing
     mag_latency_mean_s: float = 0.01         # measurement staleness (~10 ms)
     mag_latency_sigma_s: float = 0.002
@@ -1064,6 +1114,12 @@ class ImuSimParameters:
             raise ValueError("imu gyro_latency_min_s must be <= gyro_latency_max_s")
         if self.mag_latency_min_s > self.mag_latency_max_s:
             raise ValueError("imu mag_latency_min_s must be <= mag_latency_max_s")
+        for key in ('gyro_outages_s', 'mag_outages_s', 'gyro_freeze_windows_s', 'mag_freeze_windows_s'):
+            object.__setattr__(self, key, _validate_outages(getattr(self, key), key))
+        for key in ('gyro_input_rate_body_deg_s', 'mag_input_field_body_t'):
+            values = getattr(self, key)
+            if values is not None:
+                object.__setattr__(self, key, _validate_sensor_vector(values, key))
         if not 0.0 <= self.gyro_dropout_probability <= 1.0:
             raise ValueError("imu gyro_dropout_probability must be in [0, 1]")
         if not 0.0 <= self.mag_dropout_probability <= 1.0:
@@ -1229,10 +1285,10 @@ def _apply_sensor_profile(cfg, profile):
         changes['fixed_velocity_offset_eci_m_s'] = preset.fixed_velocity_offset_eci_m_s
     if isinstance(cfg, SunSensorArrayParameters):
         base, target = nominal.cells[0], preset.cells[0]
-        # Mounting geometry (incl. the roll about the normal) is not an error channel.
+        # Preserve the cell's geometry and deliberate output override across presets.
         error_fields = {f.name for f in fields(base)
                         if f.name not in ('name', 'enabled', 'normal_body', 'position_body_m', 'fov_half_angle_deg',
-                                          'sensor_roll_rad')}
+                                          'sensor_roll_rad', 'fixed_adc_counts')}
         changes['cells'] = tuple(replace(c, **{name: getattr(target, name) for name in error_fields})
                                  for c in cfg.cells)
     return replace(cfg, **changes)

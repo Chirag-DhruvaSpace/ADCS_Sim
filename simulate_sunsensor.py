@@ -366,6 +366,23 @@ class RawSunSample:
     sensors: tuple = ()
 
 
+def pdot_sun_adc_channels(sample, cells):
+    """Map coarse photodiodes onto the OBC ADC3 channels in acs.c."""
+    channel_by_face = {(0, 1): 0, (1, -1): 1, (0, -1): 2,
+                       (2, 1): 4, (2, -1): 5, (1, 1): 6}
+    channels = [0] * 7
+    if sample is None or not sample.valid:
+        return channels
+    readings = {cell.name: cell.adc_counts for cell in sample.cells}
+    full_scale = (1 << sample.adc_bits) - 1
+    for cell in cells:
+        if cell.enabled and cell.name in readings:
+            axis = int(np.argmax(np.abs(cell.normal_body)))
+            face = (axis, 1 if cell.normal_body[axis] > 0 else -1)
+            channels[channel_by_face[face]] = round(readings[cell.name] * 4095 / full_scale)
+    return channels
+
+
 class SimulatedSunSensorArray:
     """The simulated coarse-sun-sensor ARRAY. Feed the TRUE state each loop
     tick with update(t, q_truth, sun_eci_truth, eclipse_fraction, r_eci_truth);
@@ -559,6 +576,8 @@ class SimulatedSunSensorArray:
         body_to_eci = _dcm_bi_from_q(q_meas)
         sun_direction_body = body_to_eci.T @ sun_eci
         sun_direction_body = sun_direction_body / np.linalg.norm(sun_direction_body)
+        if configuration.incident_direction_body is not None:
+            sun_direction_body = np.asarray(configuration.incident_direction_body)
         # (d) EARTH ALBEDO inputs (simplified engineering model): unit nadir
         #     in the body frame + the lit fraction of the visible disk.
         if r_meas is not None and configuration.enable_albedo:
@@ -579,6 +598,8 @@ class SimulatedSunSensorArray:
         # (j) DROPOUT: one per-sample dice for the WHOLE receipt
         valid = not (configuration.dropout_probability > 0.0
                      and self.rng.random() < configuration.dropout_probability)
+        valid = valid and not any(start <= sample_time_s < end
+                                  for start, end in configuration.outages_s)
         if not valid:
             self.dropouts += 1
 
@@ -698,7 +719,12 @@ class SimulatedSunSensorArray:
         signal_before_digitization = signal
         saturated = bool(configuration.enable_saturation and signal_before_digitization > 1.0)
         # (h) ADC QUANTIZATION (+ inherent clamp: a photocell cannot read <0 or >1)
-        if configuration.enable_quantization:
+        fixed_counts = configuration.cells[cell_index].fixed_adc_counts
+        if fixed_counts is not None:
+            counts = fixed_counts
+            signal = counts / self._full_scale
+            saturated = counts == self._full_scale
+        elif configuration.enable_quantization:
             counts = int(round(float(np.clip(signal, 0.0, 1.0)) * self._full_scale))
             signal = counts / self._full_scale
         else:

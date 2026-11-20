@@ -219,6 +219,7 @@ simulation:
 gps:
   enabled: true
   update_rate_hz: 1.0
+  # XYZ offsets added to the GPS reading in the inertial frame.
   fixed_position_offset_eci_m: [0.0, 0.0, 0.0]
   fixed_velocity_offset_eci_m_s: [0.0, 0.0, 0.0]
   enable_bias: true
@@ -279,6 +280,12 @@ gyroscope:
   scale_error: 0.001
   misalignment_rad: 0.001
   range_rad_s: 4.36
+  # Null uses the spacecraft's motion. A vector applies before sensor errors.
+  input_rate_body_deg_s: null
+  # Time windows are [start, end) in seconds. A freeze repeats the first
+  # valid reading in its window. An outage marks readings missing.
+  freeze_windows_s: []
+  outages_s: []
   dropout_probability: 0.0
   latency_mean_s: 0.005
   latency_sigma_s: 0.001
@@ -348,6 +355,10 @@ magnetometer:
   range_t: 0.001
   hardware_range_t: 0.004912
   hardware_scale_t_per_count: 1.4997557401074744e-07
+  # Null uses the local field. A body-frame vector applies before sensor errors.
+  input_field_body_t: null
+  freeze_windows_s: []  # Same time-window format as the gyroscope.
+  outages_s: []
   dropout_probability: 0.0
   latency_mean_s: 0.01
   latency_sigma_s: 0.002
@@ -362,7 +373,8 @@ magnetometer:
   units: []
   mount_overrides: {}
 
-# TCD p. 16 names four panels. The six-face requirement on p. 37 needs confirmation.
+# TCD p. 37 and the OBC ADC map cover all six faces. The -X and -Z mounts
+# approximate the corresponding CAD face centers pending as-built confirmation.
 # Mounts approximate CAD face centers with a 1 mm outward offset for shadow rays.
 # FOV, ADC, noise and latency are provisional.
 sun_sensor:
@@ -384,19 +396,35 @@ sun_sensor:
   fine_temperature_k: 298.15
   fine_temperature_zero_k: 273.15
   fine_temperature_counts_per_k: 100.0
+  incident_direction_body: null  # Null uses the current Sun direction.
+  outages_s: []  # Marks the full array reading missing.
+  # A cell's fixed_adc_counts replaces its reading. Null uses the light
+  # model. For 12-bit cells, 0 is dark and 4095 is full scale.
   cells:
     - name: EP01 +X
       normal_body: [1, 0, 0]
       position_body_m: [0.102089, 0.049125, 0.02175]
+      fixed_adc_counts: null
     - name: EP02 +Y
       normal_body: [0, 1, 0]
       position_body_m: [0.047209, 0.105867, 0.02175]
+      fixed_adc_counts: null
     - name: EP04 -Y
       normal_body: [0, -1, 0]
       position_body_m: [0.047209, -0.007617, 0.02175]
+      fixed_adc_counts: null
     - name: TD01 +Z
       normal_body: [0, 0, 1]
       position_body_m: [0.047209, 0.049125, 0.0585]
+      fixed_adc_counts: null
+    - name: EP03 -X
+      normal_body: [-1, 0, 0]
+      position_body_m: [-0.007671, 0.049125, 0.02175]
+      fixed_adc_counts: null
+    - name: BD01 -Z
+      normal_body: [0, 0, -1]
+      position_body_m: [0.047209, 0.049125, -0.015]
+      fixed_adc_counts: null
   blockers: []
   enable_alignment_error: true
   enable_bias_drift: true

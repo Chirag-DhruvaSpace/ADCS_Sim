@@ -166,6 +166,7 @@ class SimulatedMagnetometer:
         self._raw_tick = None
         self._raw_receipt = None
         self._mag_last_k = -1
+        self._frozen_mag = {}
         self._history = collections.deque(maxlen=50)
         self.mag_samples = 0
         self._last_mag_rec = None
@@ -294,7 +295,9 @@ class SimulatedMagnetometer:
         disturbance = disturbance + self._mag_disturb_fixed
         measurement_noise = np.array([white_noise(self.rng, configuration.mag_white_noise_sigma_t)
                           for _ in range(3)])
-        local_field = B_true_body + np.asarray(configuration.mag_gradient_body_t_per_m) @ np.asarray(configuration.mag_position_body_m)
+        field_input = B_true_body if configuration.mag_input_field_body_t is None else np.asarray(
+            configuration.mag_input_field_body_t)
+        local_field = field_input + np.asarray(configuration.mag_gradient_body_t_per_m) @ np.asarray(configuration.mag_position_body_m)
         unclipped_measurement = (self._M_mag @ (self._mag_mount.T @ (local_field + disturbance))
                + self._mag_hard_iron + measurement_noise)
         measurement_range_t = configuration.mag_hardware_range_t if raw_output else configuration.mag_range_t
@@ -304,6 +307,18 @@ class SimulatedMagnetometer:
             B_meas = np.round(B_meas / configuration.mag_quantization_t) * configuration.mag_quantization_t
         valid = not (configuration.mag_dropout_probability > 0.0
                      and self.rng.random() < configuration.mag_dropout_probability)
+        valid = valid and not any(start <= sample_time_s < end
+                                  for start, end in configuration.mag_outages_s)
+        window = next((window for window in configuration.mag_freeze_windows_s
+                       if window[0] <= sample_time_s < window[1]), None)
+        if window is None:
+            self._frozen_mag.clear()
+        else:
+            frozen = self._frozen_mag.get(raw_output)
+            if frozen is not None and frozen[0] == window:
+                _, B_meas, saturated = frozen
+            elif valid:
+                self._frozen_mag[raw_output] = (window, B_meas, saturated)
 
         if raw_output:
             hardware_limit_t = configuration.mag_hardware_range_t

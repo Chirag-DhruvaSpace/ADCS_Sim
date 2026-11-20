@@ -38,12 +38,16 @@ def test_pdot_profile_uses_its_own_geometry_and_zero_reaction_wheels(deployed):
     assert not imu.enable_star_tracker
     assert not imu.sun_array.enable_fine_sensor_output
     assert [cell.name for cell in imu.sun_array.cells] == [
-        'EP01 +X', 'EP02 +Y', 'EP04 -Y', 'TD01 +Z']
-    from simulate_sunsensor import SimulatedSunSensorArray
+        'EP01 +X', 'EP02 +Y', 'EP04 -Y', 'TD01 +Z', 'EP03 -X', 'BD01 -Z']
+    from simulate_sunsensor import SimulatedSunSensorArray, pdot_sun_adc_channels
     sample = SimulatedSunSensorArray(imu.sun_array).get_raw_data(
         0.0, [1, 0, 0, 0], [1, 0, 0], 1.0)
-    assert len(sample.cells) == 4
+    assert len(sample.cells) == 6
     assert not sample.sensors
+    channels = pdot_sun_adc_channels(replace(sample, valid=True, cells=tuple(
+        replace(cell, adc_counts=index) for index, cell in enumerate(sample.cells, start=1))),
+        imu.sun_array.cells)
+    assert channels == [1, 3, 5, 0, 4, 6, 2]
 
 
 def plate(absorption=1., diffuse=0., specular=0., com=(0,0,0)):
