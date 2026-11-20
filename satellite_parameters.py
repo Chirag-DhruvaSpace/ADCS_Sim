@@ -125,8 +125,18 @@ class AttitudeParameters:
     initial_quaternion_scalar_first: tuple[float, float, float, float]
     initial_body_rates_deg_s: tuple[float, float, float]
     inertia_is_principal_axes: bool = True
+    firmware_replay_initial_rate_deg_s: float | None = None
+    firmware_replay_initial_rate_field_angle_deg: float = 90.0
+    firmware_replay_initial_sun_error_deg: float | None = None
 
     def __post_init__(self):
+        for name in ('firmware_replay_initial_rate_field_angle_deg', 'firmware_replay_initial_sun_error_deg'):
+            angle = getattr(self, name)
+            if angle is not None and (not np.isfinite(angle) or not 0 <= angle <= 180):
+                raise ValueError(f'attitude.{name} must be between 0 and 180 degrees')
+        rate = self.firmware_replay_initial_rate_deg_s
+        if rate is not None and (not np.isfinite(rate) or rate < 0):
+            raise ValueError('attitude.firmware_replay_initial_rate_deg_s must be finite and nonnegative')
         q = np.asarray(self.initial_quaternion_scalar_first, dtype=float)
         rates = np.asarray(self.initial_body_rates_deg_s, dtype=float)
         if q.shape != (4,) or not np.all(np.isfinite(q)) or np.max(np.abs(q)) < 1e-12:
@@ -177,8 +187,26 @@ class ControlParameters:
     sun_sweep_rate_deg_s: float = 0.06
     sun_sweep_amplitude_deg: float = 64.0
     sun_sweep_achieve_threshold_deg: float = 2.0
+    firmware_replay_start_mode: str = 'boot'
+    firmware_replay_bdot_method: str = 'rate_cross_field'
+    firmware_replay_bdot_gain_signs: tuple = (1, 1, 1)
+    firmware_replay_sun_two_dof_enabled: bool = True
+    firmware_replay_sun_reentry_s: float | None = None
 
     def __post_init__(self):
+        if self.firmware_replay_start_mode not in ('boot', 'sun_pointing'):
+            raise ValueError('control.firmware_replay_start_mode must be boot or sun_pointing')
+        if self.firmware_replay_bdot_method not in ('rate_cross_field', 'finite_difference'):
+            raise ValueError('control.firmware_replay_bdot_method must be rate_cross_field or finite_difference')
+        signs = _validate_sensor_vector(self.firmware_replay_bdot_gain_signs, 'control.firmware_replay_bdot_gain_signs')
+        if any(sign not in (-1., 1.) for sign in signs):
+            raise ValueError('control.firmware_replay_bdot_gain_signs must contain only -1 or 1')
+        object.__setattr__(self, 'firmware_replay_bdot_gain_signs', signs)
+        if not isinstance(self.firmware_replay_sun_two_dof_enabled, bool):
+            raise ValueError('control.firmware_replay_sun_two_dof_enabled must be boolean')
+        reentry = self.firmware_replay_sun_reentry_s
+        if reentry is not None and (not np.isfinite(reentry) or reentry < 0):
+            raise ValueError('control.firmware_replay_sun_reentry_s must be finite and nonnegative')
         for axis in (self.moon_spin_axis, self.sun_sweep_axis):
             if axis not in ('y', 'z'):
                 raise ValueError('Sweep axes must be y or z')
@@ -287,8 +315,11 @@ class ReactionWheelParameters:
     initial_momentum_Nms: tuple = (0., 0., 0., 0.)
     saturation_reallocation_enabled: bool = True
     max_reallocation_passes: int = 4
+    firmware_replay_unavailable: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.firmware_replay_unavailable, bool):
+            raise ValueError('reaction_wheels.firmware_replay_unavailable must be boolean')
         if self.count and (self.max_torque_Nm <= 0 or self.max_momentum_Nms <= 0):
             raise ValueError('Installed reaction wheels require positive torque and momentum limits')
         if not np.isfinite(self.rotor_inertia_kg_m2) or self.rotor_inertia_kg_m2 <= 0:
@@ -395,6 +426,7 @@ class GpsSimParameters:
     p_dropout: float = 0.005                 # probability a given second is dropped
     cold_start_s: float = 0.0                # "time to first fix" after power-on [s]
     outages_s: tuple[tuple[float, float], ...] = ()   # scheduled (start_s, end_s) blackouts
+    firmware_replay_position_outages_s: tuple = ()
 
     # --- status random walks ---
     num_sv_start: int = 8                    # satellites used, start value
@@ -450,6 +482,8 @@ class GpsSimParameters:
             raise ValueError("gps p_dropout must be in [0, 1]")
         if self.cold_start_s < 0.0:
             raise ValueError("gps cold_start_s must be >= 0")
+        object.__setattr__(self, 'firmware_replay_position_outages_s', _validate_outages(
+            self.firmware_replay_position_outages_s, 'gps.firmware_replay_position_outages_s'))
         for window in self.outages_s:
             if len(window) != 2 or window[0] > window[1]:
                 raise ValueError("gps outages_s entries must be (start_s, end_s) with start <= end")
@@ -626,6 +660,8 @@ class SunSensorArrayParameters:
     min_cells_for_solution: int = 3          # flight computer refuses below this
     outages_s: tuple = ()
     incident_direction_body: tuple | None = None
+    firmware_replay_observation_outages_s: tuple = ()
+    firmware_replay_continuous_sunlight: bool = False
     dropout_probability: float = 0.0         # per-sample chance the whole receipt is lost
     latency_mean_s: float = 0.01             # measurement staleness (~10 ms)
     latency_sigma_s: float = 0.002
@@ -652,6 +688,10 @@ class SunSensorArrayParameters:
         if self.min_cells_for_solution < 3:
             raise ValueError("min_cells_for_solution must be >= 3 (rank needs 3 normals)")
         object.__setattr__(self, 'outages_s', _validate_outages(self.outages_s, 'sun_sensor.outages_s'))
+        object.__setattr__(self, 'firmware_replay_observation_outages_s', _validate_outages(
+            self.firmware_replay_observation_outages_s, 'sun_sensor.firmware_replay_observation_outages_s'))
+        if not isinstance(self.firmware_replay_continuous_sunlight, bool):
+            raise ValueError('sun_sensor.firmware_replay_continuous_sunlight must be boolean')
         if self.incident_direction_body is not None:
             object.__setattr__(self, 'incident_direction_body', _validate_sensor_vector(
                 self.incident_direction_body, 'sun_sensor.incident_direction_body', direction=True))
@@ -1332,9 +1372,10 @@ def _active_parameter_path():
     return (default.parent / profile).resolve()
 
 
-def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satellite_model=None):
+def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satellite_model=None, values=None):
     source = Path(source) if source is not None else ACTIVE_PARAMETER_PATH
-    data = _read_parameter_yaml(source)
+    from copy import deepcopy
+    data = _read_parameter_yaml(source) if values is None else deepcopy(values)
     expected = {'spacecraft', 'orbit', 'attitude', 'model_data', 'control',
                 'disturbances', 'geometry', 'reaction_wheels', 'simulation',
                 'gps', 'gyroscope', 'magnetometer', 'sun_sensor', 'star_tracker',
@@ -1374,7 +1415,9 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
     if advanced:
         advanced_path = source.parent / data.get('advanced_satellite_parameters', 'advanced_satellite_parameters.yaml')
         advanced_data = _read_parameter_yaml(advanced_path)
-        deployed = advanced_data['panels_deployed'] if panels_deployed is None else panels_deployed
+        configured_deployment = spacecraft_data.pop('cad_panels_deployed', None)
+        deployed = (panels_deployed if panels_deployed is not None else
+                    advanced_data['panels_deployed'] if configured_deployment is None else configured_deployment)
         if not isinstance(deployed, bool):
             raise ValueError('advanced panels_deployed must be true or false')
         spacecraft_data['panels_deployed'] = deployed
@@ -1383,6 +1426,8 @@ def _load_configuration(source=None, *, panels_deployed=None, use_advanced_satel
         if 'model_file' in selected.get('spacecraft', {}):
             model_base = advanced_path.parent
         data['attitude'] = {**data['attitude'], 'inertia_is_principal_axes': False}
+    else:
+        spacecraft_data.pop('cad_panels_deployed', None)
     if panels_deployed is not None:
         spacecraft_data['panels_deployed'] = bool(panels_deployed)
     mode = 'deployed' if spacecraft_data['panels_deployed'] else 'stowed'

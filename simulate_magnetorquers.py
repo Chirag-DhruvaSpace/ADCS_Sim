@@ -77,8 +77,15 @@ def load_parameters(values, advanced=None):
     Empty lists retain the historical three-axis plant.
     """
     from dataclasses import fields
+    strength = values.get('physical_strength_scale', 1.)
+    disabled = values.get('disabled_units', [])
+    if not np.isfinite(strength) or not 0 < strength <= 1:
+        raise ValueError('magnetorquers.physical_strength_scale must be in (0, 1]')
+    if not isinstance(disabled, (list, tuple)) or any(not isinstance(name, str) for name in disabled):
+        raise ValueError('magnetorquers.disabled_units must list rod names')
     values = {**values, **(advanced or {})}
-    allowed = {'enabled', 'quantize_commands', 'units', 'dipole_per_amp_Am2_per_A', 'resistance_ohm'}
+    allowed = {'enabled', 'quantize_commands', 'units', 'dipole_per_amp_Am2_per_A', 'resistance_ohm',
+               'physical_strength_scale', 'disabled_units'}
     if set(values) - allowed:
         raise ValueError(f'Unknown magnetorquers settings: {sorted(set(values) - allowed)}')
     units = []
@@ -89,7 +96,12 @@ def load_parameters(values, advanced=None):
             raise ValueError(f'Unknown magnetorquer unit settings: {sorted(set(record) - unit_fields)}')
         defaults = {key: values[key] for key in ('dipole_per_amp_Am2_per_A', 'resistance_ohm') if key in values}
         units.append(MagnetorquerParameters(**{**defaults, **record}))
-    return MagnetorquerArrayParameters(values.get('enabled', True), values.get('quantize_commands', False), tuple(units))
+    if set(disabled) - {unit.name for unit in units}:
+        raise ValueError('magnetorquers.disabled_units names a rod outside the selected model')
+    units = tuple(replace(unit, enabled=unit.enabled and unit.name not in disabled,
+                          dipole_per_amp_Am2_per_A=unit.dipole_per_amp_Am2_per_A * strength)
+                  for unit in units)
+    return MagnetorquerArrayParameters(values.get('enabled', True), values.get('quantize_commands', False), units)
 
 
 @dataclass(frozen=True)

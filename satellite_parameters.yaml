@@ -1,6 +1,6 @@
 # Leave null for P-30XL or set "satellite_parameters(1).yaml" for P-Dot.
 # Restart the simulator after changing the active file.
-active_satellite_parameters: "satellite_parameters(1).yaml"
+active_satellite_parameters: null #"satellite_parameters(1).yaml"
 advanced_satellite_parameters: advanced_satellite_parameters.yaml
 model_url: /assets/models/P-30XL.glb  # Basic viewer model
 
@@ -75,6 +75,7 @@ spacecraft:
   drag_coefficient: 2.2  # ASSUMPTION: no measured aerodynamic coefficient
   srp_reflectivity_coefficient: 1.0  # Only the eclipse-helper model uses Cr; forces use facet optics
   panels_deployed: true  # Legacy state label; advanced deployment is chosen in its own file
+  cad_panels_deployed: null  # true selects deployed CAD, false selects stowed, null uses CAD default
   mtr_max_dipole_Am2: 2.0           # Common magnetorquer dipole limit
   mtr_dipole_step_Am2: 0.1          # Command quantization/increment
   # Maximum current for body X, Y, and Z magnetorquers.
@@ -108,6 +109,9 @@ attitude:
   initial_body_rates_deg_s:
     [-0.0, 0.0, 0.0]
   inertia_is_principal_axes: true  # Legacy diagonal axes; advanced loader overrides this
+  firmware_replay_initial_rate_deg_s: null  # Total tip-off [deg/s], null uses initial_body_rates_deg_s
+  firmware_replay_initial_rate_field_angle_deg: 90.0  # Tip-off angle from initial body-frame B
+  firmware_replay_initial_sun_error_deg: null  # Initial body -Z to Sun angle, null uses initial quaternion
 
 # =============================================================================
 # EXTERNAL ENVIRONMENT MODEL DATA
@@ -127,6 +131,11 @@ control:
   detumble_off_rate_deg_s: 0.5      # Leave detumble below this rate norm
   sun_pointing_rate_cap_deg_s: 2.0  # Maximum commanded pointing slew rate
   control_loop_period_s: 0.1        # ASSUMPTION: replace with flight-computer rate
+  firmware_replay_start_mode: boot  # boot or sun_pointing (detumble-complete resume)
+  firmware_replay_bdot_method: rate_cross_field  # rate_cross_field or finite_difference
+  firmware_replay_bdot_gain_signs: [1, 1, 1]  # Multiplies existing firmware gains on body XYZ
+  firmware_replay_sun_two_dof_enabled: true  # false allows search dispatch with no usable position
+  firmware_replay_sun_reentry_s: null  # Optional Sun-mode redispatch request at elapsed seconds
   # Physical magnetorquer limits are inherited from spacecraft above.
   # PD tuning. Natural frequency [rad/s], dimensionless damping ratio.
   # These preserve existing active gains; they are not newly tuned for CAD inertia.
@@ -229,6 +238,7 @@ geometry:
 # Four-wheel pyramid with a 35 degree cant. The legacy matrix below was defined
 # in wheel-assembly coordinates. The mounting drawing rotates it into body axes.
 reaction_wheels:
+  firmware_replay_unavailable: false  # Report all four wheels failed and suppress delivered wheel torque
   initial_momentum_Nms: [0.0, 0.0, 0.0, 0.0] # Physical spin momentum along each configured axis
   rotor_inertia_kg_m2: 5.4e-5 # Per-wheel inertia used for physical speed telemetry
   # Body spin axes in the external firmware's wheel numbering. Empty uses the
@@ -275,6 +285,7 @@ simulation:
 # GPS RECEIVER - position and velocity measurements
 # =============================================================================
 gps:
+  firmware_replay_position_outages_s: []  # [[start_s, end_s]] removes both GPS and backup position
 
   # Power and output timing
   enabled: true                             # Master switch; false means no GPS receipts
@@ -413,6 +424,8 @@ gyroscope:
 # MAGNETORQUERS - shared electrical model and configurable rod list
 # =============================================================================
 magnetorquers:
+  physical_strength_scale: 1.0  # Physical dipole per amp fraction, e.g. 0.5 for half strength
+  disabled_units: []  # Rod names; applies to selected CAD model and reports failures during replay
   enabled: true                         # Physical master switch, all modes
   quantize_commands: false               # Preserve continuous legacy control
   # Firmware current commands always use each rod's dipole_step_Am2.
@@ -526,6 +539,8 @@ magnetometer:
 # SUN SENSOR ARRAY - head geometry, optics, electronics, and errors
 # =============================================================================
 sun_sensor:
+  firmware_replay_observation_outages_s: []  # [[start_s, end_s]] withholds valid vectors while heads remain healthy
+  firmware_replay_continuous_sunlight: false  # Hold illumination for controlled search timeout and reentry
 
   # Power, timing and navigation use
   enabled: true                             # Array master switch

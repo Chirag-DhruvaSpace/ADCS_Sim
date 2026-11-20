@@ -6,7 +6,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 
-def build(output, *, shared=False, extra_sources=(), main_source=None):
+def build(output, *, shared=False, extra_sources=(), main_source=None, defines=(), object_directory=None):
     sim = Path(__file__).resolve().parents[2]
     ads = sim.parents[1] / 'Firmware' / 'ADS'
     gcc = shutil.which('gcc')
@@ -23,8 +23,9 @@ def build(output, *, shared=False, extra_sources=(), main_source=None):
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [gcc, '-std=gnu11', '-O2', '-fcommon', '-D_WIN32_WINNT=0x0600',
                '-include', str(ads / 'sitl_force_include.h')]
+    command += [f'-D{define}' for define in defines]
     command += [f'-I{p}' for p in includes]
-    objects_dir = sim / '.cache/yaw_steering/objects'
+    objects_dir = Path(object_directory) if object_directory else sim / '.cache/yaw_steering/objects'
     objects_dir.mkdir(parents=True, exist_ok=True)
     header_time = max(p.stat().st_mtime for p in (ads / 'Inc').rglob('*.h'))
     def compile_source(source):
